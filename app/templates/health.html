@@ -1,0 +1,179 @@
+{% extends "base.html" %}
+{% block title %}Salute — MyWahoo{% endblock %}
+{% block content %}
+
+<div class="page-head">
+  <h1>Salute</h1>
+  <span class="muted">dati Google Health · ultimi 30 giorni</span>
+</div>
+
+{% if not connected %}
+  <div class="alert error">
+    {% if expired %}
+      Il collegamento a Google Health è scaduto (in modalità test il token dura 7 giorni).
+    {% else %}
+      Google Health non è ancora collegato.
+    {% endif %}
+  </div>
+  <a class="btn btn-wahoo" href="/login/google">Collega Google Health</a>
+
+{% elif error %}
+  <div class="alert error">Errore nel recupero dei dati: {{ error }}</div>
+
+{% else %}
+
+  {% if data.missing %}
+  <div class="alert error">
+    Dati non accessibili (manca lo scope o non disponibili sul dispositivo):
+    {{ data.missing | join(", ") }}.
+    Aggiungi gli scope su Google Cloud Console e <a href="/login/google">ricollega</a>.
+  </div>
+  {% endif %}
+
+  {# ---- wellness score ---- #}
+  {% if data.score %}
+  {% set tone = 'good' if data.score.score >= 67 else ('avg' if data.score.score >= 40 else 'bad') %}
+  <section class="card score-card">
+    <div class="score-ring {{ tone }}" style="--v: {{ data.score.score }}">
+      <span class="score-num">{{ data.score.score }}</span>
+    </div>
+    <div>
+      <h3>Indice di forma <small class="muted">· stima</small></h3>
+      <p class="score-verdict {{ tone }}">{{ data.score.label }}</p>
+      <p class="muted" style="margin:.2rem 0 0">Calcolato da HRV, FC a riposo,
+        sonno e SpO₂ rispetto alla tua media recente — non è il punteggio
+        proprietario di Fitbit (non esposto dall'API).</p>
+    </div>
+  </section>
+  {% endif %}
+
+  {# ---- latest values ---- #}
+  {% macro kpi_tile(m) %}
+  <div class="kpi">
+    <span class="kpi-value">{{ m.latest }}<small class="muted"> {{ m.unit }}</small></span>
+    <span class="kpi-label">{{ m.label }}</span>
+    {% if m.dir and m.dir != 'flat' %}
+    <span class="trend {{ m.tone }}">{{ '▲' if m.dir == 'up' else '▼' }} {{ m.delta }}</span>
+    {% endif %}
+  </div>
+  {% endmacro %}
+  <section class="kpi-row">
+    {% for key, m in data.metrics.items() %}{{ kpi_tile(m) }}{% endfor %}
+    {% for key, m in data.body.items() %}{{ kpi_tile(m) }}{% endfor %}
+  </section>
+
+  {# ---- sleep, last night ---- #}
+  {% if data.sleep %}
+  {% set last = data.sleep[-1] %}
+  <section class="card">
+    <h3>Sonno — ultima notte ({{ last.date }})</h3>
+    <section class="kpi-row">
+      <div class="kpi"><span class="kpi-value">{{ (last.asleep_min // 60) }}h {{ "%02d"|format(last.asleep_min % 60) }}m</span><span class="kpi-label">dormito</span></div>
+      <div class="kpi"><span class="kpi-value">{{ last.bedtime }} → {{ last.wake }}</span><span class="kpi-label">a letto</span></div>
+      {% if last.efficiency %}<div class="kpi"><span class="kpi-value">{{ last.efficiency }}%</span><span class="kpi-label">efficienza</span></div>{% endif %}
+      {% for name, mins in last.stages.items() %}
+      <div class="kpi"><span class="kpi-value">{{ mins }}m</span><span class="kpi-label">{{ name }}</span></div>
+      {% endfor %}
+    </section>
+    <canvas id="sleepChart" height="90"></canvas>
+  </section>
+  {% endif %}
+
+  {# ---- AI commentary ---- #}
+  <section class="card">
+    <div class="card-head">
+      <h3>Commento AI</h3>
+      <form method="post" action="/health/insight">
+        {% if insight_html %}
+        <input type="hidden" name="regenerate" value="1">
+        <button class="btn btn-secondary" type="submit" onclick="busy(this)">Rigenera</button>
+        {% else %}
+        <button class="btn" type="submit" onclick="busy(this)">Genera commento</button>
+        {% endif %}
+      </form>
+    </div>
+    {% if insight_html %}
+    <p class="muted">Generato il {{ insight_date.strftime("%d/%m/%Y %H:%M") }} (in cache — Rigenera per aggiornarlo)</p>
+    <div class="ai-analysis">{{ insight_html | safe }}</div>
+    {% else %}
+    <p class="muted">Nessun commento ancora generato. Analizza i tuoi indicatori con l'AI.</p>
+    {% endif %}
+  </section>
+
+  {# ---- trend charts ---- #}
+  <div class="charts-grid">
+    {% for key, m in data.metrics.items() %}
+    <section class="card">
+      <h3>{{ m.label }} <small class="muted">({{ m.unit }})</small></h3>
+      <canvas data-series="{{ key }}" height="120"></canvas>
+    </section>
+    {% endfor %}
+    {% for key, m in data.body.items() %}
+    <section class="card">
+      <h3>{{ m.label }} <small class="muted">({{ m.unit }})</small></h3>
+      <canvas data-series="body_{{ key }}" height="120"></canvas>
+    </section>
+    {% endfor %}
+  </div>
+
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+{% if connected and data %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<script>
+Chart.defaults.color = "#8a97a9";
+Chart.defaults.borderColor = "rgba(255,255,255,.06)";
+Chart.defaults.font.family = "Inter, system-ui, sans-serif";
+function busy(btn) {
+  setTimeout(() => { btn.disabled = true; btn.textContent = "Generazione…"; }, 0);
+}
+const METRICS = {{ data.metrics | tojson }};
+const BODY = {{ data.body | tojson }};
+const SLEEP = {{ data.sleep | tojson }};
+const COLORS = { resting_hr: "#d62828", hrv: "#0a6ebd", spo2: "#2a9d8f",
+                 respiratory: "#9046b8", skin_temp: "#e08a1e",
+                 body_weight: "#5a6671", body_body_fat: "#8a7350" };
+
+function lineChart(canvas, series, color) {
+  new Chart(canvas, {
+    type: "line",
+    data: { labels: series.map(p => p.date.slice(5)),
+            datasets: [{ data: series.map(p => p.value), borderColor: color,
+                         backgroundColor: color + "22", pointRadius: 2,
+                         borderWidth: 1.6, tension: .25, fill: true }] },
+    options: { plugins: { legend: { display: false } },
+               scales: { x: { ticks: { maxTicksLimit: 8 } },
+                         y: { beginAtZero: false } },
+               animation: false, responsive: true },
+  });
+}
+
+document.querySelectorAll("canvas[data-series]").forEach(c => {
+  const k = c.dataset.series;
+  const m = k.startsWith("body_") ? BODY[k.slice(5)] : METRICS[k];
+  if (m && m.series.length) lineChart(c, m.series, COLORS[k] || "#0a6ebd");
+});
+
+// Stacked sleep stages per night
+const sleepCanvas = document.getElementById("sleepChart");
+if (sleepCanvas && SLEEP.length) {
+  const stageNames = [...new Set(SLEEP.flatMap(n => Object.keys(n.stages)))];
+  const palette = { profondo: "#1d3f72", leggero: "#5a9bd4", REM: "#9046b8",
+                    sveglio: "#e0a0a0", dormito: "#2a9d8f", agitato: "#e08a1e" };
+  new Chart(sleepCanvas, {
+    type: "bar",
+    data: { labels: SLEEP.map(n => n.date.slice(5)),
+            datasets: stageNames.map(s => ({
+              label: s, data: SLEEP.map(n => Math.round((n.stages[s] || 0))),
+              backgroundColor: palette[s] || "#888" })) },
+    options: { plugins: { legend: { position: "bottom" } },
+               scales: { x: { stacked: true, ticks: { maxTicksLimit: 10 } },
+                         y: { stacked: true, title: { display: true, text: "minuti" } } },
+               animation: false, responsive: true },
+  });
+}
+</script>
+{% endif %}
+{% endblock %}

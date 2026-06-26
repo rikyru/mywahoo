@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}Accedi — MyWahoo{% endblock %}
+{% block content %}
+<div class="login-box">
+  <h1>MyWahoo</h1>
+  <p>Dashboard personale degli allenamenti Wahoo con parsing FIT e analisi AI.</p>
+  {% if error %}<div class="alert error">Accesso non riuscito ({{ error }}). Riprova.</div>{% endif %}
+  <a class="btn btn-wahoo" href="/login/wahoo">Accedi con Wahoo</a>
+</div>
+{% endblock %}

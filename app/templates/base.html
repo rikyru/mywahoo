@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}MyWahoo{% endblock %}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet"
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600&display=swap">
+  <link rel="stylesheet" href="/static/style.css">
+  {% block head %}{% endblock %}
+</head>
+<body>
+  <header class="topbar">
+    <a href="/" class="brand">🚴 MyWahoo</a>
+    <nav>
+      <a href="/">Dashboard</a>
+      <a href="/health">Salute</a>
+      <a href="/summary/week">Sintesi settimana</a>
+      <a href="/summary/month">Sintesi mese</a>
+      <a href="/logout" class="muted">Esci</a>
+    </nav>
+  </header>
+  <main class="container">
+    {% block content %}{% endblock %}
+  </main>
+  <script>
+    // highlight the current section in the nav
+    (function () {
+      const path = location.pathname;
+      document.querySelectorAll(".topbar nav a").forEach(a => {
+        const href = a.getAttribute("href");
+        if (href === path || (href !== "/" && path.startsWith(href))) a.classList.add("active");
+        else if (href === "/" && path === "/") a.classList.add("active");
+      });
+    })();
+  </script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

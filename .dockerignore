@@ -1,0 +1,15 @@
+.env
+.env.*
+!.env.example
+data/
+*.db
+*.fit
+__pycache__/
+*.pyc
+.git/
+.gitignore
+README.md
+.vscode/
+.idea/
+.venv*/
+smoke_test.py

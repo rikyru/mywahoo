@@ -1,0 +1,24 @@
+services:
+  mywahoo:
+    build: .
+    container_name: mywahoo
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - DB_PATH=/data/wahoo.db
+      - FIT_DIR=/data/fits
+    ports:
+      # Internal HTTP only — HTTPS is terminated by Caddy in front.
+      # Host port configurable via .env (default 8080); container always listens on 8080.
+      - "127.0.0.1:${HOST_PORT:-8080}:8080"
+    volumes:
+      - mywahoo_data:/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/healthz', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  mywahoo_data:

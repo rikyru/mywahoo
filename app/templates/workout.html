@@ -1,0 +1,139 @@
+{% extends "base.html" %}
+{% block title %}{{ w.name }} — MyWahoo{% endblock %}
+{% block head %}
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+{% endblock %}
+{% block content %}
+
+<p><a href="/">&larr; Dashboard</a></p>
+<div class="page-head">
+  <h1>{{ w.name }}</h1>
+  <span class="tag">{{ w.sport }}{% if w.sub_sport %} · {{ w.sub_sport }}{% endif %}</span>
+</div>
+<p class="muted">{{ w.start_date.strftime("%d/%m/%Y %H:%M") }}
+  {% if not w.has_fit and streams_json == 'null' %} · <em>solo summary (FIT non disponibile)</em>{% elif not w.has_fit %} · <em>dati da Google Health</em>{% endif %}</p>
+
+{% if error %}<div class="alert error">{{ error }}</div>{% endif %}
+
+<section class="kpi-row">
+  <div class="kpi"><span class="kpi-value">{{ "%.2f"|format(w.distance_m / 1000) }}</span><span class="kpi-label">km</span></div>
+  <div class="kpi"><span class="kpi-value">{{ w.moving_s | duration }}</span><span class="kpi-label">in movimento</span></div>
+  <div class="kpi"><span class="kpi-value">{{ "%.0f"|format(w.ascent_m) }}</span><span class="kpi-label">m dislivello</span></div>
+  <div class="kpi"><span class="kpi-value">{{ fmt_speed(w) }}</span><span class="kpi-label">media</span></div>
+  {% if w.avg_power %}
+  <div class="kpi"><span class="kpi-value">{{ "%.0f"|format(w.avg_power) }}</span><span class="kpi-label">W medi</span></div>
+  {% endif %}
+  {% if w.np_power %}
+  <div class="kpi"><span class="kpi-value">{{ "%.0f"|format(w.np_power) }}</span><span class="kpi-label">NP</span></div>
+  {% endif %}
+  {% if w.avg_hr %}
+  <div class="kpi"><span class="kpi-value">{{ "%.0f"|format(w.avg_hr) }}</span><span class="kpi-label">bpm medi</span></div>
+  {% endif %}
+</section>
+
+<section class="card">
+  <h3>Metriche</h3>
+  <table class="metrics">
+    <tr><td>Durata totale</td><td>{{ w.duration_s | duration }}</td></tr>
+    <tr><td>Velocità max</td><td>{{ w.max_speed_ms and ("%.1f km/h"|format(w.max_speed_ms * 3.6)) or "-" }}</td></tr>
+    <tr><td>FC media / max</td>
+        <td>{{ w.avg_hr and ("%.0f"|format(w.avg_hr)) or "-" }} /
+            {{ w.max_hr and ("%.0f"|format(w.max_hr)) or "-" }} bpm</td></tr>
+    <tr><td>Potenza media / max / NP</td>
+        <td>{{ w.avg_power and ("%.0f"|format(w.avg_power)) or "-" }} /
+            {{ w.max_power and ("%.0f"|format(w.max_power)) or "-" }} /
+            {{ w.np_power and ("%.0f"|format(w.np_power)) or "-" }} W</td></tr>
+    <tr><td>Cadenza media</td><td>{{ w.avg_cadence and ("%.0f"|format(w.avg_cadence)) or "-" }}</td></tr>
+    <tr><td>Calorie</td><td>{{ w.calories and ("%.0f"|format(w.calories)) or "-" }}</td></tr>
+    {% if w.tss %}<tr><td>TSS / IF</td>
+        <td>{{ "%.0f"|format(w.tss) }} / {{ w.intensity_factor and ("%.2f"|format(w.intensity_factor)) or "-" }}</td></tr>{% endif %}
+  </table>
+</section>
+
+<div id="mapCard" class="card" style="display:none">
+  <h3>Percorso</h3>
+  <div id="map" style="height: 360px; border-radius: 6px;"></div>
+</div>
+
+<div id="streamCharts"></div>
+
+<section class="card">
+  <div class="card-head">
+    <h3>Analisi AI</h3>
+    <form method="post" action="/workout/{{ w.id }}/analyze">
+      {% if analysis_html %}
+      <input type="hidden" name="regenerate" value="1">
+      <button class="btn btn-secondary" type="submit" onclick="busy(this)">Rigenera</button>
+      {% else %}
+      <button class="btn" type="submit" onclick="busy(this)">Analizza con AI</button>
+      {% endif %}
+    </form>
+  </div>
+  {% if analysis_html %}
+  <p class="muted">Generata il {{ analysis_date.strftime("%d/%m/%Y %H:%M") }} (in cache — Rigenera per aggiornarla)</p>
+  <div class="ai-analysis">{{ analysis_html | safe }}</div>
+  {% else %}
+  <p class="muted">Nessuna analisi ancora generata per questa sessione.</p>
+  {% endif %}
+</section>
+
+{% endblock %}
+{% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+Chart.defaults.color = "#8a97a9";
+Chart.defaults.borderColor = "rgba(255,255,255,.06)";
+Chart.defaults.font.family = "Inter, system-ui, sans-serif";
+function busy(btn) {
+  setTimeout(() => { btn.disabled = true; btn.textContent = "Analisi in corso…"; }, 0);
+}
+
+const streams = {{ streams_json | safe }};
+
+if (streams) {
+  // Per-record charts: one card per available metric
+  const metrics = [
+    ["power",   "Potenza (W)",    "#0a6ebd"],
+    ["hr",      "FC (bpm)",       "#d62828"],
+    ["cadence", "Cadenza",        "#5a9e3a"],
+    ["speed",   "Velocità (km/h)","#9046b8", v => v == null ? null : v * 3.6],
+    ["alt",     "Quota (m)",      "#8a7350"],
+  ];
+  const host = document.getElementById("streamCharts");
+  const labels = streams.t.map(s => {
+    const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60);
+    return h ? `${h}:${String(m).padStart(2, "0")}` : `${m}m`;
+  });
+  for (const [key, label, color, fn] of metrics) {
+    const arr = streams[key];
+    if (!arr || !arr.some(v => v != null)) continue;
+    const card = document.createElement("section");
+    card.className = "card";
+    card.innerHTML = `<h3>${label}</h3><canvas></canvas>`;
+    host.appendChild(card);
+    new Chart(card.querySelector("canvas"), {
+      type: "line",
+      data: { labels,
+              datasets: [{ data: fn ? arr.map(fn) : arr, borderColor: color,
+                           pointRadius: 0, borderWidth: 1.2, tension: .2,
+                           fill: key === "alt", backgroundColor: color + "33",
+                           spanGaps: true }] },
+      options: { plugins: { legend: { display: false } },
+                 scales: { x: { ticks: { maxTicksLimit: 12 } } },
+                 animation: false, responsive: true },
+    });
+  }
+
+  // GPS route map (Leaflet) if the FIT had position data
+  if (streams.latlng && streams.latlng.length > 1) {
+    document.getElementById("mapCard").style.display = "";
+    const map = L.map("map");
+    L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+                { attribution: "&copy; OpenStreetMap" }).addTo(map);
+    const line = L.polyline(streams.latlng, { color: "#0a6ebd", weight: 3 }).addTo(map);
+    map.fitBounds(line.getBounds(), { padding: [20, 20] });
+  }
+}
+</script>
+{% endblock %}

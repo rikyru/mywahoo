@@ -1,0 +1,28 @@
+# Variante per il server di casa (macmini, /home/rikyru/mywahoo).
+# Il tuo cloudflared instrada verso http://192.168.1.124:<porta>, quindi qui si
+# PUBBLICA una porta host (0.0.0.0:8090) come gli altri tuoi servizi — niente
+# rete proxy condivisa.
+#
+#   docker compose -f docker-compose.prod.yml up -d --build
+services:
+  mywahoo:
+    build: .
+    container_name: mywahoo
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - DB_PATH=/data/wahoo.db
+      - FIT_DIR=/data/fits
+    ports:
+      - "8090:8080"      # cloudflared -> http://192.168.1.124:8090
+    volumes:
+      - mywahoo_data:/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/healthz', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  mywahoo_data:

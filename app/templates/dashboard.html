@@ -1,0 +1,148 @@
+{% extends "base.html" %}
+{% block title %}Dashboard — MyWahoo{% endblock %}
+{% block content %}
+
+<div class="page-head">
+  <h1>Ciao{% if user %}, {{ user }}{% endif %}</h1>
+  <div class="sync-buttons">
+    <form method="post" action="/sync">
+      <button class="btn" type="submit">Sync</button>
+    </form>
+    <form method="post" action="/sync" onsubmit="return confirm('Full resync: ricontrolla tutti i workout su Wahoo. Continuare?')">
+      <input type="hidden" name="full" value="1">
+      <button class="btn btn-secondary" type="submit">Full resync</button>
+    </form>
+  </div>
+</div>
+
+{% if message %}<div class="alert ok">{{ message }}</div>{% endif %}
+{% if error %}<div class="alert error">{{ error }}</div>{% endif %}
+
+<form method="get" action="/" class="filters">
+  <label>Periodo
+    <select name="period" onchange="this.form.submit()">
+      {% for p, label in [("week","Settimana"),("month","Mese"),("year","Anno"),("all","Tutto")] %}
+      <option value="{{ p }}" {% if period == p %}selected{% endif %}>{{ label }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label>Tipo
+    <select name="sport" onchange="this.form.submit()">
+      <option value="">Tutti</option>
+      {% for s in all_sports %}
+      <option value="{{ s }}" {% if sport == s %}selected{% endif %}>{{ s }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <input type="hidden" name="sort" value="{{ sort }}">
+  <input type="hidden" name="order" value="{{ order }}">
+</form>
+
+<section class="kpi-row">
+  <div class="kpi"><span class="kpi-value">{{ kpi.distance_km }}</span><span class="kpi-label">km totali</span></div>
+  <div class="kpi"><span class="kpi-value">{{ kpi.time }}</span><span class="kpi-label">tempo totale</span></div>
+  <div class="kpi"><span class="kpi-value">{{ kpi.count }}</span><span class="kpi-label">attività</span></div>
+  <div class="kpi"><span class="kpi-value">{{ kpi.elevation_m }}</span><span class="kpi-label">m dislivello</span></div>
+  <div class="kpi"><span class="kpi-value">{{ kpi.avg_power }}</span><span class="kpi-label">W medi</span></div>
+  <div class="kpi"><span class="kpi-value">{{ kpi.avg_hr }}</span><span class="kpi-label">bpm medi</span></div>
+</section>
+
+<section class="charts-grid">
+  <div class="card"><h3>Distanza per settimana (km)</h3><canvas id="chartWeekly"></canvas></div>
+  <div class="card"><h3>Distribuzione per tipo</h3><canvas id="chartTypes"></canvas></div>
+  <div class="card"><h3 id="metricTitle">Metrica nel tempo</h3><canvas id="chartMetric"></canvas></div>
+  <div class="card"><h3>Distribuzione FC media (bpm)</h3><canvas id="chartHr"></canvas></div>
+</section>
+
+<section class="card">
+  <h3>Attività</h3>
+  <table class="activities">
+    <thead>
+      <tr>
+        {% macro sort_link(col, label) -%}
+          {% set next_order = "asc" if sort == col and order == "desc" else "desc" %}
+          <a href="/?period={{ period }}&sport={{ sport }}&sort={{ col }}&order={{ next_order }}">
+            {{ label }}{% if sort == col %} {{ "▼" if order == "desc" else "▲" }}{% endif %}
+          </a>
+        {%- endmacro %}
+        <th>{{ sort_link("date", "Data") }}</th>
+        <th>Nome</th>
+        <th>Tipo</th>
+        <th>{{ sort_link("distance", "Distanza") }}</th>
+        <th>{{ sort_link("duration", "Durata") }}</th>
+        <th>Vel./Ritmo</th>
+        <th>W medi</th>
+        <th>FC media</th>
+        <th>FIT</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for w in workouts %}
+      <tr>
+        <td>{{ w.start_date.strftime("%d/%m/%Y") }}</td>
+        <td><a href="/workout/{{ w.id }}">{{ w.name }}</a></td>
+        <td><span class="tag">{{ w.sport }}</span></td>
+        <td>{{ "%.1f"|format(w.distance_m / 1000) }} km</td>
+        <td>{{ w.moving_s | duration }}</td>
+        <td>{{ fmt_speed(w) }}</td>
+        <td>{{ w.avg_power and ("%.0f"|format(w.avg_power)) or "-" }}</td>
+        <td>{{ w.avg_hr and ("%.0f"|format(w.avg_hr)) or "-" }}</td>
+        <td>{{ "✓" if w.has_fit else "—" }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="9">Nessuna attività. Gli allenamenti arrivano via webhook dopo
+        la registrazione su Wahoo, oppure premi <strong>Sync</strong>.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<script>
+Chart.defaults.color = "#8a97a9";
+Chart.defaults.borderColor = "rgba(255,255,255,.06)";
+Chart.defaults.font.family = "Inter, system-ui, sans-serif";
+const data = {{ charts_json | safe }};
+const opts = { plugins: { legend: { display: false } }, responsive: true };
+// Categorical palette for the activity-type doughnut (legible on dark)
+const PIE = ["#4c8dff", "#34d399", "#f59e0b", "#f87171", "#a78bfa",
+             "#22d3ee", "#fb7185", "#a3e635", "#e879f9", "#facc15"];
+
+new Chart(document.getElementById("chartWeekly"), {
+  type: "bar",
+  data: { labels: data.weekly.labels,
+          datasets: [{ data: data.weekly.values, backgroundColor: "#4c8dff",
+                       borderRadius: 4, maxBarThickness: 26 }] },
+  options: opts,
+});
+new Chart(document.getElementById("chartTypes"), {
+  type: "doughnut",
+  data: { labels: data.types.labels,
+          datasets: [{ data: data.types.values,
+                       backgroundColor: data.types.labels.map((_, i) => PIE[i % PIE.length]),
+                       borderColor: "#151b27", borderWidth: 2, hoverOffset: 6 }] },
+  options: { responsive: true, cutout: "60%",
+             plugins: { legend: { position: "right",
+                                  labels: { boxWidth: 12, padding: 12 } } } },
+});
+document.getElementById("metricTitle").textContent = data.metric.label;
+new Chart(document.getElementById("chartMetric"), {
+  type: "line",
+  data: { datasets: [{ data: data.metric.points, borderColor: "#4c8dff",
+                       backgroundColor: "rgba(76,141,255,.15)", fill: true,
+                       pointRadius: 2, tension: .3 }] },
+  options: { ...opts, scales: { x: { type: "category" } },
+             parsing: { xAxisKey: "x", yAxisKey: "y" } },
+});
+new Chart(document.getElementById("chartHr"), {
+  type: "bar",
+  data: { labels: data.hr.labels,
+          datasets: [{ data: data.hr.values, backgroundColor: "#f87171",
+                       borderRadius: 4, maxBarThickness: 26 }] },
+  options: opts,
+});
+</script>
+{% endblock %}

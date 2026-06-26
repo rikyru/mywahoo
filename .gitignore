@@ -1,0 +1,11 @@
+.env
+data/
+*.db
+*.fit
+__pycache__/
+*.pyc
+.vscode/
+.venv*/
+# scratch & backup
+_*.py
+*.tgz

@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}Sintesi {{ "settimana" if period == "week" else "mese" }} — MyWahoo{% endblock %}
+{% block content %}
+
+<p><a href="/">&larr; Dashboard</a></p>
+<div class="page-head">
+  <h1>Sintesi AI — {{ "ultima settimana" if period == "week" else "ultimo mese" }}</h1>
+  <form method="post" action="/summary/{{ period }}/generate">
+    {% if summary_html %}<input type="hidden" name="regenerate" value="1">{% endif %}
+    <button class="btn" type="submit" onclick="busy(this)">
+      {{ "Rigenera" if summary_html else "Genera sintesi" }}
+    </button>
+  </form>
+</div>
+
+{% if error %}<div class="alert error">{{ error }}</div>{% endif %}
+
+{% if summary_html %}
+<p class="muted">Generata il {{ summary_date.strftime("%d/%m/%Y %H:%M") }} (in cache)</p>
+<div class="card ai-analysis">{{ summary_html | safe }}</div>
+{% else %}
+<p class="muted">Nessuna sintesi ancora generata per questo periodo.</p>
+{% endif %}
+
+{% endblock %}
+{% block scripts %}
+<script>
+function busy(btn) {
+  setTimeout(() => { btn.disabled = true; btn.textContent = "Generazione in corso…"; }, 0);
+}
+</script>
+{% endblock %}
