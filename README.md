@@ -3,7 +3,21 @@
 Webapp single-user che riceve gli allenamenti dalla **Wahoo Cloud API** via
 webhook, scarica e parsa i file **FIT** (potenza/FC/cadenza/velocità/quota/GPS),
 li mostra in una dashboard con KPI, grafici e mappa del percorso, e analizza le
-sessioni con l'API di Anthropic (Claude). Gira interamente in Docker.
+sessioni con l'AI (**OpenAI** o **Anthropic**, configurabile). Gira interamente
+in Docker.
+
+In più si integra con la **Google Health API** (ex Fitbit) per:
+- **arricchire** gli allenamenti che arrivano a Wahoo senza dati (nuoto, corsa,
+  camminate sincronizzati da app di terze parti) con distanza, FC, calorie;
+- **importare** le attività che a Wahoo mancano del tutto, con **dedup/fusione**
+  automatica quando lo stesso allenamento è visto da entrambe le fonti;
+- ricostruire lo **stream FC intraday** (grafico FC-nel-tempo) anche senza FIT;
+- una pagina **Salute** con metriche vitali (FC a riposo, HRV, SpO2, frequenza
+  respiratoria, sonno, peso), un **indice di forma** calcolato e un **commento
+  AI** del periodo.
+
+Il dislivello dei giri registrati col telefono (FIT senza quota) viene **stimato
+dal GPS** contro un modello digitale del terreno (OpenTopoData / SRTM).
 
 **Stack:** Python 3.12 · FastAPI · SQLModel/SQLite · httpx · fitdecode ·
 Jinja2 + Chart.js + Leaflet (CDN) · Docker
@@ -38,10 +52,16 @@ cp .env.example .env
 | `WAHOO_CLIENT_ID` / `WAHOO_CLIENT_SECRET` | Dall'app approvata sul Developer Portal |
 | `WAHOO_REDIRECT_URI` | Identico a quello registrato sul portale |
 | `WAHOO_WEBHOOK_TOKEN` | Segreto condiviso per validare i webhook in ingresso |
-| `ANTHROPIC_API_KEY` | API key Anthropic (solo lato server, mai esposta al browser) |
+| `AI_PROVIDER` | `openai` (default `anthropic`) — sceglie il motore delle analisi |
+| `OPENAI_API_KEY` / `OPENAI_MODEL` | Key OpenAI + modello (es. `gpt-5.5`) se `AI_PROVIDER=openai` |
+| `ANTHROPIC_API_KEY` / `ANTHROPIC_MODEL` | Key Anthropic + modello se `AI_PROVIDER=anthropic` |
+| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | OAuth Google Health (opzionale) — abilita la pagina Salute e l'arricchimento |
 | `APP_SECRET_KEY` | Firma del cookie di sessione — `openssl rand -hex 32` |
 | `APP_BASE_URL` | URL pubblico; se `https://…` il cookie è marcato `Secure` |
+| `HOST_PORT` | Porta host pubblicata dal compose (default `8080`) |
 | `LOG_LEVEL` / `TZ` | `INFO` / `Europe/Rome` |
+
+La chiave AI è usata **solo lato server**, mai esposta al browser.
 
 ## 3. Avvio, primo login, webhook, primo sync
 
@@ -87,6 +107,38 @@ esponenziale su 429/5xx (10s → 20s → 40s → 80s, max 4 tentativi). Il token
 OAuth viene rinnovato in automatico quando mancano <10 minuti alla scadenza
 (il refresh token ruotato viene sempre ripersistito).
 
+## 4b. Integrazione Google Health (ex Fitbit)
+
+Opzionale: imposta `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET` (progetto su Google
+Cloud con Health API abilitata, redirect `{APP_BASE_URL}/oauth/google/callback`)
+e collega l'account da **`/login/google`**. Gli scope richiesti coprono attività,
+sonno, posizione e metriche vitali (sola lettura).
+
+> App in modalità "Test" su Google Cloud ⇒ il refresh token scade ogni 7 giorni:
+> basta rifare il login da `/login/google`.
+
+Dopo ogni Sync (e dopo ogni webhook) gira `enrich_workouts`, in tre fasi
+**idempotenti**:
+
+1. **Dedup** — se un allenamento importato da Google ha poi un gemello su Wahoo
+   (stesso orario ±15 min **e stesso sport**), la copia Google viene rimossa.
+2. **Arricchimento** — gli allenamenti Wahoo senza FIT (nuoto/corsa/camminate
+   sincronizzati da terzi) vengono completati campo per campo dall'esercizio
+   Google corrispondente, e ne viene ricostruito lo **stream FC intraday**.
+3. **Import** — le attività presenti solo su Google vengono importate come nuove
+   righe, dopo un *grace period* di 12 h (così una consegna tardiva di Wahoo ha
+   la precedenza) e solo se non c'è già un'attività **dello stesso sport** vicina.
+
+Risultato: lo stesso allenamento visto da entrambe le fonti resta **una sola
+riga, fusa** (Wahoo resta primario per la bici con FIT); due attività diverse a
+orari ravvicinati restano separate.
+
+La pagina **Salute** (`/health`) mostra FC a riposo, HRV, SpO2, frequenza
+respiratoria, temperatura cutanea, peso/massa grassa e sonno (fasi per notte),
+con frecce di tendenza, un **indice di forma** 0-100 calcolato sulla baseline
+personale e un **commento AI** del periodo (in cache giornaliera). I punteggi
+proprietari di Fitbit (Sleep Score, Readiness…) non sono esposti dall'API.
+
 ## 5. Reverse proxy HTTPS con Caddy
 
 L'app espone HTTP su `127.0.0.1:8080` (configurabile con `HOST_PORT`) ed è
@@ -108,15 +160,19 @@ Se Caddy gira in un container, usa `mywahoo:8080` sulla stessa network Docker.
 
 ```
 app/
-├── main.py              # FastAPI: routing, auth guard, webhook, dashboard, AI
-├── config.py            # Settings da env + logging
-├── db.py                # WahooToken, Workout, WorkoutStream (gzip), AiAnalysis, PeriodSummary
+├── main.py              # FastAPI: routing, auth guard, webhook, dashboard, Salute, AI
+├── config.py            # Settings da env (incl. AI_PROVIDER, Google) + logging
+├── db.py                # WahooToken, GoogleToken, Workout, WorkoutStream, AiAnalysis, PeriodSummary
 ├── wahoo.py             # OAuth + refresh, client API con backoff, download FIT, sync
-├── fit.py               # Parsing fitdecode, NP, downsampling grafici, stats per AI
-├── anthropic_client.py  # POST /v1/messages (httpx), prompt coach, retry
-├── templates/           # base, login, dashboard, workout (grafici+mappa), summary
-└── static/style.css
+├── fit.py               # Parsing fitdecode, NP, downsampling, stats AI, dislivello da DEM
+├── google_health.py     # OAuth Google, arricchimento/import/dedup, stream FC, metriche Salute
+├── anthropic_client.py  # Client OpenAI/Anthropic (httpx), prompt coach allenamento e salute
+├── templates/           # base, login, dashboard, workout, summary, health
+└── static/style.css     # tema scuro (Inter + JetBrains Mono)
 ```
+
+Per il **deploy sul proprio server** (reverse proxy / Cloudflare Tunnel) vedi
+[`DEPLOY.md`](DEPLOY.md) e [`docker-compose.prod.yml`](docker-compose.prod.yml).
 
 ## Note di sicurezza
 
@@ -137,8 +193,12 @@ app/
 | POST | `/webhook/wahoo` | Ricezione `workout_summary` (validata, async) |
 | POST | `/sync` | Sync manuale (campo `full=1` per resync completo) |
 | GET | `/workout/{id}` | Dettaglio: KPI, grafici per-record, mappa, analisi AI |
-| POST | `/workout/{id}/analyze` | Genera/rigenera analisi Claude |
+| POST | `/workout/{id}/analyze` | Genera/rigenera analisi AI |
 | GET/POST | `/summary/{week\|month}` | Sintesi AI del periodo |
+| GET | `/health` | Pagina Salute: metriche vitali, indice di forma, commento AI |
+| POST | `/health/insight` | Genera/rigenera il commento AI sulla salute |
+| GET | `/login/google` · `/oauth/google/callback` | OAuth Google Health |
+| GET | `/google/probe` | Diagnostica: dump JSON degli esercizi Google |
 | GET | `/healthz` | Healthcheck (usato dal compose) |
 
 ## Punti marcati TODO nel codice

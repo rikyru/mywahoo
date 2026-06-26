@@ -180,6 +180,29 @@ SPORT_LABELS = {
 MATCH_TOLERANCE_S = 15 * 60
 # Fitbit auto-detects every short stroll as WALKING: only import deliberate ones
 MIN_WALK_IMPORT_S = 30 * 60
+
+
+def _sport_family(label: str) -> str | None:
+    """Canonical sport family from any Wahoo/Google label, or None if unknown."""
+    s = (label or "").lower()
+    if any(k in s for k in ("swim", "nuot")):
+        return "swim"
+    if any(k in s for k in ("bik", "cycl", "ciclis", "spin")):
+        return "bike"
+    if any(k in s for k in ("run", "cors")):
+        return "run"
+    if any(k in s for k in ("walk", "hik", "cammin", "escurs", "trek")):
+        return "walk"
+    return None
+
+
+def _same_sport(a: str, b: str) -> bool:
+    """True unless both labels are confidently different sports — so dedup/import
+    never merge a swim with a bike that merely started at the same time."""
+    fa, fb = _sport_family(a), _sport_family(b)
+    if fa is None or fb is None:
+        return True
+    return fa == fb
 # Don't import a Google exercise younger than this: the Strava->Wahoo sync can
 # lag hours, and the Wahoo version (when it comes) is the preferred base row.
 IMPORT_GRACE_S = 12 * 3600
@@ -359,7 +382,8 @@ async def enrich_workouts(max_pages: int = 8) -> int:
     for imp in imported:
         twin = next((w for w in all_workouts
                      if w.id != imp.id and not _is_imported(w)
-                     and near(w.start_date, imp.start_date)), None)
+                     and near(w.start_date, imp.start_date)
+                     and _same_sport(imp.sport, w.sport)), None)
         if twin:
             with Session(engine) as session:
                 row = session.get(Workout, imp.id)
@@ -413,11 +437,12 @@ async def enrich_workouts(max_pages: int = 8) -> int:
             continue
         if e["type"] == "WALKING" and (e["moving_s"] or 0) < MIN_WALK_IMPORT_S:
             continue
-        # ±tolerance near ANY workout (sport aside) -> assume it's the same
-        # activity seen by both sources, never create a duplicate
-        if any(near(e["start"], w.start_date) for w in all_workouts):
-            continue
         sport = SPORT_LABELS.get(e["type"], e["type"].replace("_", " ").title() or "Altro")
+        # Same start time AND same sport -> already seen by both sources, skip.
+        # Different sport at a close time (e.g. walk then ride) is kept.
+        if any(near(e["start"], w.start_date) and _same_sport(sport, w.sport)
+               for w in all_workouts):
+            continue
         new = Workout(
             id=e["uid"],
             name=e["name"] or sport,
