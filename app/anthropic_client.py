@@ -53,18 +53,25 @@ HEALTH_SYSTEM_PROMPT = """\
 Sei un coach di salute, recupero e sonno per uno sportivo amatoriale. Ti vengono
 forniti gli indicatori degli ultimi ~30 giorni (FC a riposo, HRV, SpO2, frequenza
 respiratoria, temperatura cutanea notturna, peso, composizione corporea, sonno)
-con valori più recenti, variazioni e min/media/max, più un "indice di forma"
-0-100 calcolato sulla baseline personale. Rispondi in italiano, in Markdown,
-conciso, con queste sezioni:
+con valori più recenti, variazioni e min/media/max, un "indice di forma" 0-100
+calcolato sulla baseline personale, E l'elenco delle attività fisiche del periodo
+(data, sport, durata, distanza, FC/potenza media, TSS). Rispondi in italiano, in
+Markdown, conciso, con queste sezioni:
 
 ## Recupero e forma
 ## Sonno
+## Carico e recupero
 ## Tendenze da tenere d'occhio
 ## Consigli
 
 Interpreta i trend in modo integrato (es. HRV in calo + FC a riposo in aumento =
 recupero peggiore; SpO2 bassa o respiratoria in aumento + temperatura sopra
-baseline possono indicare stress/malattia in arrivo). NON dare diagnosi mediche:
+baseline possono indicare stress/malattia in arrivo). Nella sezione "Carico e
+recupero" **correla esplicitamente le attività con il recupero**: confronta le
+notti/giorni dopo sessioni intense o voluminose con HRV, FC a riposo e qualità
+del sonno; segnala se il corpo recupera bene dal carico o se accumula fatica
+(HRV depressa o FC a riposo elevata dopo i picchi di allenamento), e se i giorni
+di riposo/scarico portano un rimbalzo del recupero. NON dare diagnosi mediche:
 se qualcosa appare anomalo, suggerisci cautela o un controllo medico. Se un dato
 manca, dillo invece di inventare. Sii quantitativo."""
 
@@ -176,9 +183,29 @@ async def summarize_period(period_label: str, workouts: list[dict]) -> str:
     return await _call_claude(PERIOD_SYSTEM_PROMPT, body)
 
 
-async def summarize_health(overview: dict) -> str:
-    """Coach-style commentary on the health overview. Sends a compact view
-    (latest + trend + min/avg/max), never the full daily arrays."""
+def _activity_log(workouts: list[dict] | None) -> list[dict]:
+    """Compact per-activity view for correlating training load with recovery."""
+    out = []
+    for w in workouts or []:
+        d = w.get("start_date")
+        date = d.strftime("%Y-%m-%d") if hasattr(d, "strftime") else str(d)[:10]
+        row = {"data": date, "sport": w.get("sport") or "?",
+               "durata_min": round((w.get("moving_s") or 0) / 60)}
+        if w.get("distance_m"):
+            row["distanza_km"] = round(w["distance_m"] / 1000, 1)
+        for src, dst in (("avg_hr", "fc_media"), ("avg_power", "potenza_media"),
+                         ("tss", "tss")):
+            if w.get(src):
+                row[dst] = round(w[src], 1)
+        out.append(row)
+    out.sort(key=lambda r: r["data"])
+    return out
+
+
+async def summarize_health(overview: dict, workouts: list[dict] | None = None) -> str:
+    """Coach-style commentary on the health overview, correlated with the recent
+    activities. Sends a compact view (latest + trend + min/avg/max + activity
+    log), never the full daily arrays."""
     def stats(series: list) -> dict:
         vals = [p["value"] for p in series]
         if not vals:
@@ -199,11 +226,12 @@ async def summarize_health(overview: dict) -> str:
         asleep = [n["asleep_min"] for n in nights]
         sleep = {"notti_disponibili": len(nights),
                  "media_minuti_dormiti": round(sum(asleep) / len(asleep)),
-                 "ultima_notte": nights[-1]}
+                 "per_notte": [{"data": n["date"], "min_dormiti": n["asleep_min"],
+                                "efficienza": n.get("efficiency")} for n in nights]}
 
     payload = {"indice_di_forma": overview.get("score"),
                "metriche_vitali": metrics, "composizione_corporea": body,
-               "sonno": sleep}
+               "sonno": sleep, "attivita_fisiche": _activity_log(workouts)}
     return await _call_claude(
         HEALTH_SYSTEM_PROMPT,
         json.dumps(payload, ensure_ascii=False, indent=1, default=str))
