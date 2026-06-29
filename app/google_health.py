@@ -353,10 +353,11 @@ async def enrich_workouts(max_pages: int = 8) -> int:
 
     from sqlmodel import select
 
-    from .db import Workout
+    from .db import IgnoredImport, Workout
 
     with Session(engine) as session:
         all_workouts = list(session.exec(select(Workout)))
+        ignored = {r.id for r in session.exec(select(IgnoredImport))}
     candidates = [w for w in all_workouts if not w.has_fit]
     oldest_needed = (min((w.start_date for w in candidates), default=dt.utcnow())
                      - timedelta(hours=1))
@@ -433,7 +434,7 @@ async def enrich_workouts(max_pages: int = 8) -> int:
     # 3. Import exercises Wahoo never delivered (any sport, e.g. watch-only rides)
     grace_cutoff = dt.utcnow() - timedelta(seconds=IMPORT_GRACE_S)
     for e in exercises:
-        if e["uid"] is None or e["start"] > grace_cutoff:
+        if e["uid"] is None or e["uid"] in ignored or e["start"] > grace_cutoff:
             continue
         if e["type"] == "WALKING" and (e["moving_s"] or 0) < MIN_WALK_IMPORT_S:
             continue

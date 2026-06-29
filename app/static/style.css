@@ -141,6 +141,44 @@ table.metrics td:first-child { color: var(--muted); }
 .ai-analysis table { border-collapse: collapse; }
 .ai-analysis td, .ai-analysis th { border: 1px solid var(--border); padding: .4rem .65rem; }
 
+/* ---------- analysis window bar ---------- */
+.window-bar { display: flex; flex-wrap: wrap; align-items: center; gap: .8rem 1.2rem;
+              margin: 1.1rem 0; }
+.window-sizes, .window-nav { display: flex; align-items: center; gap: .4rem; }
+.window-label { font-family: var(--mono); font-size: .9rem; min-width: 9.5rem;
+                text-align: center; color: var(--text); }
+.window-custom { display: flex; gap: .4rem; align-items: center; }
+.window-custom input[type=date] { padding: .4rem .5rem; background: var(--card);
+  color: var(--text); border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.window-sport { margin-left: auto; }
+
+.chip { display: inline-flex; align-items: center; justify-content: center;
+  min-width: 2rem; padding: .35rem .7rem; border-radius: 100px; font-size: .85rem;
+  font-weight: 500; background: var(--card); color: var(--text);
+  border: 1px solid var(--border); }
+a.chip:hover { background: var(--card-hover); text-decoration: none; }
+.chip-on { background: var(--accent-soft); color: #a9c7ff; border-color: transparent; }
+.chip-off { opacity: .35; cursor: default; }
+
+/* ---------- row actions (edit/delete) ---------- */
+.row-actions { display: flex; gap: .5rem; align-items: center; white-space: nowrap; }
+.row-actions a, .row-actions button { color: var(--muted); background: none; border: 0;
+  cursor: pointer; font-size: .95rem; padding: .15rem; line-height: 1; }
+.row-actions a:hover { color: var(--accent); text-decoration: none; }
+.row-actions button:hover { color: var(--bad); }
+.row-actions form { display: inline; margin: 0; }
+.pair-sep td { border-top: 2px solid var(--border); padding: 0; height: .4rem; }
+
+/* ---------- edit form ---------- */
+.edit-form { display: grid; grid-template-columns: 1fr 1fr; gap: .9rem 1.2rem; }
+.edit-form label { display: flex; flex-direction: column; gap: .3rem;
+  font-size: .78rem; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+.edit-form input { padding: .5rem .6rem; background: var(--bg-elev); color: var(--text);
+  border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: .95rem; font-family: inherit; }
+.edit-form input:focus { outline: 2px solid var(--accent-soft); border-color: var(--accent); }
+.edit-actions { grid-column: 1 / -1; display: flex; gap: .6rem; margin-top: .4rem; }
+@media (max-width: 640px) { .edit-form { grid-template-columns: 1fr; } }
+
 /* ---------- charts sizing ---------- */
 .card canvas { max-height: 300px; }
 

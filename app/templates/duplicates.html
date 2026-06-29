@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}Duplicati — MyWahoo{% endblock %}
+{% block content %}
+
+<div class="page-head">
+  <h1>Possibili duplicati</h1>
+  <span class="muted">{{ n }} copp{{ 'ia' if n == 1 else 'ie' }} a meno di 30 min di distanza</span>
+</div>
+
+<p class="muted">Attività che iniziano molto ravvicinate: spesso lo stesso
+allenamento visto da due fonti, o un import sbagliato. Controlla e, se è un
+doppione, elimina quella di troppo (di solito quella senza FIT/meno completa).</p>
+
+{% if not pairs %}
+<div class="card"><p class="muted">Nessun duplicato sospetto. 👍</p></div>
+{% else %}
+<section class="card">
+  <table class="activities">
+    <thead>
+      <tr><th>Data/ora</th><th>Nome</th><th>Tipo</th><th>Distanza</th>
+          <th>FC</th><th>FIT</th><th>Δ</th><th></th></tr>
+    </thead>
+    <tbody>
+      {% for p in pairs %}
+      {% for w in [p.a, p.b] %}
+      <tr>
+        <td>{{ w.start_date.strftime("%d/%m/%Y %H:%M") }}</td>
+        <td><a href="/workout/{{ w.id }}">{{ w.name }}</a></td>
+        <td><span class="tag">{{ w.sport }}</span></td>
+        <td>{{ "%.1f"|format(w.distance_m / 1000) }} km</td>
+        <td>{{ w.avg_hr and ("%.0f"|format(w.avg_hr)) or "-" }}</td>
+        <td>{{ "✓" if w.has_fit else "—" }}</td>
+        <td>{% if loop.first %}{{ p.gap_min }}′{% endif %}</td>
+        <td class="row-actions">
+          <a href="/workout/{{ w.id }}/edit" title="Modifica">✎</a>
+          <form method="post" action="/workout/{{ w.id }}/delete"
+                onsubmit="return confirm('Eliminare «{{ w.name }}»?')">
+            <button type="submit" title="Elimina">🗑</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+      <tr class="pair-sep"><td colspan="8"></td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+{% endblock %}

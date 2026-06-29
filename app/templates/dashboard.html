@@ -18,25 +18,58 @@
 {% if message %}<div class="alert ok">{{ message }}</div>{% endif %}
 {% if error %}<div class="alert error">{{ error }}</div>{% endif %}
 
-<form method="get" action="/" class="filters">
-  <label>Periodo
-    <select name="period" onchange="this.form.submit()">
-      {% for p, label in [("week","Settimana"),("month","Mese"),("year","Anno"),("all","Tutto")] %}
-      <option value="{{ p }}" {% if period == p %}selected{% endif %}>{{ label }}</option>
-      {% endfor %}
-    </select>
-  </label>
-  <label>Tipo
-    <select name="sport" onchange="this.form.submit()">
-      <option value="">Tutti</option>
-      {% for s in all_sports %}
-      <option value="{{ s }}" {% if sport == s %}selected{% endif %}>{{ s }}</option>
-      {% endfor %}
-    </select>
-  </label>
-  <input type="hidden" name="sort" value="{{ sort }}">
-  <input type="hidden" name="order" value="{{ order }}">
-</form>
+{% set qs_sport = ('&sport=' ~ sport) if sport else '' %}
+<div class="window-bar">
+  <div class="window-sizes">
+    {% for w, label in windows.items() %}
+    <a class="chip {% if window.win == w %}chip-on{% endif %}"
+       href="/?win={{ w }}{{ qs_sport }}">{{ label }}</a>
+    {% endfor %}
+    <a class="chip {% if window.win == 'custom' %}chip-on{% endif %}"
+       href="/?win=custom&from={{ window.from }}&to={{ window.to }}{{ qs_sport }}">Personalizzato</a>
+  </div>
+
+  {% if window.win != 'custom' %}
+  <div class="window-nav">
+    <a class="chip" href="/?win={{ window.win }}&end={{ window.prev_end }}{{ qs_sport }}" title="Periodo precedente">←</a>
+    <span class="window-label">{{ window.label }}</span>
+    {% if window.next_end %}
+    <a class="chip" href="/?win={{ window.win }}&end={{ window.next_end }}{{ qs_sport }}" title="Periodo successivo">→</a>
+    {% else %}
+    <span class="chip chip-off">→</span>
+    {% endif %}
+    {% if not window.is_current %}
+    <a class="chip" href="/?win={{ window.win }}{{ qs_sport }}">Oggi</a>
+    {% endif %}
+  </div>
+  {% else %}
+  <form method="get" action="/" class="window-custom">
+    <input type="hidden" name="win" value="custom">
+    <input type="date" name="from" value="{{ window.from }}">
+    <input type="date" name="to" value="{{ window.to }}">
+    {% if sport %}<input type="hidden" name="sport" value="{{ sport }}">{% endif %}
+    <button class="btn btn-secondary" type="submit">Applica</button>
+  </form>
+  {% endif %}
+
+  <form method="get" action="/" class="window-sport">
+    <input type="hidden" name="win" value="{{ window.win }}">
+    {% if window.win == 'custom' %}
+    <input type="hidden" name="from" value="{{ window.from }}">
+    <input type="hidden" name="to" value="{{ window.to }}">
+    {% elif not window.is_current %}
+    <input type="hidden" name="end" value="{{ window.end_d }}">
+    {% endif %}
+    <label>Tipo
+      <select name="sport" onchange="this.form.submit()">
+        <option value="">Tutti</option>
+        {% for s in all_sports %}
+        <option value="{{ s }}" {% if sport == s %}selected{% endif %}>{{ s }}</option>
+        {% endfor %}
+      </select>
+    </label>
+  </form>
+</div>
 
 <section class="kpi-row">
   <div class="kpi"><span class="kpi-value">{{ kpi.distance_km }}</span><span class="kpi-label">km totali</span></div>
@@ -58,10 +91,11 @@
   <h3>Attività</h3>
   <table class="activities">
     <thead>
+      {% set win_qs = 'win=' ~ window.win ~ ('&from=' ~ window.from ~ '&to=' ~ window.to if window.win == 'custom' else ('&end=' ~ window.end_d if not window.is_current else '')) ~ qs_sport %}
       <tr>
         {% macro sort_link(col, label) -%}
           {% set next_order = "asc" if sort == col and order == "desc" else "desc" %}
-          <a href="/?period={{ period }}&sport={{ sport }}&sort={{ col }}&order={{ next_order }}">
+          <a href="/?{{ win_qs }}&sort={{ col }}&order={{ next_order }}">
             {{ label }}{% if sort == col %} {{ "▼" if order == "desc" else "▲" }}{% endif %}
           </a>
         {%- endmacro %}
@@ -74,6 +108,7 @@
         <th>W medi</th>
         <th>FC media</th>
         <th>FIT</th>
+        <th></th>
       </tr>
     </thead>
     <tbody>
@@ -88,10 +123,17 @@
         <td>{{ w.avg_power and ("%.0f"|format(w.avg_power)) or "-" }}</td>
         <td>{{ w.avg_hr and ("%.0f"|format(w.avg_hr)) or "-" }}</td>
         <td>{{ "✓" if w.has_fit else "—" }}</td>
+        <td class="row-actions">
+          <a href="/workout/{{ w.id }}/edit" title="Modifica">✎</a>
+          <form method="post" action="/workout/{{ w.id }}/delete"
+                onsubmit="return confirm('Eliminare «{{ w.name }}»?')">
+            <button type="submit" title="Elimina">🗑</button>
+          </form>
+        </td>
       </tr>
       {% else %}
-      <tr><td colspan="9">Nessuna attività. Gli allenamenti arrivano via webhook dopo
-        la registrazione su Wahoo, oppure premi <strong>Sync</strong>.</td></tr>
+      <tr><td colspan="10">Nessuna attività in questo periodo. Sposta la finestra,
+        oppure premi <strong>Sync</strong>.</td></tr>
       {% endfor %}
     </tbody>
   </table>

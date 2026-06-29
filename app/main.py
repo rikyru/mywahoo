@@ -3,7 +3,7 @@ import json
 import logging
 import secrets
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from urllib.parse import urlencode
 
@@ -17,7 +17,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from . import anthropic_client, fit as fitmod, google_health, wahoo
 from .config import settings, setup_logging
-from .db import AiAnalysis, PeriodSummary, Workout, engine, init_db
+from .db import AiAnalysis, IgnoredImport, PeriodSummary, Workout, WorkoutStream, engine, init_db
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -90,6 +90,55 @@ def query_workouts(session: Session, period: str, sport: str | None) -> list[Wor
     start = period_start(period)
     if start:
         stmt = stmt.where(Workout.start_date >= start)
+    if sport:
+        stmt = stmt.where(Workout.sport == sport)
+    return list(session.exec(stmt.order_by(Workout.start_date.desc())))
+
+
+# Movable analysis window for the dashboard
+WINDOWS = {"7": "1 settimana", "14": "2 settimane", "30": "1 mese"}
+
+
+def _parse_date(s: str | None) -> date | None:
+    try:
+        return date.fromisoformat(s) if s else None
+    except ValueError:
+        return None
+
+
+def resolve_window(win: str, end_s: str, from_s: str, to_s: str) -> dict:
+    """Resolve the dashboard time window from query params into a date range
+    plus the metadata (label, prev/next ends) the template needs to navigate."""
+    today = date.today()
+    if win == "custom":
+        f = _parse_date(from_s) or today - timedelta(days=29)
+        t = _parse_date(to_s) or today
+        if f > t:
+            f, t = t, f
+        return {"win": "custom", "from": f.isoformat(), "to": t.isoformat(),
+                "start": datetime.combine(f, time.min), "end": datetime.combine(t, time.max),
+                "label": f"{f.strftime('%d/%m/%Y')} – {t.strftime('%d/%m/%Y')}",
+                "prev_end": None, "next_end": None, "is_current": True}
+    days = int(win) if win in WINDOWS else 30
+    win = str(days)
+    end_d = _parse_date(end_s) or today
+    if end_d > today:
+        end_d = today
+    start_d = end_d - timedelta(days=days - 1)
+    is_current = end_d >= today
+    return {"win": win, "from": "", "to": "",
+            "start": datetime.combine(start_d, time.min),
+            "end": datetime.combine(end_d, time.max),
+            "end_d": end_d.isoformat(),
+            "label": f"{start_d.strftime('%d/%m')} – {end_d.strftime('%d/%m/%Y')}",
+            "prev_end": (start_d - timedelta(days=1)).isoformat(),
+            "next_end": None if is_current else min(today, end_d + timedelta(days=days)).isoformat(),
+            "is_current": is_current}
+
+
+def query_range(session: Session, start: datetime, end: datetime,
+                sport: str | None) -> list[Workout]:
+    stmt = select(Workout).where(Workout.start_date >= start, Workout.start_date <= end)
     if sport:
         stmt = stmt.where(Workout.sport == sport)
     return list(session.exec(stmt.order_by(Workout.start_date.desc())))
@@ -325,12 +374,12 @@ async def webhook_wahoo(request: Request, background: BackgroundTasks):
 # ---------------------------------------------------------------- pages
 
 @app.get("/", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
-def dashboard(request: Request, period: str = "month", sport: str = "",
-              sort: str = "date", order: str = "desc"):
-    if period not in PERIODS:
-        period = "month"
+def dashboard(request: Request, win: str = "30", end: str = "",
+              sport: str = "", sort: str = "date", order: str = "desc"):
+    window = resolve_window(win, end, request.query_params.get("from", ""),
+                            request.query_params.get("to", ""))
     with Session(engine) as session:
-        workouts = query_workouts(session, period, sport or None)
+        workouts = query_range(session, window["start"], window["end"], sport or None)
         all_sports = sorted({s for s in session.exec(
             select(Workout.sport).distinct()) if s})
 
@@ -347,7 +396,8 @@ def dashboard(request: Request, period: str = "month", sport: str = "",
 
     return templates.TemplateResponse(request, "dashboard.html", {
         "user": wahoo.get_user_name(),
-        "period": period, "sport": sport, "sort": sort, "order": order,
+        "window": window, "windows": WINDOWS,
+        "sport": sport, "sort": sort, "order": order,
         "all_sports": all_sports,
         "kpi": {
             "count": len(workouts),
@@ -362,6 +412,95 @@ def dashboard(request: Request, period: str = "month", sport: str = "",
         "message": request.query_params.get("msg"),
         "error": request.query_params.get("error"),
     })
+
+
+# ---------------------------------------------------------------- cleanup
+
+def _is_google_import(w: Workout) -> bool:
+    return '"source": "google_health"' in (w.raw_summary or "")
+
+
+@app.get("/duplicates", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
+def duplicates(request: Request):
+    """Coppie di attività che iniziano a meno di 30 min l'una dall'altra —
+    candidate doppioni da rivedere a mano."""
+    with Session(engine) as session:
+        ws = list(session.exec(select(Workout).order_by(Workout.start_date)))
+    pairs = []
+    for a, b in zip(ws, ws[1:]):
+        gap = abs((b.start_date - a.start_date).total_seconds())
+        if gap <= 30 * 60:
+            pairs.append({"a": a, "b": b, "gap_min": round(gap / 60)})
+    return templates.TemplateResponse(request, "duplicates.html",
+                                      {"pairs": pairs, "n": len(pairs)})
+
+
+@app.post("/workout/{workout_id}/delete", dependencies=[Depends(require_auth)])
+def workout_delete(workout_id: int):
+    with Session(engine) as session:
+        w = session.get(Workout, workout_id)
+        if not w:
+            raise HTTPException(404, "Attività non trovata")
+        google_import = _is_google_import(w)
+        # Drop stream + cached analysis, then the workout itself
+        stream = session.get(WorkoutStream, workout_id)
+        if stream:
+            session.delete(stream)
+        analysis = session.get(AiAnalysis, workout_id)
+        if analysis:
+            session.delete(analysis)
+        # A Google-only import would re-appear at the next sync: blacklist its uid
+        if google_import and not session.get(IgnoredImport, workout_id):
+            session.add(IgnoredImport(id=workout_id))
+        session.delete(w)
+        session.commit()
+    return RedirectResponse(f"/?{urlencode({'msg': 'Attività eliminata'})}", status_code=303)
+
+
+@app.get("/workout/{workout_id}/edit", response_class=HTMLResponse,
+         dependencies=[Depends(require_auth)])
+def workout_edit_form(request: Request, workout_id: int):
+    with Session(engine) as session:
+        w = session.get(Workout, workout_id)
+        if not w:
+            raise HTTPException(404, "Attività non trovata")
+        sports = sorted({s for s in session.exec(select(Workout.sport).distinct()) if s})
+    return templates.TemplateResponse(request, "workout_edit.html", {"w": w, "sports": sports})
+
+
+@app.post("/workout/{workout_id}/edit", dependencies=[Depends(require_auth)])
+def workout_edit(workout_id: int, name: str = Form(""), sport: str = Form(""),
+                 distance_km: str = Form(""), ascent_m: str = Form(""),
+                 moving_min: str = Form(""), avg_hr: str = Form(""),
+                 avg_power: str = Form(""), calories: str = Form("")):
+    def num(s):
+        try:
+            return float(s) if s.strip() != "" else None
+        except ValueError:
+            return None
+
+    with Session(engine) as session:
+        w = session.get(Workout, workout_id)
+        if not w:
+            raise HTTPException(404, "Attività non trovata")
+        w.name = name.strip() or w.name
+        w.sport = sport.strip() or w.sport
+        if (km := num(distance_km)) is not None:
+            w.distance_m = km * 1000
+        if (asc := num(ascent_m)) is not None:
+            w.ascent_m = asc
+        if (mins := num(moving_min)) is not None:
+            w.moving_s = int(mins * 60)
+            if w.distance_m and w.moving_s:
+                w.avg_speed_ms = w.distance_m / w.moving_s
+        w.avg_hr = num(avg_hr)
+        w.avg_power = num(avg_power)
+        w.calories = num(calories)
+        w.updated_at = datetime.utcnow()
+        session.add(w)
+        session.commit()
+    return RedirectResponse(f"/workout/{workout_id}?{urlencode({'msg': 'Modifiche salvate'})}",
+                            status_code=303)
 
 
 @app.get("/workout/{workout_id}", response_class=HTMLResponse,
@@ -383,6 +522,7 @@ def workout_detail(request: Request, workout_id: int):
         "streams_json": streams_json,
         "analysis_html": md.markdown(analysis.content, extensions=["tables"]) if analysis else None,
         "analysis_date": analysis.created_at if analysis else None,
+        "message": request.query_params.get("msg"),
         "error": request.query_params.get("error"),
     })
 

@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}Modifica {{ w.name }} — MyWahoo{% endblock %}
+{% block content %}
+
+<p><a href="/workout/{{ w.id }}">&larr; Torna all'attività</a></p>
+<h1>Modifica attività</h1>
+<p class="muted">{{ w.start_date.strftime("%d/%m/%Y %H:%M") }}
+  {% if not w.has_fit %}· dati da summary/Google{% endif %}</p>
+
+<section class="card">
+  <form method="post" action="/workout/{{ w.id }}/edit" class="edit-form">
+    <label>Nome
+      <input type="text" name="name" value="{{ w.name }}">
+    </label>
+    <label>Sport
+      <input type="text" name="sport" value="{{ w.sport }}" list="sports">
+      <datalist id="sports">
+        {% for s in sports %}<option value="{{ s }}">{% endfor %}
+      </datalist>
+    </label>
+    <label>Distanza (km)
+      <input type="number" step="0.01" name="distance_km"
+             value="{{ '%.2f'|format(w.distance_m / 1000) if w.distance_m else '' }}">
+    </label>
+    <label>Dislivello (m)
+      <input type="number" step="1" name="ascent_m"
+             value="{{ '%.0f'|format(w.ascent_m) if w.ascent_m else '' }}">
+    </label>
+    <label>Durata in movimento (min)
+      <input type="number" step="1" name="moving_min"
+             value="{{ (w.moving_s // 60) if w.moving_s else '' }}">
+    </label>
+    <label>FC media (bpm)
+      <input type="number" step="1" name="avg_hr" value="{{ '%.0f'|format(w.avg_hr) if w.avg_hr else '' }}">
+    </label>
+    <label>Potenza media (W)
+      <input type="number" step="1" name="avg_power" value="{{ '%.0f'|format(w.avg_power) if w.avg_power else '' }}">
+    </label>
+    <label>Calorie
+      <input type="number" step="1" name="calories" value="{{ '%.0f'|format(w.calories) if w.calories else '' }}">
+    </label>
+    <div class="edit-actions">
+      <button class="btn" type="submit">Salva modifiche</button>
+      <a class="btn btn-secondary" href="/workout/{{ w.id }}">Annulla</a>
+    </div>
+  </form>
+</section>
+
+<p class="muted">Per togliere un doppione usa <strong>Elimina</strong> nella pagina
+dell'attività o nella lista <a href="/duplicates">Duplicati</a>.</p>
+{% endblock %}

@@ -20,6 +20,11 @@ class WahooToken(SQLModel, table=True):
     expires_at: int  # unix epoch seconds (computed from expires_in at exchange time)
 
 
+class IgnoredImport(SQLModel, table=True):
+    """Google exercise uids the user deleted by hand: never re-import them."""
+    id: int = Field(primary_key=True)  # = Google exercise uid (= imported workout id)
+
+
 class GoogleToken(SQLModel, table=True):
     """Single row (id=1): OAuth tokens for the Google Health API (ex Fitbit)."""
     id: int = Field(default=1, primary_key=True)

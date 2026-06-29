@@ -187,7 +187,10 @@ Per il **deploy sul proprio server** (reverse proxy / Cloudflare Tunnel) vedi
 
 | Metodo | Path | Descrizione |
 |---|---|---|
-| GET | `/` | Dashboard — filtri `period`, `sport`, `sort`, `order` |
+| GET | `/` | Dashboard — finestra mobile `win` (7/14/30/custom) + `end`/`from`/`to`, `sport`, `sort`, `order` |
+| GET/POST | `/workout/{id}/edit` | Modifica manuale dei campi di un'attività |
+| POST | `/workout/{id}/delete` | Elimina un'attività (gli import Google cancellati non rientrano) |
+| GET | `/duplicates` | Coppie di attività ravvicinate (candidate doppioni) da rivedere |
 | GET | `/login` · `/login/wahoo` | Login e redirect all'authorize Wahoo |
 | GET | `/oauth/callback` | Scambio code→token, validazione `state` |
 | POST | `/webhook/wahoo` | Ricezione `workout_summary` (validata, async) |

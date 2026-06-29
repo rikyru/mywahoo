@@ -8,11 +8,21 @@
 <p><a href="/">&larr; Dashboard</a></p>
 <div class="page-head">
   <h1>{{ w.name }}</h1>
-  <span class="tag">{{ w.sport }}{% if w.sub_sport %} · {{ w.sub_sport }}{% endif %}</span>
+  <div class="sync-buttons">
+    <a class="btn btn-secondary" href="/workout/{{ w.id }}/edit">Modifica</a>
+    <form method="post" action="/workout/{{ w.id }}/delete"
+          onsubmit="return confirm('Eliminare «{{ w.name }}»? L\'operazione non è reversibile.')">
+      <button class="btn btn-secondary" type="submit">Elimina</button>
+    </form>
+  </div>
 </div>
-<p class="muted">{{ w.start_date.strftime("%d/%m/%Y %H:%M") }}
-  {% if not w.has_fit and streams_json == 'null' %} · <em>solo summary (FIT non disponibile)</em>{% elif not w.has_fit %} · <em>dati da Google Health</em>{% endif %}</p>
+<p>
+  <span class="tag">{{ w.sport }}{% if w.sub_sport %} · {{ w.sub_sport }}{% endif %}</span>
+  <span class="muted">{{ w.start_date.strftime("%d/%m/%Y %H:%M") }}
+  {% if not w.has_fit and streams_json == 'null' %} · <em>solo summary (FIT non disponibile)</em>{% elif not w.has_fit %} · <em>dati da Google Health</em>{% endif %}</span>
+</p>
 
+{% if message %}<div class="alert ok">{{ message }}</div>{% endif %}
 {% if error %}<div class="alert error">{{ error }}</div>{% endif %}
 
 <section class="kpi-row">
