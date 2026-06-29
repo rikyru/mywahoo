@@ -16,7 +16,11 @@ logger = logging.getLogger(__name__)
 API_URL = "https://api.anthropic.com/v1/messages"
 OPENAI_API_URL = "https://api.openai.com/v1/chat/completions"
 ANTHROPIC_VERSION = "2023-06-01"
-MAX_TOKENS = 2000
+# Generous cap: reasoning models (gpt-5*/o-series) spend part of this budget on
+# hidden reasoning, so a low cap can leave zero room for the visible answer.
+MAX_TOKENS = 4000
+# Prefixes of OpenAI reasoning models that accept the reasoning_effort param
+OPENAI_REASONING_PREFIXES = ("gpt-5", "o1", "o3", "o4")
 TIMEOUT = httpx.Timeout(120.0, connect=10.0)
 MAX_RETRIES = 2  # on 429 / 5xx / 529
 
@@ -85,6 +89,9 @@ def _build_request(system: str, user_content: str) -> tuple[str, dict, dict, str
             "messages": [{"role": "system", "content": system},
                          {"role": "user", "content": user_content}],
         }
+        # Reasoning models: keep reasoning light so the budget goes to the answer
+        if settings.openai_model.startswith(OPENAI_REASONING_PREFIXES):
+            payload["reasoning_effort"] = "low"
         headers = {
             "authorization": f"Bearer {settings.openai_api_key}",
             "content-type": "application/json",
