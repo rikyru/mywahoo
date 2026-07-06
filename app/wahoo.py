@@ -363,8 +363,11 @@ async def ingest_workout(w: dict, summary: dict | None = None) -> None:
 async def sync_workouts(full: bool = False) -> int:
     """Manual fallback sync: list workouts (paginated) and ingest missing ones.
 
-    Incremental: stop paging once a full page of already-known workouts with
-    FIT is seen. Full: walk everything and re-ingest rows without FIT.
+    Incremental: skip every workout already in the DB (no re-fetch of their
+    summary — that hammered the API and rate-limited on the no-FIT third-party
+    workouts). Stop paging once a full page is all already-known. Full: re-ingest
+    rows without FIT to retry a FIT that may have appeared, but never re-download
+    parsed FITs.
     """
     count = 0
     page = 1
@@ -372,21 +375,19 @@ async def sync_workouts(full: bool = False) -> int:
         batch = await list_workouts(page=page, per_page=50)
         if not batch:
             break
-        known_with_fit = 0
+        known = 0
         for w in batch:
             with Session(engine) as session:
                 existing = session.get(Workout, w["id"])
-            if existing and existing.has_fit:
-                known_with_fit += 1
-                if not full:
-                    continue
-                continue  # full resync also skips re-download of parsed FITs
+            if existing:
+                known += 1
+                if not full or existing.has_fit:
+                    continue  # incremental: skip; full: keep parsed FITs as-is
             await ingest_workout(w)
             count += 1
-        logger.info("Sync page %s: %s ingested (%s already complete)",
-                    page, count, known_with_fit)
-        if not full and known_with_fit == len(batch):
-            break  # everything on this page already ingested -> stop early
+        logger.info("Sync page %s: %s ingested (%s già presenti)", page, count, known)
+        if not full and known == len(batch):
+            break  # whole page already known -> stop early
         if len(batch) < 50:
             break
         page += 1
