@@ -327,10 +327,9 @@ async def _attach_hr_stream(workout_id: int, start_utc, end_utc) -> bool:
                                   data=pack_streams(streams), n_records=len(streams["t"])))
         w = session.get(Workout, workout_id)
         if w and hrs:
-            if not w.max_hr:
-                w.max_hr = float(max(hrs))
-            if not w.avg_hr:
-                w.avg_hr = round(sum(hrs) / len(hrs), 1)
+            # the intraday stream is the authoritative HR source for the window
+            w.avg_hr = round(sum(hrs) / len(hrs), 1)
+            w.max_hr = float(max(hrs))
             session.add(w)
         session.commit()
     logger.info("Attached HR stream to workout %s (%s samples)", workout_id, len(streams["t"]))
@@ -430,8 +429,12 @@ async def enrich_workouts(max_pages: int = 8) -> int:
                 session.commit()
                 logger.info("Enriched workout %s (%s) from Google Health %s",
                             w.id, w.sport, match["type"])
-        # HR-over-time chart from intraday samples (idempotent)
-        attached = await _attach_hr_stream(w.id, match["start"], match["end"])
+        # HR-over-time chart from intraday samples, over the workout's own window
+        # (not the Google exercise's, which may be a fragment). Idempotent.
+        dur = max(w.duration_s or 0, w.moving_s or 0) or 3600
+        attached = await _attach_hr_stream(
+            w.id, w.start_date - timedelta(minutes=10),
+            w.start_date + timedelta(seconds=dur) + timedelta(minutes=10))
         if changed or attached:
             changed_total += 1
 
