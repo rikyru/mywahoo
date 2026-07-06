@@ -288,8 +288,9 @@ async def health_insight(regenerate: str = Form(default="")):
     if cached and not regenerate:
         return RedirectResponse("/health", status_code=303)
     with Session(engine) as session:
+        since = datetime.utcnow() - timedelta(days=45)
         workouts = [w.model_dump(exclude={"raw_summary", "fit_path", "updated_at"})
-                    for w in query_workouts(session, "month", None)]
+                    for w in query_range(session, since, datetime.utcnow(), None)]
     try:
         data = await google_health.fetch_health_overview()
         content = await anthropic_client.summarize_health(data, workouts)

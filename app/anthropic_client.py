@@ -77,7 +77,8 @@ del sonno; segnala se il corpo recupera bene dal carico o se accumula fatica
 (HRV depressa o FC a riposo elevata dopo i picchi di allenamento), e se i giorni
 di riposo/scarico portano un rimbalzo del recupero. NON dare diagnosi mediche:
 se qualcosa appare anomalo, suggerisci cautela o un controllo medico. Se un dato
-manca, dillo invece di inventare. Sii quantitativo."""
+manca, dillo invece di inventare. Sii quantitativo. Esprimi SEMPRE le durate
+del sonno in ore e minuti (es. "6h30"), mai in minuti."""
 
 
 def _build_request(system: str, user_content: str) -> tuple[str, dict, dict, str]:
@@ -227,13 +228,17 @@ async def summarize_health(overview: dict, workouts: list[dict] | None = None) -
     body = {m["label"]: {"unita": m["unit"], "ultimo": m["latest"]}
             for m in overview.get("body", {}).values()}
 
+    def hm(mins: float) -> str:
+        m = int(round(mins))
+        return f"{m // 60}h{m % 60:02d}"
+
     nights = overview.get("sleep") or []
     sleep = None
     if nights:
         asleep = [n["asleep_min"] for n in nights]
         sleep = {"notti_disponibili": len(nights),
-                 "media_minuti_dormiti": round(sum(asleep) / len(asleep)),
-                 "per_notte": [{"data": n["date"], "min_dormiti": n["asleep_min"],
+                 "media_durata": hm(sum(asleep) / len(asleep)),
+                 "per_notte": [{"data": n["date"], "durata": hm(n["asleep_min"]),
                                 "efficienza": n.get("efficiency")} for n in nights]}
 
     payload = {"indice_di_forma": overview.get("score"),

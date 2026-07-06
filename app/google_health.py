@@ -598,52 +598,67 @@ _SLEEP_STAGE_LABELS = {
 }
 
 
-async def _sleep_nights(days: int) -> list[dict]:
-    """Per-night sleep: total/asleep minutes, efficiency, minutes per stage."""
+async def _sleep_nights(days: int, max_pages: int = 4) -> list[dict]:
+    """Per-night sleep: total/asleep minutes, efficiency, minutes per stage.
+
+    Paginates because the API caps sleep at 25 points/page. Short episodes
+    (<90 min, i.e. naps) are skipped so the recovery analysis sees real nights.
+    """
     from datetime import datetime as dt
 
-    data = await api_get("/users/me/dataTypes/sleep/dataPoints", {"pageSize": days})
-    nights = []
-    for p in data.get("dataPoints", []):
-        s = p.get("sleep") or {}
-        interval = s.get("interval") or {}
-        start, end = interval.get("startTime"), interval.get("endTime")
-        if not start or not end:
-            continue
-        try:
-            a = dt.fromisoformat(start.replace("Z", "+00:00"))
-            b = dt.fromisoformat(end.replace("Z", "+00:00"))
-        except (TypeError, ValueError):
-            continue
-        total_min = round((b - a).total_seconds() / 60)
-
-        stages_min: dict[str, float] = {}
-        for st in s.get("stages") or []:
-            try:
-                sa = dt.fromisoformat(st["startTime"].replace("Z", "+00:00"))
-                sb = dt.fromisoformat(st["endTime"].replace("Z", "+00:00"))
-            except (KeyError, TypeError, ValueError):
+    nights: list[dict] = []
+    page_token = None
+    for _ in range(max_pages):
+        params: dict = {"pageSize": 25}
+        if page_token:
+            params["pageToken"] = page_token
+        data = await api_get("/users/me/dataTypes/sleep/dataPoints", params)
+        points = data.get("dataPoints", [])
+        for p in points:
+            s = p.get("sleep") or {}
+            interval = s.get("interval") or {}
+            start, end = interval.get("startTime"), interval.get("endTime")
+            if not start or not end:
                 continue
-            stages_min[st.get("type", "")] = stages_min.get(st.get("type", ""), 0) \
-                + (sb - sa).total_seconds() / 60
+            try:
+                a = dt.fromisoformat(start.replace("Z", "+00:00"))
+                b = dt.fromisoformat(end.replace("Z", "+00:00"))
+            except (TypeError, ValueError):
+                continue
+            total_min = round((b - a).total_seconds() / 60)
 
-        summary = s.get("summary") or {}
-        asleep = summary.get("minutesAsleep")
-        if asleep is None:
-            asleep = sum(stages_min.get(k, 0) for k in ("LIGHT", "REM", "DEEP", "ASLEEP"))
-        asleep = round(float(asleep))
-        nights.append({
-            "date": a.strftime("%Y-%m-%d"),
-            "bedtime": a.strftime("%H:%M"),
-            "wake": b.strftime("%H:%M"),
-            "total_min": total_min,
-            "asleep_min": asleep,
-            "efficiency": round(asleep / total_min * 100) if total_min else None,
-            "stages": {_SLEEP_STAGE_LABELS.get(k, k.lower()): round(v)
-                       for k, v in stages_min.items() if v},
-        })
+            stages_min: dict[str, float] = {}
+            for st in s.get("stages") or []:
+                try:
+                    sa = dt.fromisoformat(st["startTime"].replace("Z", "+00:00"))
+                    sb = dt.fromisoformat(st["endTime"].replace("Z", "+00:00"))
+                except (KeyError, TypeError, ValueError):
+                    continue
+                stages_min[st.get("type", "")] = stages_min.get(st.get("type", ""), 0) \
+                    + (sb - sa).total_seconds() / 60
+
+            summary = s.get("summary") or {}
+            asleep = summary.get("minutesAsleep")
+            if asleep is None:
+                asleep = sum(stages_min.get(k, 0) for k in ("LIGHT", "REM", "DEEP", "ASLEEP"))
+            asleep = round(float(asleep))
+            if total_min < 90:
+                continue  # nap / fragment, not a night
+            nights.append({
+                "date": a.strftime("%Y-%m-%d"),
+                "bedtime": a.strftime("%H:%M"),
+                "wake": b.strftime("%H:%M"),
+                "total_min": total_min,
+                "asleep_min": asleep,
+                "efficiency": round(asleep / total_min * 100) if total_min else None,
+                "stages": {_SLEEP_STAGE_LABELS.get(k, k.lower()): round(v)
+                           for k, v in stages_min.items() if v},
+            })
+        page_token = data.get("nextPageToken")
+        if not page_token or not points or len(nights) >= days:
+            break
     nights.sort(key=lambda n: n["date"])
-    return nights
+    return nights[-days:]
 
 
 # Direction that counts as "better" per metric (None = neutral, no good/bad colour)
@@ -709,7 +724,7 @@ def _wellness(metrics: dict, sleep: list) -> dict | None:
     return {"score": score, "label": label, "n_inputs": len(scored)}
 
 
-async def fetch_health_overview(days: int = 30) -> dict:
+async def fetch_health_overview(days: int = 45) -> dict:
     """Aggregate the daily health metrics, body composition and sleep into one
     structure for the Salute page. Missing scopes/data are reported, not fatal."""
     out: dict = {"metrics": {}, "body": {}, "sleep": [], "missing": [], "score": None}
