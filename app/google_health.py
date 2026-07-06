@@ -177,9 +177,13 @@ SPORT_LABELS = {
     "OUTDOOR_BIKE": "Cycling",
     "SPINNING": "Indoor Cycling",
 }
-MATCH_TOLERANCE_S = 15 * 60
-# Fitbit auto-detects every short stroll as WALKING: only import deliberate ones
-MIN_WALK_IMPORT_S = 30 * 60
+# Strava->Wahoo and Google/Fitbit record the same activity with start times that
+# can drift ~20 min, so match generously (the sport-family guard prevents merging
+# genuinely different sports that happen to be close in time).
+MATCH_TOLERANCE_S = 25 * 60
+# Walks/hikes from Google are Fitbit auto-detection (often fragmented duplicates
+# of a Strava-recorded activity): use them only to enrich, never import as rows.
+NO_IMPORT_TYPES = ("WALKING", "HIKING")
 
 
 def _sport_family(label: str) -> str | None:
@@ -436,8 +440,8 @@ async def enrich_workouts(max_pages: int = 8) -> int:
     for e in exercises:
         if e["uid"] is None or e["uid"] in ignored or e["start"] > grace_cutoff:
             continue
-        if e["type"] == "WALKING" and (e["moving_s"] or 0) < MIN_WALK_IMPORT_S:
-            continue
+        if e["type"] in NO_IMPORT_TYPES:
+            continue  # camminate/escursioni: solo arricchimento, mai import
         sport = SPORT_LABELS.get(e["type"], e["type"].replace("_", " ").title() or "Altro")
         # Same start time AND same sport -> already seen by both sources, skip.
         # Different sport at a close time (e.g. walk then ride) is kept.
