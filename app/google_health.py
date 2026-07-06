@@ -156,38 +156,17 @@ async def list_exercises(page_size: int = 25, page_token: str | None = None,
 
 # --------------------------------------------------------------- enrichment
 
-# Google exerciseType -> substrings accepted in the Wahoo sport label.
-# Unknown types never match: better no enrichment than crossing two sports.
-SPORT_HINTS = {
-    "SWIMMING": ("swim", "nuoto"),
-    "WALKING": ("walk", "hik"),
-    "HIKING": ("hik", "walk"),
-    "RUNNING": ("run",),
-    "BIKING": ("bik", "cycl"),
-    "OUTDOOR_BIKE": ("bik", "cycl"),
-    "SPINNING": ("bik", "cycl"),
-}
-# Sport label for workouts imported from Google (no Wahoo counterpart)
-SPORT_LABELS = {
-    "SWIMMING": "Swimming",
-    "WALKING": "Walking",
-    "HIKING": "Hiking",
-    "RUNNING": "Running",
-    "BIKING": "Cycling",
-    "OUTDOOR_BIKE": "Cycling",
-    "SPINNING": "Indoor Cycling",
-}
 # Strava->Wahoo and Google/Fitbit record the same activity with start times that
 # can drift ~20 min, so match generously (the sport-family guard prevents merging
 # genuinely different sports that happen to be close in time).
 MATCH_TOLERANCE_S = 25 * 60
-# Walks/hikes from Google are Fitbit auto-detection (often fragmented duplicates
-# of a Strava-recorded activity): use them only to enrich, never import as rows.
-NO_IMPORT_TYPES = ("WALKING", "HIKING")
+# Import label per sport family (workouts Google has but Wahoo never delivered)
+FAMILY_LABEL = {"swim": "Swimming", "bike": "Cycling", "run": "Running", "walk": "Walking"}
 
 
 def _sport_family(label: str) -> str | None:
-    """Canonical sport family from any Wahoo/Google label, or None if unknown."""
+    """Canonical sport family from any Wahoo/Google label or exercise type, or
+    None if unknown. Works on variants too (SWIMMING_POOL, MOUNTAIN_BIKING…)."""
     s = (label or "").lower()
     if any(k in s for k in ("swim", "nuot")):
         return "swim"
@@ -207,6 +186,18 @@ def _same_sport(a: str, b: str) -> bool:
     if fa is None or fb is None:
         return True
     return fa == fb
+
+
+def _sport_label(ex_type: str) -> str:
+    """Human label for a Google exercise type, via its family."""
+    return FAMILY_LABEL.get(_sport_family(ex_type)) or ex_type.replace("_", " ").title() or "Altro"
+
+
+def _matches_sport(wahoo_label: str, ex_type: str) -> bool:
+    """True only if both map to the SAME known sport family (positive match for
+    enrichment — unlike _same_sport which is permissive on unknowns)."""
+    fe = _sport_family(ex_type)
+    return fe is not None and _sport_family(wahoo_label) == fe
 
 
 def _overlap_s(w_start, w_dur_s: int, e_start, e_end) -> float:
@@ -409,7 +400,7 @@ async def enrich_workouts(max_pages: int = 8) -> int:
                 best, best_ov = e, ov
         if best is None or best_ov < 60:
             continue
-        new_sport = SPORT_LABELS.get(best["type"], best["type"].replace("_", " ").title())
+        new_sport = _sport_label(best["type"])
         with Session(engine) as session:
             wk = session.get(Workout, w.id)
             wk.sport = new_sport
@@ -463,8 +454,7 @@ async def enrich_workouts(max_pages: int = 8) -> int:
     for w in candidates:
         match = next(
             (e for e in exercises
-             if any(h in w.sport.lower() for h in SPORT_HINTS.get(e["type"], ()))
-             and near(e["start"], w.start_date)),
+             if _matches_sport(w.sport, e["type"]) and near(e["start"], w.start_date)),
             None)
         if match is None:
             continue
@@ -503,9 +493,9 @@ async def enrich_workouts(max_pages: int = 8) -> int:
     for e in exercises:
         if e["uid"] is None or e["uid"] in ignored or e["start"] > grace_cutoff:
             continue
-        if e["type"] in NO_IMPORT_TYPES:
+        if _sport_family(e["type"]) == "walk":
             continue  # camminate/escursioni: solo arricchimento, mai import
-        sport = SPORT_LABELS.get(e["type"], e["type"].replace("_", " ").title() or "Altro")
+        sport = _sport_label(e["type"])
         # Same start time AND same sport -> already seen by both sources, skip.
         # Different sport at a close time (e.g. walk then ride) is kept.
         if any(near(e["start"], w.start_date) and _same_sport(sport, w.sport)
