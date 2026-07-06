@@ -207,6 +207,18 @@ def _same_sport(a: str, b: str) -> bool:
     if fa is None or fb is None:
         return True
     return fa == fb
+
+
+def _overlap_s(w_start, w_dur_s: int, e_start, e_end) -> float:
+    """Seconds of overlap between a workout [start, start+dur] and an exercise
+    interval [e_start, e_end]. A zero-duration workout overlaps if its start
+    falls inside the exercise."""
+    from datetime import timedelta
+    w_end = w_start + timedelta(seconds=w_dur_s or 0)
+    if not w_dur_s:
+        return 60.0 if e_start <= w_start <= e_end else 0.0
+    lo, hi = max(w_start, e_start), min(w_end, e_end)
+    return max(0.0, (hi - lo).total_seconds())
 # Don't import a Google exercise younger than this: the Strava->Wahoo sync can
 # lag hours, and the Wahoo version (when it comes) is the preferred base row.
 IMPORT_GRACE_S = 12 * 3600
@@ -380,6 +392,44 @@ async def enrich_workouts(max_pages: int = 8) -> int:
         return abs((a - b).total_seconds()) <= MATCH_TOLERANCE_S
 
     changed_total = 0
+
+    # 0. Reconcile data-less Wahoo stubs: Wahoo can push a third-party activity
+    # with the WRONG sport and no data (e.g. a swim from Strava arrives as an
+    # empty "Biking"). Its label is unreliable, so trust Google by time overlap:
+    # adopt the overlapping exercise's sport + data. The duplicate Google import
+    # (if any) then collapses in the dedupe phase below.
+    for w in candidates:
+        if w.has_fit or w.distance_m or w.avg_hr:
+            continue
+        w_dur = max(w.duration_s or 0, w.moving_s or 0)
+        best, best_ov = None, 0.0
+        for e in exercises:
+            ov = _overlap_s(w.start_date, w_dur, e["start"], e["end"])
+            if ov > best_ov:
+                best, best_ov = e, ov
+        if best is None or best_ov < 60:
+            continue
+        new_sport = SPORT_LABELS.get(best["type"], best["type"].replace("_", " ").title())
+        with Session(engine) as session:
+            wk = session.get(Workout, w.id)
+            wk.sport = new_sport
+            for field in ("distance_m", "avg_hr", "calories", "ascent_m", "avg_speed_ms"):
+                if best[field]:
+                    setattr(wk, field, best[field])
+            if best["moving_s"]:
+                wk.moving_s = int(best["moving_s"])
+            if best["duration_s"]:
+                wk.duration_s = int(best["duration_s"])
+            wk.updated_at = dt.utcnow()
+            session.add(wk)
+            session.commit()
+        w.sport = new_sport  # keep the in-memory copy in sync for the phases below
+        dur = max(w.duration_s or 0, w.moving_s or 0) or 3600
+        await _attach_hr_stream(w.id, w.start_date - timedelta(minutes=10),
+                                w.start_date + timedelta(seconds=dur) + timedelta(minutes=10))
+        changed_total += 1
+        logger.info("Reconciled empty stub %s -> %s from Google (overlap %ss)",
+                    w.id, new_sport, int(best_ov))
 
     # 1. Dedupe: imported row + a real Wahoo row for the same activity
     imported = [w for w in all_workouts if _is_imported(w)]
