@@ -2,13 +2,15 @@
 import json
 import logging
 import secrets
+import os
 from collections import defaultdict
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlencode
 
 import markdown as md
-from fastapi import BackgroundTasks, Depends, FastAPI, Form, HTTPException, Request
+from fastapi import (BackgroundTasks, Depends, FastAPI, File, Form, HTTPException,
+                     Request, UploadFile)
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -549,6 +551,59 @@ async def sync(full: str = Form(default="")):
             logger.warning("Google Health enrichment skipped: %s", e)
             msg += " (arricchimento Google saltato: ricollega da /login/google)"
     return RedirectResponse(f"/?{urlencode({'msg': msg})}", status_code=303)
+
+
+@app.post("/upload/fit", dependencies=[Depends(require_auth)])
+async def upload_fit(file: UploadFile = File(...)):
+    """Ingest a manually exported FIT (e.g. a full swim from swim.com). Matched
+    by start time to an existing activity (which it upgrades to has_fit and full
+    data), or added as a new one. The FIT is the authoritative source."""
+    data = await file.read()
+    if not data:
+        return RedirectResponse(f"/?{urlencode({'error': 'File vuoto'})}", status_code=303)
+    tmp = os.path.join(settings.fit_dir, f"_upload_{secrets.token_hex(8)}.fit")
+    with open(tmp, "wb") as fh:
+        fh.write(data)
+    try:
+        session_data, _ = fitmod.parse_fit(tmp)
+    except fitmod.FitParseError:
+        os.remove(tmp)
+        return RedirectResponse(f"/?{urlencode({'error': 'FIT non valido o illeggibile'})}",
+                                status_code=303)
+
+    start = session_data.get("start_time")
+    if isinstance(start, datetime):
+        start = start.astimezone(timezone.utc).replace(tzinfo=None) if start.tzinfo else start
+    else:
+        os.remove(tmp)
+        return RedirectResponse(f"/?{urlencode({'error': 'FIT senza orario di inizio'})}",
+                                status_code=303)
+
+    lo, hi = start - timedelta(minutes=25), start + timedelta(minutes=25)
+    with Session(engine) as session:
+        near = list(session.exec(select(Workout).where(
+            Workout.start_date >= lo, Workout.start_date <= hi)))
+        # prefer a data-less stub over an existing FIT-backed activity
+        near.sort(key=lambda w: (w.has_fit, abs((w.start_date - start).total_seconds())))
+        match = near[0] if near else None
+        wid = match.id if match else int(start.timestamp())
+        if match is None:
+            session.add(Workout(id=wid, name=os.path.splitext(file.filename or "")[0] or "Attività",
+                                sport="", start_date=start))
+            session.commit()
+
+    fit_path = os.path.join(settings.fit_dir, f"{wid}.fit")
+    os.replace(tmp, fit_path)
+    try:
+        fitmod.parse_and_store(wid, fit_path)  # sets has_fit + FIT-authoritative fields
+    except fitmod.FitParseError as e:
+        return RedirectResponse(f"/?{urlencode({'error': f'FIT non elaborabile: {e}'})}",
+                                status_code=303)
+    logger.info("Ingested uploaded FIT -> workout %s (%s)", wid,
+                "match" if match else "new")
+    return RedirectResponse(
+        f"/workout/{wid}?{urlencode({'msg': 'FIT caricato: dati completi importati'})}",
+        status_code=303)
 
 
 @app.post("/workout/{workout_id}/analyze", dependencies=[Depends(require_auth)])

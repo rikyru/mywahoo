@@ -12,6 +12,13 @@
       <input type="hidden" name="full" value="1">
       <button class="btn btn-secondary" type="submit">Full resync</button>
     </form>
+    <form method="post" action="/upload/fit" enctype="multipart/form-data">
+      <label class="btn btn-secondary" title="Carica un file FIT (es. nuotata da swim.com)">
+        Carica FIT
+        <input type="file" name="file" accept=".fit" hidden
+               onchange="this.closest('form').submit()">
+      </label>
+    </form>
   </div>
 </div>
 
