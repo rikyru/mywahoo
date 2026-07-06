@@ -4,8 +4,37 @@
 
 <div class="page-head">
   <h1>Salute</h1>
-  <span class="muted">dati Google Health · ultimi 45 giorni</span>
+  <span class="muted">dati Google Health</span>
 </div>
+
+{% if window %}
+<div class="window-bar">
+  <div class="window-sizes">
+    {% for w, label in windows.items() %}
+    <a class="chip {% if window.win == w %}chip-on{% endif %}" href="/health?win={{ w }}">{{ label }}</a>
+    {% endfor %}
+    <a class="chip {% if window.win == 'custom' %}chip-on{% endif %}"
+       href="/health?win=custom&from={{ window.from }}&to={{ window.to }}">Personalizzato</a>
+  </div>
+  {% if window.win != 'custom' %}
+  <div class="window-nav">
+    <a class="chip" href="/health?win={{ window.win }}&end={{ window.prev_end }}" title="Periodo precedente">←</a>
+    <span class="window-label">{{ window.label }}</span>
+    {% if window.next_end %}
+    <a class="chip" href="/health?win={{ window.win }}&end={{ window.next_end }}" title="Periodo successivo">→</a>
+    {% else %}<span class="chip chip-off">→</span>{% endif %}
+    {% if not window.is_current %}<a class="chip" href="/health?win={{ window.win }}">Oggi</a>{% endif %}
+  </div>
+  {% else %}
+  <form method="get" action="/health" class="window-custom">
+    <input type="hidden" name="win" value="custom">
+    <input type="date" name="from" value="{{ window.from }}">
+    <input type="date" name="to" value="{{ window.to }}">
+    <button class="btn btn-secondary" type="submit">Applica</button>
+  </form>
+  {% endif %}
+</div>
+{% endif %}
 
 {% if not connected %}
   <div class="alert error">
@@ -84,6 +113,13 @@
     <div class="card-head">
       <h3>Commento AI</h3>
       <form method="post" action="/health/insight">
+        <input type="hidden" name="win" value="{{ window.win }}">
+        {% if window.win == 'custom' %}
+        <input type="hidden" name="from" value="{{ window.from }}">
+        <input type="hidden" name="to" value="{{ window.to }}">
+        {% elif not window.is_current %}
+        <input type="hidden" name="end" value="{{ window.end_d }}">
+        {% endif %}
         {% if insight_html %}
         <input type="hidden" name="regenerate" value="1">
         <button class="btn btn-secondary" type="submit" onclick="busy(this)">Rigenera</button>

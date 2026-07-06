@@ -55,7 +55,7 @@ Sii concreto e quantitativo dove possibile."""
 
 HEALTH_SYSTEM_PROMPT = """\
 Sei un coach di salute, recupero e sonno per uno sportivo amatoriale. Ti vengono
-forniti gli indicatori degli ultimi ~30 giorni (FC a riposo, HRV, SpO2, frequenza
+forniti gli indicatori del periodo selezionato (FC a riposo, HRV, SpO2, frequenza
 respiratoria, temperatura cutanea notturna, peso, composizione corporea, sonno)
 con valori più recenti, variazioni e min/media/max, un "indice di forma" 0-100
 calcolato sulla baseline personale, E l'elenco delle attività fisiche del periodo

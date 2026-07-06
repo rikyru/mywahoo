@@ -255,27 +255,41 @@ async def google_oauth_callback(request: Request, code: str | None = None,
     return RedirectResponse("/?google=connected", status_code=303)
 
 
-def _health_key() -> str:
-    return f"health:{datetime.utcnow().date().isoformat()}"
+def _health_key(window: dict) -> str:
+    return f"health:{window['start'].date().isoformat()}:{window['end'].date().isoformat()}"
+
+
+def _health_qs(window: dict, sport: str = "") -> str:
+    """Query string that reproduces the current health window."""
+    if window["win"] == "custom":
+        return f"win=custom&from={window['from']}&to={window['to']}"
+    if not window["is_current"]:
+        return f"win={window['win']}&end={window['end_d']}"
+    return f"win={window['win']}"
 
 
 @app.get("/health", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
-async def health_page(request: Request):
+async def health_page(request: Request, win: str = "30", end: str = ""):
+    window = resolve_window(win, end, request.query_params.get("from", ""),
+                            request.query_params.get("to", ""))
     if not google_health.is_authenticated():
         return templates.TemplateResponse(request, "health.html",
-                                          {"connected": False, "data": None})
+                                          {"connected": False, "data": None, "window": window})
     try:
-        data = await google_health.fetch_health_overview()
+        data = await google_health.fetch_health_overview(window["start"].date(),
+                                                         window["end"].date())
     except google_health.GoogleNotAuthenticatedError:
         return templates.TemplateResponse(request, "health.html",
-                                          {"connected": False, "expired": True, "data": None})
+                                          {"connected": False, "expired": True,
+                                           "data": None, "window": window})
     except google_health.GoogleHealthError as e:
         return templates.TemplateResponse(request, "health.html",
-                                          {"connected": True, "data": None, "error": str(e)})
+                                          {"connected": True, "data": None,
+                                           "error": str(e), "window": window})
     with Session(engine) as session:
-        insight = session.get(PeriodSummary, _health_key())
+        insight = session.get(PeriodSummary, _health_key(window))
     return templates.TemplateResponse(request, "health.html", {
-        "connected": True, "data": data,
+        "connected": True, "data": data, "window": window, "windows": WINDOWS,
         "insight_html": md.markdown(insight.content, extensions=["tables"]) if insight else None,
         "insight_date": insight.created_at if insight else None,
         "error": request.query_params.get("error"),
@@ -283,23 +297,29 @@ async def health_page(request: Request):
 
 
 @app.post("/health/insight", dependencies=[Depends(require_auth)])
-async def health_insight(regenerate: str = Form(default="")):
-    key = _health_key()
+async def health_insight(request: Request, regenerate: str = Form(default=""),
+                         win: str = Form("30"), end: str = Form(""),
+                         from_: str = Form("", alias="from"), to: str = Form("")):
+    window = resolve_window(win, end, from_, to)
+    key = _health_key(window)
+    redirect = f"/health?{_health_qs(window)}"
     with Session(engine) as session:
         cached = session.get(PeriodSummary, key)
     if cached and not regenerate:
-        return RedirectResponse("/health", status_code=303)
+        return RedirectResponse(redirect, status_code=303)
     with Session(engine) as session:
-        since = datetime.utcnow() - timedelta(days=45)
         workouts = [w.model_dump(exclude={"raw_summary", "fit_path", "updated_at"})
-                    for w in query_range(session, since, datetime.utcnow(), None)]
+                    for w in query_range(session, window["start"], window["end"], None)]
     try:
-        data = await google_health.fetch_health_overview()
+        data = await google_health.fetch_health_overview(window["start"].date(),
+                                                         window["end"].date())
         content = await anthropic_client.summarize_health(data, workouts)
     except google_health.GoogleHealthError as e:
-        return RedirectResponse(f"/health?{urlencode({'error': str(e)})}", status_code=303)
+        return RedirectResponse(f"/health?{_health_qs(window)}&{urlencode({'error': str(e)})}",
+                                status_code=303)
     except anthropic_client.AnthropicError as e:
-        return RedirectResponse(f"/health?{urlencode({'error': str(e)})}", status_code=303)
+        return RedirectResponse(f"/health?{_health_qs(window)}&{urlencode({'error': str(e)})}",
+                                status_code=303)
     with Session(engine) as session:
         existing = session.get(PeriodSummary, key)
         if existing:
@@ -310,7 +330,7 @@ async def health_insight(regenerate: str = Form(default="")):
         else:
             session.add(PeriodSummary(key=key, content=content, model=settings.ai_model))
         session.commit()
-    return RedirectResponse("/health", status_code=303)
+    return RedirectResponse(redirect, status_code=303)
 
 
 @app.get("/google/probe", dependencies=[Depends(require_auth)])

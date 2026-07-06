@@ -724,17 +724,30 @@ def _wellness(metrics: dict, sleep: list) -> dict | None:
     return {"score": score, "label": label, "n_inputs": len(scored)}
 
 
-async def fetch_health_overview(days: int = 45) -> dict:
-    """Aggregate the daily health metrics, body composition and sleep into one
-    structure for the Salute page. Missing scopes/data are reported, not fatal."""
+async def fetch_health_overview(start_date=None, end_date=None) -> dict:
+    """Aggregate the daily health metrics, body composition and sleep for the
+    window [start_date, end_date] (dates; default last 30 days). Missing
+    scopes/data are reported, not fatal."""
+    from datetime import date, timedelta
+
+    end_date = end_date or date.today()
+    start_date = start_date or (end_date - timedelta(days=29))
+    start_iso, end_iso = start_date.isoformat(), end_date.isoformat()
+    # how far back to fetch (newest-first), capped
+    span = min((date.today() - start_date).days + 2, 200)
+
+    def in_window(d):
+        return start_iso <= d <= end_iso
+
     out: dict = {"metrics": {}, "body": {}, "sleep": [], "missing": [], "score": None}
 
     for key, (dtype, wrapper, vkey, label, unit, dec) in DAILY_METRICS.items():
         try:
-            series = await _daily_series(dtype, wrapper, vkey, dec, days)
+            series = await _daily_series(dtype, wrapper, vkey, dec, span)
         except GoogleScopeMissingError:
             out["missing"].append(label)
             continue
+        series = [p for p in series if in_window(p["date"])]
         if series:
             out["metrics"][key] = {"label": label, "unit": unit,
                                    "latest": series[-1]["value"], "series": series}
@@ -744,16 +757,18 @@ async def fetch_health_overview(days: int = 45) -> dict:
         "body_fat": ("body-fat", "bodyFat", "percentage", 1.0, "%", 1, "Massa grassa"),
     }.items():
         try:
-            series = await _body_series(dtype, wrapper, vkey, scale, dec, days * 6)
+            series = await _body_series(dtype, wrapper, vkey, scale, dec, span * 4)
         except GoogleScopeMissingError:
             out["missing"].append(label)
             continue
+        series = [p for p in series if in_window(p["date"])]
         if series:
             out["body"][key] = {"label": label, "unit": unit,
                                 "latest": series[-1]["value"], "series": series}
 
     try:
-        out["sleep"] = await _sleep_nights(days)
+        nights = await _sleep_nights(span)
+        out["sleep"] = [n for n in nights if in_window(n["date"])]
     except GoogleScopeMissingError:
         out["missing"].append("Sonno")
 
