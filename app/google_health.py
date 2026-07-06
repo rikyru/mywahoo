@@ -439,15 +439,25 @@ async def enrich_workouts(max_pages: int = 8) -> int:
                      and near(w.start_date, imp.start_date)
                      and _same_sport(imp.sport, w.sport)), None)
         if twin:
+            merge_fields = ("distance_m", "ascent_m", "avg_hr", "max_hr", "avg_power",
+                            "calories", "avg_speed_ms")
             with Session(engine) as session:
                 row = session.get(Workout, imp.id)
+                keep = session.get(Workout, twin.id)
+                if keep and row:
+                    # keep the Wahoo row but don't lose data the import had
+                    for f in merge_fields:
+                        if not getattr(keep, f) and getattr(row, f):
+                            setattr(keep, f, getattr(row, f))
+                            setattr(twin, f, getattr(row, f))  # keep in-memory in sync
+                    keep.updated_at = dt.utcnow()
+                    session.add(keep)
                 if row:
                     session.delete(row)
-                    session.commit()
+                session.commit()
             all_workouts = [w for w in all_workouts if w.id != imp.id]
             candidates = [w for w in candidates if w.id != imp.id]
-            logger.info("Removed Google-imported workout %s: Wahoo %s arrived for it",
-                        imp.id, twin.id)
+            logger.info("Merged+removed Google import %s into Wahoo %s", imp.id, twin.id)
 
     # 2. Field-by-field fill of data-less Wahoo workouts
     for w in candidates:
