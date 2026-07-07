@@ -86,6 +86,13 @@ def fmt_speed(w: Workout) -> str:
 templates.env.filters["duration"] = fmt_duration
 templates.env.globals["fmt_speed"] = fmt_speed
 templates.env.globals["app_name"] = settings.app_name
+# Cache-busting for the stylesheet (Cloudflare/edge caches /static aggressively):
+# the URL changes whenever style.css changes, so a deploy invalidates the cache.
+try:
+    templates.env.globals["static_ver"] = str(int(
+        (BASE_DIR / "static" / "style.css").stat().st_mtime))
+except OSError:
+    templates.env.globals["static_ver"] = "1"
 
 
 # Movable analysis window for the dashboard
