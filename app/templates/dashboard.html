@@ -95,6 +95,33 @@
 </section>
 
 <section class="card">
+  <div class="card-head">
+    <h3>Analisi allenamenti <small class="muted">· {{ window.label }}</small></h3>
+    <form method="post" action="/analyze/period">
+      <input type="hidden" name="win" value="{{ window.win }}">
+      {% if window.win == 'custom' %}
+      <input type="hidden" name="from" value="{{ window.from }}">
+      <input type="hidden" name="to" value="{{ window.to }}">
+      {% elif not window.is_current %}
+      <input type="hidden" name="end" value="{{ window.end_d }}">
+      {% endif %}
+      {% if analysis_html %}
+      <input type="hidden" name="regenerate" value="1">
+      <button class="btn btn-secondary" type="submit" onclick="busy(this)">Rigenera</button>
+      {% else %}
+      <button class="btn" type="submit" onclick="busy(this)">Analizza con AI</button>
+      {% endif %}
+    </form>
+  </div>
+  {% if analysis_html %}
+  <p class="muted">Generata il {{ analysis_date.strftime("%d/%m/%Y %H:%M") }} (in cache — Rigenera per aggiornarla)</p>
+  <div class="ai-analysis">{{ analysis_html | safe }}</div>
+  {% else %}
+  <p class="muted">Analizza il carico e l'andamento degli allenamenti del periodo selezionato.</p>
+  {% endif %}
+</section>
+
+<section class="card">
   <h3>Attività</h3>
   <table class="activities">
     <thead>
@@ -154,6 +181,9 @@
 Chart.defaults.color = "#8a97a9";
 Chart.defaults.borderColor = "rgba(255,255,255,.06)";
 Chart.defaults.font.family = "Inter, system-ui, sans-serif";
+function busy(btn) {
+  setTimeout(() => { btn.disabled = true; btn.textContent = "Analisi in corso…"; }, 0);
+}
 const data = {{ charts_json | safe }};
 const opts = { plugins: { legend: { display: false } }, responsive: true };
 // Categorical palette for the activity-type doughnut (legible on dark)

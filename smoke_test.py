@@ -104,9 +104,13 @@ with TestClient(app) as client:
     assert '"latlng"' in r.text  # downsampled streams embedded for charts/map
     print("workout detail + streams + cached analysis OK")
 
-    r = client.get("/summary/week")
-    assert r.status_code == 200 and "Genera sintesi" in r.text
-    print("summary page OK")
+    r = client.get("/")
+    assert r.status_code == 200 and "Analisi allenamenti" in r.text and "Analizza con AI" in r.text
+    print("dashboard training analysis OK")
+
+    r = client.get("/settings")
+    assert r.status_code == 200 and "Motore AI" in r.text
+    print("settings page OK")
 
 # --- FIT helpers with synthetic data (no FIT file needed) ---
 from app.fit import ai_stats, compute_normalized_power, downsample

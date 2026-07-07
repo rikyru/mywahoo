@@ -42,9 +42,6 @@ BASE_DIR = Path(__file__).parent
 templates = Jinja2Templates(directory=BASE_DIR / "templates")
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 
-PERIODS = {"week": 7, "month": 30, "year": 365, "all": None}
-
-
 @app.on_event("startup")
 def on_startup() -> None:
     missing = settings.validate()
@@ -61,11 +58,6 @@ def on_startup() -> None:
 def require_auth(request: Request) -> None:
     if not request.session.get("authed") or not wahoo.is_authenticated():
         raise HTTPException(status_code=307, headers={"Location": "/login"})
-
-
-def period_start(period: str) -> datetime | None:
-    days = PERIODS.get(period)
-    return datetime.utcnow() - timedelta(days=days) if days else None
 
 
 def fmt_duration(seconds: int) -> str:
@@ -86,16 +78,6 @@ def fmt_speed(w: Workout) -> str:
 
 templates.env.filters["duration"] = fmt_duration
 templates.env.globals["fmt_speed"] = fmt_speed
-
-
-def query_workouts(session: Session, period: str, sport: str | None) -> list[Workout]:
-    stmt = select(Workout)
-    start = period_start(period)
-    if start:
-        stmt = stmt.where(Workout.start_date >= start)
-    if sport:
-        stmt = stmt.where(Workout.sport == sport)
-    return list(session.exec(stmt.order_by(Workout.start_date.desc())))
 
 
 # Movable analysis window for the dashboard
@@ -256,12 +238,16 @@ async def google_oauth_callback(request: Request, code: str | None = None,
     return RedirectResponse("/?google=connected", status_code=303)
 
 
+def _window_key(prefix: str, window: dict) -> str:
+    return f"{prefix}:{window['start'].date().isoformat()}:{window['end'].date().isoformat()}"
+
+
 def _health_key(window: dict) -> str:
-    return f"health:{window['start'].date().isoformat()}:{window['end'].date().isoformat()}"
+    return _window_key("health", window)
 
 
-def _health_qs(window: dict, sport: str = "") -> str:
-    """Query string that reproduces the current health window."""
+def _window_qs(window: dict) -> str:
+    """Query string that reproduces the current window (win/end/from/to)."""
     if window["win"] == "custom":
         return f"win=custom&from={window['from']}&to={window['to']}"
     if not window["is_current"]:
@@ -303,7 +289,7 @@ async def health_insight(request: Request, regenerate: str = Form(default=""),
                          from_: str = Form("", alias="from"), to: str = Form("")):
     window = resolve_window(win, end, from_, to)
     key = _health_key(window)
-    redirect = f"/health?{_health_qs(window)}"
+    redirect = f"/health?{_window_qs(window)}"
     with Session(engine) as session:
         cached = session.get(PeriodSummary, key)
     if cached and not regenerate:
@@ -316,10 +302,10 @@ async def health_insight(request: Request, regenerate: str = Form(default=""),
                                                          window["end"].date())
         content = await anthropic_client.summarize_health(data, workouts)
     except google_health.GoogleHealthError as e:
-        return RedirectResponse(f"/health?{_health_qs(window)}&{urlencode({'error': str(e)})}",
+        return RedirectResponse(f"/health?{_window_qs(window)}&{urlencode({'error': str(e)})}",
                                 status_code=303)
     except anthropic_client.AnthropicError as e:
-        return RedirectResponse(f"/health?{_health_qs(window)}&{urlencode({'error': str(e)})}",
+        return RedirectResponse(f"/health?{_window_qs(window)}&{urlencode({'error': str(e)})}",
                                 status_code=303)
     with Session(engine) as session:
         existing = session.get(PeriodSummary, key)
@@ -474,6 +460,9 @@ def dashboard(request: Request, win: str = "30", end: str = "",
            "duration": lambda w: w.moving_s}.get(sort, lambda w: w.start_date)
     table = sorted(workouts, key=key, reverse=(order != "asc"))[:200]
 
+    with Session(engine) as session:
+        analysis = session.get(PeriodSummary, _window_key("training", window))
+
     return templates.TemplateResponse(request, "dashboard.html", {
         "user": wahoo.get_user_name(),
         "window": window, "windows": WINDOWS,
@@ -489,9 +478,48 @@ def dashboard(request: Request, win: str = "30", end: str = "",
         },
         "charts_json": json.dumps(build_chart_data(workouts)),
         "workouts": table,
+        "analysis_html": md.markdown(analysis.content, extensions=["tables"]) if analysis else None,
+        "analysis_date": analysis.created_at if analysis else None,
         "message": request.query_params.get("msg"),
         "error": request.query_params.get("error"),
     })
+
+
+@app.post("/analyze/period", dependencies=[Depends(require_auth)])
+async def analyze_period(win: str = Form("30"), end: str = Form(""),
+                         from_: str = Form("", alias="from"), to: str = Form(""),
+                         regenerate: str = Form(default="")):
+    """AI analysis of the training in the selected window (cached per window)."""
+    window = resolve_window(win, end, from_, to)
+    key = _window_key("training", window)
+    redirect = f"/?{_window_qs(window)}"
+    with Session(engine) as session:
+        cached = session.get(PeriodSummary, key)
+        if cached and not regenerate:
+            return RedirectResponse(redirect, status_code=303)
+        workouts = query_range(session, window["start"], window["end"], None)
+        rows = [w.model_dump(exclude={"raw_summary", "fit_path", "updated_at"}) for w in workouts]
+    if not rows:
+        return RedirectResponse(f"/?{_window_qs(window)}&"
+                                + urlencode({"error": "Nessuna attività nel periodo"}),
+                                status_code=303)
+    try:
+        content = await anthropic_client.summarize_period(window["label"], rows)
+    except anthropic_client.AnthropicError as e:
+        return RedirectResponse(f"/?{_window_qs(window)}&{urlencode({'error': str(e)})}",
+                                status_code=303)
+    with Session(engine) as session:
+        existing = session.get(PeriodSummary, key)
+        if existing:
+            existing.content = content
+            existing.model = anthropic_client.effective_model()
+            existing.created_at = datetime.utcnow()
+            session.add(existing)
+        else:
+            session.add(PeriodSummary(key=key, content=content,
+                                      model=anthropic_client.effective_model()))
+        session.commit()
+    return RedirectResponse(redirect, status_code=303)
 
 
 # ---------------------------------------------------------------- cleanup
@@ -719,62 +747,6 @@ async def analyze(workout_id: int, regenerate: str = Form(default="")):
                                    model=anthropic_client.effective_model()))
         session.commit()
     return RedirectResponse(f"/workout/{workout_id}", status_code=303)
-
-
-def _summary_key(period: str) -> str:
-    return f"{period}:{period_start(period).strftime('%Y-%m-%d')}"
-
-
-@app.get("/summary/{period}", response_class=HTMLResponse,
-         dependencies=[Depends(require_auth)])
-def summary_page(request: Request, period: str):
-    if period not in ("week", "month"):
-        raise HTTPException(404)
-    with Session(engine) as session:
-        cached = session.get(PeriodSummary, _summary_key(period))
-    return templates.TemplateResponse(request, "summary.html", {
-        "period": period,
-        "summary_html": md.markdown(cached.content, extensions=["tables"]) if cached else None,
-        "summary_date": cached.created_at if cached else None,
-        "error": request.query_params.get("error"),
-    })
-
-
-@app.post("/summary/{period}/generate", dependencies=[Depends(require_auth)])
-async def summary_generate(period: str, regenerate: str = Form(default="")):
-    if period not in ("week", "month"):
-        raise HTTPException(404)
-    key = _summary_key(period)
-    with Session(engine) as session:
-        cached = session.get(PeriodSummary, key)
-        if cached and not regenerate:
-            return RedirectResponse(f"/summary/{period}", status_code=303)
-        workouts = query_workouts(session, period, None)
-
-    if not workouts:
-        return RedirectResponse(
-            f"/summary/{period}?{urlencode({'error': 'Nessuna attività nel periodo'})}",
-            status_code=303)
-
-    rows = [w.model_dump(exclude={"raw_summary", "fit_path", "updated_at"}) for w in workouts]
-    label = "ultima settimana" if period == "week" else "ultimo mese"
-    try:
-        content = await anthropic_client.summarize_period(label, rows)
-    except anthropic_client.AnthropicError as e:
-        return RedirectResponse(
-            f"/summary/{period}?{urlencode({'error': str(e)})}", status_code=303)
-
-    with Session(engine) as session:
-        existing = session.get(PeriodSummary, key)
-        if existing:
-            existing.content = content
-            existing.model = anthropic_client.effective_model()
-            existing.created_at = datetime.utcnow()
-            session.add(existing)
-        else:
-            session.add(PeriodSummary(key=key, content=content, model=anthropic_client.effective_model()))
-        session.commit()
-    return RedirectResponse(f"/summary/{period}", status_code=303)
 
 
 # ---------------------------------------------------------------- health
