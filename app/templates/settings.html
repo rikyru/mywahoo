@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}Impostazioni — MyWahoo{% endblock %}
+{% block content %}
+
+<div class="page-head"><h1>Impostazioni</h1></div>
+{% if message %}<div class="alert ok">{{ message }}</div>{% endif %}
+
+<section class="card">
+  <h3>Motore AI</h3>
+  <p class="muted">Scegli il provider e il modello usati per analisi, sintesi e chat.
+    Le chiavi API restano nel <code>.env</code> del server.</p>
+
+  <form method="post" action="/settings" class="edit-form" id="aiForm">
+    <label>Provider
+      <select name="provider" id="provider">
+        <option value="openai" {% if provider == 'openai' %}selected{% endif %}
+          {% if not has_openai %}disabled{% endif %}>OpenAI {% if not has_openai %}(nessuna chiave){% endif %}</option>
+        <option value="anthropic" {% if provider == 'anthropic' %}selected{% endif %}
+          {% if not has_anthropic %}disabled{% endif %}>Anthropic {% if not has_anthropic %}(nessuna chiave){% endif %}</option>
+      </select>
+    </label>
+    <label>Modello
+      <input type="text" name="model" id="model" value="{{ model }}" list="openaiModels"
+             placeholder="es. gpt-5.5">
+      <datalist id="openaiModels">
+        {% for m in openai_models %}<option value="{{ m }}">{% endfor %}
+      </datalist>
+    </label>
+    <div class="edit-actions">
+      <button class="btn" type="submit">Salva</button>
+    </div>
+  </form>
+  {% if openai_models %}
+  <p class="muted">Modelli OpenAI disponibili con la tua chiave: {{ openai_models | length }}
+    (suggeriti nel campo). Lascia vuoto per usare il default del provider.</p>
+  {% endif %}
+</section>
+
+<script>
+// show OpenAI model suggestions only when provider is OpenAI
+const prov = document.getElementById("provider"), md = document.getElementById("model");
+function sync() { md.setAttribute("list", prov.value === "openai" ? "openaiModels" : ""); }
+prov.addEventListener("change", sync); sync();
+</script>
+{% endblock %}

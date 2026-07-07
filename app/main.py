@@ -19,7 +19,8 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from . import anthropic_client, fit as fitmod, google_health, wahoo
 from .config import settings, setup_logging
-from .db import AiAnalysis, IgnoredImport, PeriodSummary, Workout, WorkoutStream, engine, init_db
+from .db import (AiAnalysis, IgnoredImport, PeriodSummary, Workout, WorkoutStream,
+                 engine, get_setting, init_db, set_setting)
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -324,13 +325,69 @@ async def health_insight(request: Request, regenerate: str = Form(default=""),
         existing = session.get(PeriodSummary, key)
         if existing:
             existing.content = content
-            existing.model = settings.ai_model
+            existing.model = anthropic_client.effective_model()
             existing.created_at = datetime.utcnow()
             session.add(existing)
         else:
-            session.add(PeriodSummary(key=key, content=content, model=settings.ai_model))
+            session.add(PeriodSummary(key=key, content=content, model=anthropic_client.effective_model()))
         session.commit()
     return RedirectResponse(redirect, status_code=303)
+
+
+@app.post("/health/chat", dependencies=[Depends(require_auth)])
+async def health_chat(request: Request):
+    """Grounded chat: answers follow-up questions using the window's health data
+    and activities. Stateless — the client sends the whole short history."""
+    try:
+        body = await request.json()
+    except json.JSONDecodeError:
+        return JSONResponse({"error": "richiesta non valida"}, status_code=400)
+    history = body.get("messages") or []
+    # keep it small and well-formed
+    history = [{"role": m.get("role"), "content": str(m.get("content", ""))[:2000]}
+               for m in history if m.get("role") in ("user", "assistant") and m.get("content")][-12:]
+    if not history or history[-1]["role"] != "user":
+        return JSONResponse({"error": "nessuna domanda"}, status_code=400)
+
+    window = resolve_window(body.get("win", "30"), body.get("end", ""),
+                            body.get("from", ""), body.get("to", ""))
+    try:
+        data = await google_health.fetch_health_overview(window["start"].date(),
+                                                         window["end"].date())
+    except google_health.GoogleHealthError as e:
+        return JSONResponse({"error": str(e)}, status_code=502)
+    with Session(engine) as session:
+        workouts = [w.model_dump(exclude={"raw_summary", "fit_path", "updated_at"})
+                    for w in query_range(session, window["start"], window["end"], None)]
+    try:
+        reply = await anthropic_client.chat_health(data, workouts, history)
+    except anthropic_client.AnthropicError as e:
+        return JSONResponse({"error": str(e)}, status_code=502)
+    return JSONResponse({"reply": reply})
+
+
+@app.get("/settings", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
+async def settings_page(request: Request):
+    provider = anthropic_client.effective_provider()
+    openai_models = await anthropic_client.list_openai_models() if settings.openai_api_key else []
+    return templates.TemplateResponse(request, "settings.html", {
+        "provider": provider,
+        "model": anthropic_client.effective_model(),
+        "openai_models": openai_models,
+        "has_openai": bool(settings.openai_api_key),
+        "has_anthropic": bool(settings.anthropic_api_key),
+        "message": request.query_params.get("msg"),
+    })
+
+
+@app.post("/settings", dependencies=[Depends(require_auth)])
+async def settings_save(provider: str = Form("openai"), model: str = Form("")):
+    provider = provider if provider in ("openai", "anthropic") else "openai"
+    set_setting("ai_provider", provider)
+    set_setting("ai_model", model.strip())
+    logger.info("AI settings updated: provider=%s model=%s", provider, model.strip() or "(default)")
+    return RedirectResponse(f"/settings?{urlencode({'msg': 'Impostazioni salvate'})}",
+                            status_code=303)
 
 
 @app.get("/google/probe", dependencies=[Depends(require_auth)])
@@ -654,12 +711,12 @@ async def analyze(workout_id: int, regenerate: str = Form(default="")):
         existing = session.get(AiAnalysis, workout_id)
         if existing:
             existing.content = content
-            existing.model = settings.ai_model
+            existing.model = anthropic_client.effective_model()
             existing.created_at = datetime.utcnow()
             session.add(existing)
         else:
             session.add(AiAnalysis(workout_id=workout_id, content=content,
-                                   model=settings.ai_model))
+                                   model=anthropic_client.effective_model()))
         session.commit()
     return RedirectResponse(f"/workout/{workout_id}", status_code=303)
 
@@ -711,11 +768,11 @@ async def summary_generate(period: str, regenerate: str = Form(default="")):
         existing = session.get(PeriodSummary, key)
         if existing:
             existing.content = content
-            existing.model = settings.ai_model
+            existing.model = anthropic_client.effective_model()
             existing.created_at = datetime.utcnow()
             session.add(existing)
         else:
-            session.add(PeriodSummary(key=key, content=content, model=settings.ai_model))
+            session.add(PeriodSummary(key=key, content=content, model=anthropic_client.effective_model()))
         session.commit()
     return RedirectResponse(f"/summary/{period}", status_code=303)
 

@@ -25,6 +25,29 @@ class IgnoredImport(SQLModel, table=True):
     id: int = Field(primary_key=True)  # = Google exercise uid (= imported workout id)
 
 
+class AppSetting(SQLModel, table=True):
+    """Simple key/value store for runtime settings editable from the UI."""
+    key: str = Field(primary_key=True)
+    value: str = ""
+
+
+def get_setting(key: str, default: str = "") -> str:
+    with Session(engine) as session:
+        row = session.get(AppSetting, key)
+        return row.value if row and row.value else default
+
+
+def set_setting(key: str, value: str) -> None:
+    with Session(engine) as session:
+        row = session.get(AppSetting, key)
+        if row:
+            row.value = value
+        else:
+            row = AppSetting(key=key, value=value)
+        session.add(row)
+        session.commit()
+
+
 class GoogleToken(SQLModel, table=True):
     """Single row (id=1): OAuth tokens for the Google Health API (ex Fitbit)."""
     id: int = Field(default=1, primary_key=True)

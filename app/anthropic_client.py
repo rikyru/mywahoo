@@ -81,41 +81,53 @@ manca, dillo invece di inventare. Sii quantitativo. Esprimi SEMPRE le durate
 del sonno in ore e minuti (es. "6h30"), mai in minuti."""
 
 
-def _build_request(system: str, user_content: str) -> tuple[str, dict, dict, str]:
-    """Return (url, payload, headers, provider_label) for the active provider."""
-    if settings.ai_provider == "openai":
+def effective_provider() -> str:
+    """AI provider: DB override (set from Settings) else env default."""
+    from .db import get_setting
+    return get_setting("ai_provider") or settings.ai_provider
+
+
+def effective_model() -> str:
+    from .db import get_setting
+    prov = effective_provider()
+    return get_setting("ai_model") or (settings.openai_model if prov == "openai"
+                                       else settings.anthropic_model)
+
+
+def _provider_key(provider: str) -> str:
+    return settings.openai_api_key if provider == "openai" else settings.anthropic_api_key
+
+
+def _build_request(system: str, messages: list) -> tuple[str, dict, dict, str, str]:
+    """Return (url, payload, headers, label, provider) for the active provider."""
+    provider, model = effective_provider(), effective_model()
+    if provider == "openai":
         payload = {
-            "model": settings.openai_model,
+            "model": model,
             "max_completion_tokens": MAX_TOKENS,
-            "messages": [{"role": "system", "content": system},
-                         {"role": "user", "content": user_content}],
+            "messages": [{"role": "system", "content": system}] + messages,
         }
         # Reasoning models: keep reasoning light so the budget goes to the answer
-        if settings.openai_model.startswith(OPENAI_REASONING_PREFIXES):
+        if model.startswith(OPENAI_REASONING_PREFIXES):
             payload["reasoning_effort"] = "low"
-        headers = {
-            "authorization": f"Bearer {settings.openai_api_key}",
-            "content-type": "application/json",
-        }
-        return OPENAI_API_URL, payload, headers, "OpenAI"
+        headers = {"authorization": f"Bearer {settings.openai_api_key}",
+                   "content-type": "application/json"}
+        return OPENAI_API_URL, payload, headers, "OpenAI", provider
     payload = {
-        "model": settings.anthropic_model,
+        "model": model,
         "max_tokens": MAX_TOKENS,
         "system": system,
-        "messages": [{"role": "user", "content": user_content}],
+        "messages": messages,
     }
-    headers = {
-        "x-api-key": settings.anthropic_api_key,
-        "anthropic-version": ANTHROPIC_VERSION,
-        "content-type": "application/json",
-    }
-    return API_URL, payload, headers, "Anthropic"
+    headers = {"x-api-key": settings.anthropic_api_key,
+               "anthropic-version": ANTHROPIC_VERSION, "content-type": "application/json"}
+    return API_URL, payload, headers, "Anthropic", provider
 
 
-def _extract_text(data: dict) -> tuple[str, int | None, int | None]:
+def _extract_text(data: dict, provider: str) -> tuple[str, int | None, int | None]:
     """Return (text, input_tokens, output_tokens) from the provider response."""
     usage = data.get("usage", {})
-    if settings.ai_provider == "openai":
+    if provider == "openai":
         choices = data.get("choices", [])
         text = (choices[0].get("message", {}).get("content") or "") if choices else ""
         return text, usage.get("prompt_tokens"), usage.get("completion_tokens")
@@ -125,8 +137,13 @@ def _extract_text(data: dict) -> tuple[str, int | None, int | None]:
 
 
 async def _call_claude(system: str, user_content: str) -> str:
-    """Call the AI API with retry on transient errors. Returns the text response."""
-    url, payload, headers, label = _build_request(system, user_content)
+    """Single-turn call (kept for the analysis/summary callers)."""
+    return await _call_messages(system, [{"role": "user", "content": user_content}])
+
+
+async def _call_messages(system: str, messages: list) -> str:
+    """Call the AI API with a full message list, retrying on transient errors."""
+    url, payload, headers, label, provider = _build_request(system, messages)
 
     last_error = "unknown"
     for attempt in range(MAX_RETRIES + 1):
@@ -144,7 +161,7 @@ async def _call_claude(system: str, user_content: str) -> str:
 
         if resp.status_code == 200:
             data = resp.json()
-            text, tok_in, tok_out = _extract_text(data)
+            text, tok_in, tok_out = _extract_text(data, provider)
             if not text:
                 raise AnthropicError(f"Risposta vuota dall'API {label}")
             logger.info("AI analysis ok (%s): %s in / %s out tokens", label, tok_in, tok_out)
@@ -210,27 +227,26 @@ def _activity_log(workouts: list[dict] | None) -> list[dict]:
     return out
 
 
-async def summarize_health(overview: dict, workouts: list[dict] | None = None) -> str:
-    """Coach-style commentary on the health overview, correlated with the recent
-    activities. Sends a compact view (latest + trend + min/avg/max + activity
-    log), never the full daily arrays."""
+def _health_payload(overview: dict, workouts: list[dict] | None) -> dict:
+    """Compact view of the health window (latest + trend + min/avg/max + sleep in
+    hours + activity log), shared by the summary and the chat assistant."""
     def stats(series: list) -> dict:
         vals = [p["value"] for p in series]
         if not vals:
             return {}
         return {"min": min(vals), "media": round(sum(vals) / len(vals), 1), "max": max(vals)}
 
+    def hm(mins: float) -> str:
+        m = int(round(mins))
+        return f"{m // 60}h{m % 60:02d}"
+
     metrics = {}
-    for k, m in overview.get("metrics", {}).items():
+    for m in overview.get("metrics", {}).values():
         metrics[m["label"]] = {"unita": m["unit"], "ultimo": m["latest"],
                                "variazione_vs_media7gg": m.get("delta"),
                                "direzione": m.get("dir"), **stats(m["series"])}
     body = {m["label"]: {"unita": m["unit"], "ultimo": m["latest"]}
             for m in overview.get("body", {}).values()}
-
-    def hm(mins: float) -> str:
-        m = int(round(mins))
-        return f"{m // 60}h{m % 60:02d}"
 
     nights = overview.get("sleep") or []
     sleep = None
@@ -241,9 +257,51 @@ async def summarize_health(overview: dict, workouts: list[dict] | None = None) -
                  "per_notte": [{"data": n["date"], "durata": hm(n["asleep_min"]),
                                 "efficienza": n.get("efficiency")} for n in nights]}
 
-    payload = {"indice_di_forma": overview.get("score"),
-               "metriche_vitali": metrics, "composizione_corporea": body,
-               "sonno": sleep, "attivita_fisiche": _activity_log(workouts)}
+    return {"indice_di_forma": overview.get("score"),
+            "metriche_vitali": metrics, "composizione_corporea": body,
+            "sonno": sleep, "attivita_fisiche": _activity_log(workouts)}
+
+
+async def summarize_health(overview: dict, workouts: list[dict] | None = None) -> str:
+    """Coach-style commentary on the health overview, correlated with activities."""
+    payload = _health_payload(overview, workouts)
     return await _call_claude(
         HEALTH_SYSTEM_PROMPT,
         json.dumps(payload, ensure_ascii=False, indent=1, default=str))
+
+
+CHAT_SYSTEM_PROMPT = """\
+Sei l'assistente di salute e allenamento di questo atleta. Rispondi in italiano,
+in modo conciso e concreto, USANDO i dati del periodo forniti qui sotto
+(indice di forma, metriche vitali con trend, sonno in ore, attività con carico).
+Correla salute e allenamento quando utile. Se la domanda esce dai dati
+disponibili, dillo con onestà. Niente diagnosi mediche: per sintomi o valori
+anomali persistenti, suggerisci cautela o un controllo medico. Durate del sonno
+sempre in ore e minuti (es. "6h30")."""
+
+
+async def chat_health(overview: dict, workouts: list[dict] | None,
+                      history: list[dict]) -> str:
+    """Answer a follow-up question grounded in the health-window data."""
+    payload = _health_payload(overview, workouts)
+    system = (CHAT_SYSTEM_PROMPT + "\n\nDATI DEL PERIODO (JSON):\n"
+              + json.dumps(payload, ensure_ascii=False, default=str))
+    return await _call_messages(system, history)
+
+
+async def list_openai_models() -> list[str]:
+    """Chat-capable OpenAI model ids the key can use, for the Settings dropdown."""
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(
+                "https://api.openai.com/v1/models",
+                headers={"authorization": f"Bearer {settings.openai_api_key}"})
+        if resp.status_code != 200:
+            return []
+    except httpx.HTTPError:
+        return []
+    ids = [m["id"] for m in resp.json().get("data", [])]
+    keep = [i for i in ids if i.startswith(("gpt-5", "gpt-4", "o1", "o3", "o4"))
+            and not any(x in i for x in ("audio", "transcribe", "tts", "search",
+                                         "image", "realtime", "moderation", "embedding"))]
+    return sorted(keep)

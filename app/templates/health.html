@@ -136,6 +136,17 @@
     {% endif %}
   </section>
 
+  {# ---- chat assistant ---- #}
+  <section class="card">
+    <h3>Chiedi all'assistente</h3>
+    <p class="muted">Domande sui tuoi dati del periodo selezionato (recupero, sonno, allenamenti).</p>
+    <div id="chatLog" class="chat-log"></div>
+    <form id="chatForm" class="chat-input">
+      <input type="text" id="chatMsg" placeholder="Es. come sto recuperando questa settimana?" autocomplete="off">
+      <button class="btn" type="submit">Invia</button>
+    </form>
+  </section>
+
   {# ---- trend charts ---- #}
   <div class="charts-grid">
     {% for key, m in data.metrics.items() %}
@@ -165,6 +176,51 @@ Chart.defaults.font.family = "Inter, system-ui, sans-serif";
 function busy(btn) {
   setTimeout(() => { btn.disabled = true; btn.textContent = "Generazione…"; }, 0);
 }
+
+// ---- chat assistant ----
+const CHAT_WIN = { win: "{{ window.win }}", end: "{{ window.end_d | default('') }}",
+                   from: "{{ window.from | default('') }}", to: "{{ window.to | default('') }}" };
+const chatLog = document.getElementById("chatLog");
+const chatForm = document.getElementById("chatForm");
+const chatMsg = document.getElementById("chatMsg");
+const chatHistory = [];
+function addBubble(role, text) {
+  const div = document.createElement("div");
+  div.className = "chat-msg chat-" + role;
+  div.textContent = text;
+  chatLog.appendChild(div);
+  chatLog.scrollTop = chatLog.scrollHeight;
+  return div;
+}
+chatForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const text = chatMsg.value.trim();
+  if (!text) return;
+  chatMsg.value = "";
+  addBubble("user", text);
+  chatHistory.push({ role: "user", content: text });
+  const thinking = addBubble("assistant", "…");
+  chatMsg.disabled = true;
+  try {
+    const r = await fetch("/health/chat", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ messages: chatHistory, ...CHAT_WIN }),
+    });
+    const data = await r.json();
+    if (data.reply) {
+      thinking.textContent = data.reply;
+      chatHistory.push({ role: "assistant", content: data.reply });
+    } else {
+      thinking.textContent = "⚠️ " + (data.error || "errore");
+    }
+  } catch (err) {
+    thinking.textContent = "⚠️ errore di rete";
+  } finally {
+    chatMsg.disabled = false;
+    chatMsg.focus();
+  }
+});
+
 const METRICS = {{ data.metrics | tojson }};
 const BODY = {{ data.body | tojson }};
 const SLEEP = {{ data.sleep | tojson }};
