@@ -17,7 +17,7 @@ from fastapi.templating import Jinja2Templates
 from sqlmodel import Session, select
 from starlette.middleware.sessions import SessionMiddleware
 
-from . import anthropic_client, fit as fitmod, google_health, wahoo
+from . import anthropic_client, fit as fitmod, google_health, nutrition, wahoo
 from .config import settings, setup_logging
 from .db import (AiAnalysis, IgnoredImport, PeriodSummary, Workout, WorkoutStream,
                  engine, get_setting, init_db, set_setting)
@@ -300,10 +300,12 @@ async def health_page(request: Request, win: str = "30", end: str = ""):
         return templates.TemplateResponse(request, "health.html",
                                           {"connected": True, "data": None,
                                            "error": str(e), "window": window})
+    nutri = await nutrition.fetch_nutrition(window["start"].date(), window["end"].date())
     with Session(engine) as session:
         insight = session.get(PeriodSummary, _health_key(window))
     return templates.TemplateResponse(request, "health.html", {
         "connected": True, "data": data, "window": window, "windows": WINDOWS,
+        "nutrition": nutri,
         "insight_html": md.markdown(insight.content, extensions=["tables"]) if insight else None,
         "insight_date": insight.created_at if insight else None,
         "error": request.query_params.get("error"),
@@ -324,10 +326,11 @@ async def health_insight(request: Request, regenerate: str = Form(default=""),
     with Session(engine) as session:
         workouts = [w.model_dump(exclude={"raw_summary", "fit_path", "updated_at"})
                     for w in query_range(session, window["start"], window["end"], None)]
+    nutri = await nutrition.fetch_nutrition(window["start"].date(), window["end"].date())
     try:
         data = await google_health.fetch_health_overview(window["start"].date(),
                                                          window["end"].date())
-        content = await anthropic_client.summarize_health(data, workouts)
+        content = await anthropic_client.summarize_health(data, workouts, nutri)
     except google_health.GoogleHealthError as e:
         return RedirectResponse(f"/health?{_window_qs(window)}&{urlencode({'error': str(e)})}",
                                 status_code=303)
@@ -372,8 +375,9 @@ async def health_chat(request: Request):
     with Session(engine) as session:
         workouts = [w.model_dump(exclude={"raw_summary", "fit_path", "updated_at"})
                     for w in query_range(session, window["start"], window["end"], None)]
+    nutri = await nutrition.fetch_nutrition(window["start"].date(), window["end"].date())
     try:
-        reply = await anthropic_client.chat_health(data, workouts, history)
+        reply = await anthropic_client.chat_health(data, workouts, history, nutri)
     except anthropic_client.AnthropicError as e:
         return JSONResponse({"error": str(e)}, status_code=502)
     return JSONResponse({"reply": reply})

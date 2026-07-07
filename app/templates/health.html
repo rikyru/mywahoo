@@ -108,6 +108,20 @@
   </section>
   {% endif %}
 
+  {# ---- nutrition (planmydinner) ---- #}
+  {% if nutrition and nutrition.aderenza_al_piano %}
+  {% set a = nutrition.aderenza_al_piano %}
+  <section class="card">
+    <h3>Alimentazione <small class="muted">· planmydinner</small></h3>
+    <section class="kpi-row">
+      <div class="kpi"><span class="kpi-value">{{ a.punteggio_pct }}%</span><span class="kpi-label">aderenza al piano</span></div>
+      <div class="kpi"><span class="kpi-value">{{ a.pasti_da_piano_consumati }}/{{ a.pasti_pianificati }}</span><span class="kpi-label">pasti da piano</span></div>
+      <div class="kpi"><span class="kpi-value">{{ a.pasti_liberi_usati }}{% if a.quota_pasti_liberi %}/{{ a.quota_pasti_liberi }}{% endif %}</span><span class="kpi-label">pasti liberi</span></div>
+      {% if a.pasti_saltati %}<div class="kpi"><span class="kpi-value">{{ a.pasti_saltati }}</span><span class="kpi-label">saltati</span></div>{% endif %}
+    </section>
+  </section>
+  {% endif %}
+
   {# ---- AI commentary ---- #}
   <section class="card">
     <div class="card-head">

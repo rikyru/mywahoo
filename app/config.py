@@ -29,6 +29,9 @@ class Settings:
         # Google Health API (ex Fitbit) — opzionale, arricchisce nuoto/camminate
         self.google_client_id: str = os.environ.get("GOOGLE_CLIENT_ID", "")
         self.google_client_secret: str = os.environ.get("GOOGLE_CLIENT_SECRET", "")
+        # planmydinner — opzionale, integra l'alimentazione (piano/aderenza) via API
+        self.planmydinner_url: str = os.environ.get("PLANMYDINNER_URL", "")
+        self.planmydinner_profile: str = os.environ.get("PLANMYDINNER_PROFILE", "riccardo")
 
     @property
     def ai_model(self) -> str:

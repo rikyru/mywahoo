@@ -75,10 +75,14 @@ recupero" **correla esplicitamente le attività con il recupero**: confronta le
 notti/giorni dopo sessioni intense o voluminose con HRV, FC a riposo e qualità
 del sonno; segnala se il corpo recupera bene dal carico o se accumula fatica
 (HRV depressa o FC a riposo elevata dopo i picchi di allenamento), e se i giorni
-di riposo/scarico portano un rimbalzo del recupero. NON dare diagnosi mediche:
-se qualcosa appare anomalo, suggerisci cautela o un controllo medico. Se un dato
-manca, dillo invece di inventare. Sii quantitativo. Esprimi SEMPRE le durate
-del sonno in ore e minuti (es. "6h30"), mai in minuti."""
+di riposo/scarico portano un rimbalzo del recupero. Se è presente la sezione
+"alimentazione" (aderenza al piano, pasti liberi, composizione), correlala con
+recupero e carico (es. bassa aderenza o molti pasti liberi in una fase di carico
+↔ recupero peggiore) e aggiungi 1 riga a riguardo nei Consigli; se assente, NON
+parlarne. NON dare diagnosi mediche: se qualcosa appare anomalo, suggerisci
+cautela o un controllo medico. Se un dato manca, dillo invece di inventare. Sii
+quantitativo. Esprimi SEMPRE le durate del sonno in ore e minuti (es. "6h30"),
+mai in minuti."""
 
 
 def effective_provider() -> str:
@@ -227,7 +231,8 @@ def _activity_log(workouts: list[dict] | None) -> list[dict]:
     return out
 
 
-def _health_payload(overview: dict, workouts: list[dict] | None) -> dict:
+def _health_payload(overview: dict, workouts: list[dict] | None,
+                    nutrition: dict | None = None) -> dict:
     """Compact view of the health window (latest + trend + min/avg/max + sleep in
     hours + activity log), shared by the summary and the chat assistant."""
     def stats(series: list) -> dict:
@@ -257,14 +262,19 @@ def _health_payload(overview: dict, workouts: list[dict] | None) -> dict:
                  "per_notte": [{"data": n["date"], "durata": hm(n["asleep_min"]),
                                 "efficienza": n.get("efficiency")} for n in nights]}
 
-    return {"indice_di_forma": overview.get("score"),
-            "metriche_vitali": metrics, "composizione_corporea": body,
-            "sonno": sleep, "attivita_fisiche": _activity_log(workouts)}
+    out = {"indice_di_forma": overview.get("score"),
+           "metriche_vitali": metrics, "composizione_corporea": body,
+           "sonno": sleep, "attivita_fisiche": _activity_log(workouts)}
+    if nutrition:
+        out["alimentazione"] = nutrition
+    return out
 
 
-async def summarize_health(overview: dict, workouts: list[dict] | None = None) -> str:
-    """Coach-style commentary on the health overview, correlated with activities."""
-    payload = _health_payload(overview, workouts)
+async def summarize_health(overview: dict, workouts: list[dict] | None = None,
+                           nutrition: dict | None = None) -> str:
+    """Coach-style commentary on the health overview, correlated with activities
+    (and nutrition adherence when available)."""
+    payload = _health_payload(overview, workouts, nutrition)
     return await _call_claude(
         HEALTH_SYSTEM_PROMPT,
         json.dumps(payload, ensure_ascii=False, indent=1, default=str))
@@ -273,17 +283,18 @@ async def summarize_health(overview: dict, workouts: list[dict] | None = None) -
 CHAT_SYSTEM_PROMPT = """\
 Sei l'assistente di salute e allenamento di questo atleta. Rispondi in italiano,
 in modo conciso e concreto, USANDO i dati del periodo forniti qui sotto
-(indice di forma, metriche vitali con trend, sonno in ore, attività con carico).
-Correla salute e allenamento quando utile. Se la domanda esce dai dati
+(indice di forma, metriche vitali con trend, sonno in ore, attività con carico,
+ed eventuale alimentazione: aderenza al piano e pasti liberi).
+Correla salute, allenamento e alimentazione quando utile. Se la domanda esce dai dati
 disponibili, dillo con onestà. Niente diagnosi mediche: per sintomi o valori
 anomali persistenti, suggerisci cautela o un controllo medico. Durate del sonno
 sempre in ore e minuti (es. "6h30")."""
 
 
 async def chat_health(overview: dict, workouts: list[dict] | None,
-                      history: list[dict]) -> str:
+                      history: list[dict], nutrition: dict | None = None) -> str:
     """Answer a follow-up question grounded in the health-window data."""
-    payload = _health_payload(overview, workouts)
+    payload = _health_payload(overview, workouts, nutrition)
     system = (CHAT_SYSTEM_PROMPT + "\n\nDATI DEL PERIODO (JSON):\n"
               + json.dumps(payload, ensure_ascii=False, default=str))
     return await _call_messages(system, history)
