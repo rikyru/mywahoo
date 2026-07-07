@@ -123,6 +123,7 @@
 
 <section class="card">
   <h3>Attività</h3>
+  <div class="table-scroll">
   <table class="activities">
     <thead>
       {% set win_qs = 'win=' ~ window.win ~ ('&from=' ~ window.from ~ '&to=' ~ window.to if window.win == 'custom' else ('&end=' ~ window.end_d if not window.is_current else '')) ~ qs_sport %}
@@ -171,6 +172,7 @@
       {% endfor %}
     </tbody>
   </table>
+  </div>
 </section>
 
 {% endblock %}

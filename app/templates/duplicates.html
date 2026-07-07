@@ -15,6 +15,7 @@ doppione, elimina quella di troppo (di solito quella senza FIT/meno completa).</
 <div class="card"><p class="muted">Nessun duplicato sospetto. 👍</p></div>
 {% else %}
 <section class="card">
+  <div class="table-scroll">
   <table class="activities">
     <thead>
       <tr><th>Data/ora</th><th>Nome</th><th>Tipo</th><th>Distanza</th>
@@ -44,6 +45,7 @@ doppione, elimina quella di troppo (di solito quella senza FIT/meno completa).</
       {% endfor %}
     </tbody>
   </table>
+  </div>
 </section>
 {% endif %}
 {% endblock %}

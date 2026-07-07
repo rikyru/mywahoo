@@ -228,7 +228,44 @@ a.chip:hover { background: var(--card-hover); text-decoration: none; }
 .score-verdict.avg { color: #f59e0b; }
 .score-verdict.bad { color: var(--bad); }
 
+/* ---------- wide content scrolls instead of widening the page ---------- */
+.table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.table-scroll table.activities { min-width: 620px; }
+.ai-analysis { overflow-x: auto; }
+.ai-analysis pre { white-space: pre-wrap; word-break: break-word; }
+
 /* ---------- scrollbar ---------- */
 ::-webkit-scrollbar { width: 11px; height: 11px; }
 ::-webkit-scrollbar-thumb { background: #2a3344; border-radius: 8px; border: 3px solid var(--bg); }
 ::-webkit-scrollbar-thumb:hover { background: #36425a; }
+
+/* ---------- mobile ---------- */
+@media (max-width: 640px) {
+  .container { padding: 1rem .8rem 2.4rem; }
+  h1 { font-size: 1.3rem; }
+
+  .topbar { padding: .55rem .7rem; gap: .5rem; }
+  .topbar .brand { font-size: 1rem; }
+  .topbar nav { flex-wrap: nowrap; overflow-x: auto; -webkit-overflow-scrolling: touch;
+                gap: .2rem; }
+  .topbar nav::-webkit-scrollbar { display: none; }
+  .topbar nav a { padding: .35rem .55rem; font-size: .88rem; white-space: nowrap; }
+
+  .page-head { gap: .6rem; }
+  .sync-buttons { flex-wrap: wrap; gap: .4rem; }
+  .sync-buttons .btn, .sync-buttons label.btn { padding: .5rem .8rem; font-size: .88rem; }
+
+  .kpi-row { grid-template-columns: repeat(2, 1fr); gap: .6rem; }
+  .kpi { padding: .8rem .7rem; }
+  .kpi-value { font-size: 1.3rem; }
+
+  .card { padding: .9rem 1rem; }
+  .card-head { flex-wrap: wrap; gap: .5rem; }
+
+  .window-bar { gap: .5rem .7rem; }
+  .window-sport { margin-left: 0; }
+  .window-label { min-width: 0; }
+
+  .chat-msg { max-width: 92%; }
+  .filters { flex-wrap: wrap; }
+}
