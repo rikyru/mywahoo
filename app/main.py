@@ -62,6 +62,11 @@ def require_auth(request: Request) -> None:
         raise HTTPException(status_code=307, headers={"Location": "/login"})
 
 
+def app_password() -> str:
+    """Login password: DB override (set from Settings) else env APP_PASSWORD."""
+    return get_setting("app_password") or settings.app_password
+
+
 def fmt_duration(seconds: int) -> str:
     h, rem = divmod(int(seconds or 0), 3600)
     m, s = divmod(rem, 60)
@@ -179,13 +184,14 @@ def login_page(request: Request):
         return RedirectResponse("/", status_code=303)
     return templates.TemplateResponse(request, "login.html", {
         "error": request.query_params.get("error"),
-        "has_password": bool(settings.app_password),
+        "has_password": bool(app_password()),
     })
 
 
 @app.post("/login")
 def login_submit(request: Request, password: str = Form("")):
-    if settings.app_password and secrets.compare_digest(password, settings.app_password):
+    pw = app_password()
+    if pw and secrets.compare_digest(password, pw):
         request.session["authed"] = True
         return RedirectResponse("/", status_code=303)
     logger.warning("Failed app-password login")
@@ -376,7 +382,9 @@ async def settings_page(request: Request):
         "openai_models": openai_models,
         "has_openai": bool(settings.openai_api_key),
         "has_anthropic": bool(settings.anthropic_api_key),
+        "has_password": bool(app_password()),
         "message": request.query_params.get("msg"),
+        "error": request.query_params.get("error"),
     })
 
 
@@ -387,6 +395,21 @@ async def settings_save(provider: str = Form("openai"), model: str = Form("")):
     set_setting("ai_model", model.strip())
     logger.info("AI settings updated: provider=%s model=%s", provider, model.strip() or "(default)")
     return RedirectResponse(f"/settings?{urlencode({'msg': 'Impostazioni salvate'})}",
+                            status_code=303)
+
+
+@app.post("/settings/password", dependencies=[Depends(require_auth)])
+def settings_password(new_password: str = Form(""), confirm: str = Form("")):
+    new = new_password.strip()
+    if len(new) < 4:
+        return RedirectResponse(f"/settings?{urlencode({'error': 'Password troppo corta (min 4)'})}",
+                                status_code=303)
+    if new != confirm.strip():
+        return RedirectResponse(f"/settings?{urlencode({'error': 'Le password non coincidono'})}",
+                                status_code=303)
+    set_setting("app_password", new)
+    logger.info("App password changed")
+    return RedirectResponse(f"/settings?{urlencode({'msg': 'Password aggiornata'})}",
                             status_code=303)
 
 

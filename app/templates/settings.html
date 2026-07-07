@@ -4,6 +4,24 @@
 
 <div class="page-head"><h1>Impostazioni</h1></div>
 {% if message %}<div class="alert ok">{{ message }}</div>{% endif %}
+{% if error %}<div class="alert error">{{ error }}</div>{% endif %}
+
+<section class="card">
+  <h3>Accesso</h3>
+  <p class="muted">Password per accedere all'app (login rapido, indipendente da Wahoo).
+    {% if not has_password %}Attualmente nessuna password: si accede solo via Wahoo.{% endif %}</p>
+  <form method="post" action="/settings/password" class="edit-form">
+    <label>Nuova password
+      <input type="password" name="new_password" autocomplete="new-password">
+    </label>
+    <label>Conferma
+      <input type="password" name="confirm" autocomplete="new-password">
+    </label>
+    <div class="edit-actions">
+      <button class="btn" type="submit">Aggiorna password</button>
+    </div>
+  </form>
+</section>
 
 <section class="card">
   <h3>Motore AI</h3>
