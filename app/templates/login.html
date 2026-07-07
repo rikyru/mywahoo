@@ -1,10 +1,21 @@
 {% extends "base.html" %}
-{% block title %}Accedi — MyWahoo{% endblock %}
+{% block title %}Accedi — {{ app_name }}{% endblock %}
 {% block content %}
 <div class="login-box">
-  <h1>MyWahoo</h1>
-  <p>Dashboard personale degli allenamenti Wahoo con parsing FIT e analisi AI.</p>
-  {% if error %}<div class="alert error">Accesso non riuscito ({{ error }}). Riprova.</div>{% endif %}
-  <a class="btn btn-wahoo" href="/login/wahoo">Accedi con Wahoo</a>
+  <h1>🏃 {{ app_name }}</h1>
+  <p class="muted">La tua dashboard di allenamenti e salute, self-hosted.
+    I tuoi dati restano tuoi.</p>
+  {% if error %}<div class="alert error">Accesso non riuscito. Riprova.</div>{% endif %}
+
+  {% if has_password %}
+  <form method="post" action="/login" class="login-form">
+    <input type="password" name="password" placeholder="Password" autofocus
+           autocomplete="current-password">
+    <button class="btn" type="submit">Accedi</button>
+  </form>
+  <p class="muted" style="margin-top:1.2rem">oppure</p>
+  {% endif %}
+
+  <a class="btn {% if has_password %}btn-secondary{% endif %} btn-wahoo" href="/login/wahoo">Accedi con Wahoo</a>
 </div>
 {% endblock %}

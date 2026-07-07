@@ -134,6 +134,11 @@ table.metrics td:first-child { color: var(--muted); }
 .login-box { max-width: 420px; margin: 14vh auto; background: var(--card);
              border: 1px solid var(--border); border-radius: 16px; padding: 2.2rem;
              text-align: center; box-shadow: var(--shadow); }
+.login-form { display: flex; gap: .5rem; margin-top: 1.3rem; }
+.login-form input { flex: 1; padding: .6rem .75rem; background: var(--bg-elev);
+                    color: var(--text); border: 1px solid var(--border);
+                    border-radius: var(--radius-sm); font-size: .95rem; font-family: inherit; }
+.login-form input:focus { outline: 2px solid var(--accent-soft); border-color: var(--accent); }
 
 .ai-analysis { font-size: .95rem; }
 .ai-analysis h2 { font-size: 1.05rem; font-weight: 600; border-bottom: 1px solid var(--border);

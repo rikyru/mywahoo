@@ -25,14 +25,14 @@ from .db import (AiAnalysis, IgnoredImport, PeriodSummary, Workout, WorkoutStrea
 setup_logging()
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="MyWahoo", docs_url=None, redoc_url=None)
+app = FastAPI(title=settings.app_name, docs_url=None, redoc_url=None)
 
 # Signed session cookie. HttpOnly is always set by the middleware;
 # Secure only when the public URL is HTTPS (so local HTTP testing still works).
 app.add_middleware(
     SessionMiddleware,
     secret_key=settings.app_secret_key or "dev-only-insecure",
-    session_cookie="mywahoo_session",
+    session_cookie="ofit_session",
     same_site="lax",
     https_only=settings.app_base_url.startswith("https://"),
     max_age=60 * 60 * 24 * 30,
@@ -49,14 +49,16 @@ def on_startup() -> None:
         logger.warning("Missing required env vars: %s — the app will not work correctly",
                        ", ".join(missing))
     init_db()
-    logger.info("MyWahoo started (provider=%s, model=%s, db=%s, fits=%s)",
-                settings.ai_provider, settings.ai_model, settings.db_path, settings.fit_dir)
+    logger.info("%s started (provider=%s, model=%s, db=%s, fits=%s)",
+                settings.app_name, settings.ai_provider, settings.ai_model,
+                settings.db_path, settings.fit_dir)
 
 
 # ---------------------------------------------------------------- helpers
 
 def require_auth(request: Request) -> None:
-    if not request.session.get("authed") or not wahoo.is_authenticated():
+    # App session only — Wahoo/Google are data sources, not the login gate
+    if not request.session.get("authed"):
         raise HTTPException(status_code=307, headers={"Location": "/login"})
 
 
@@ -78,6 +80,7 @@ def fmt_speed(w: Workout) -> str:
 
 templates.env.filters["duration"] = fmt_duration
 templates.env.globals["fmt_speed"] = fmt_speed
+templates.env.globals["app_name"] = settings.app_name
 
 
 # Movable analysis window for the dashboard
@@ -172,10 +175,21 @@ def build_chart_data(workouts: list[Workout]) -> dict:
 
 @app.get("/login", response_class=HTMLResponse)
 def login_page(request: Request):
-    if request.session.get("authed") and wahoo.is_authenticated():
+    if request.session.get("authed"):
         return RedirectResponse("/", status_code=303)
-    return templates.TemplateResponse(request, "login.html",
-                                      {"error": request.query_params.get("error")})
+    return templates.TemplateResponse(request, "login.html", {
+        "error": request.query_params.get("error"),
+        "has_password": bool(settings.app_password),
+    })
+
+
+@app.post("/login")
+def login_submit(request: Request, password: str = Form("")):
+    if settings.app_password and secrets.compare_digest(password, settings.app_password):
+        request.session["authed"] = True
+        return RedirectResponse("/", status_code=303)
+    logger.warning("Failed app-password login")
+    return RedirectResponse("/login?error=bad_password", status_code=303)
 
 
 @app.get("/login/wahoo")

@@ -89,7 +89,7 @@ with TestClient(app) as client:
     import itsdangerous
     signer = itsdangerous.TimestampSigner("test-secret")
     payload = base64.b64encode(jsonlib.dumps({"authed": True}).encode())
-    client.cookies.set("mywahoo_session", signer.sign(payload).decode())
+    client.cookies.set("ofit_session", signer.sign(payload).decode())
 
     r = client.get("/")
     assert r.status_code == 200 and "Giro test" in r.text and "km totali" in r.text

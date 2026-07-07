@@ -6,8 +6,8 @@ spostare codice + segreti + dati, cambiare dominio, ripuntare gli OAuth.
 ## 1. Porta il codice sul server
 
 ```bash
-git clone <repo> mywahoo        # oppure scp/rsync della cartella
-cd mywahoo
+git clone <repo> openfit        # oppure scp/rsync della cartella
+cd openfit
 ```
 
 ## 2. Porta i dati (per non perdere storico, stream FC e analisi AI)
@@ -15,16 +15,16 @@ cd mywahoo
 Sul **PC attuale** esporta il volume:
 
 ```bash
-docker run --rm -v mywahoo_data:/data -v "$PWD":/backup alpine \
-  tar czf /backup/mywahoo_data.tgz -C /data .
+docker run --rm -v openfit_data:/data -v "$PWD":/backup alpine \
+  tar czf /backup/openfit_data.tgz -C /data .
 ```
 
-Copia `mywahoo_data.tgz` sul server e ripristina:
+Copia `openfit_data.tgz` sul server e ripristina:
 
 ```bash
-docker volume create mywahoo_mywahoo_data
-docker run --rm -v mywahoo_mywahoo_data:/data -v "$PWD":/backup alpine \
-  tar xzf /backup/mywahoo_data.tgz -C /data
+docker volume create openfit_data
+docker run --rm -v openfit_data:/data -v "$PWD":/backup alpine \
+  tar xzf /backup/openfit_data.tgz -C /data
 ```
 
 > In alternativa parti pulito: **Sync** ri-scarica i workout da Wahoo e Google
@@ -45,7 +45,7 @@ Webhook token, client id/secret e `OPENAI_API_KEY` restano identici.
 ## 4. Avvio + instradamento (Cloudflare Tunnel)
 
 Sul macmini il tuo cloudflared instrada verso `http://192.168.1.124:<porta>`
-(come tutti gli altri servizi), quindi mywahoo pubblica la porta host **8090**
+(come tutti gli altri servizi), quindi openfit pubblica la porta host **8090**
 (libera). Avvia:
 
 ```bash
@@ -72,7 +72,7 @@ docker restart cloudflared
 
 > In alternativa, per coerenza col tuo setup, puoi aggiungere il servizio
 > `mywahoo` direttamente a `/home/rikyru/docker/docker-compose.yaml`
-> (`build: ../mywahoo`, `ports: ["8090:8080"]`, volume `mywahoo_data:/data`).
+> (`build: ../mywahoo`, `ports: ["8090:8080"]`, volume `openfit_data:/data`).
 
 ## 5. Ripunta gli OAuth sul nuovo dominio
 
@@ -93,5 +93,5 @@ Health** (i token sono legati al dominio: vanno rifatti i login una volta).
 
 ## Note
 - ngrok non serve più: il tunnel di casa sostituisce `espresso-limes-quilt`.
-- Backup: salva periodicamente il volume `mywahoo_data` (comando step 2).
+- Backup: salva periodicamente il volume `openfit_data` (comando step 2).
 - Token Google in modalità test = re-login ogni 7 giorni, invariato.
