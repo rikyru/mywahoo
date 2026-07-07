@@ -239,33 +239,49 @@ a.chip:hover { background: var(--card-hover); text-decoration: none; }
 ::-webkit-scrollbar-thumb { background: #2a3344; border-radius: 8px; border: 3px solid var(--bg); }
 ::-webkit-scrollbar-thumb:hover { background: #36425a; }
 
-/* ---------- mobile ---------- */
+/* ---------- mobile: roomier and more legible ---------- */
 @media (max-width: 640px) {
-  .container { padding: 1rem .8rem 2.4rem; }
-  h1 { font-size: 1.3rem; }
+  html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+  .container { padding: 1rem 1rem 2.6rem; }
+  h1 { font-size: 1.5rem; }
+  h3 { font-size: 1.15rem; }
 
-  .topbar { padding: .55rem .7rem; gap: .5rem; }
-  .topbar .brand { font-size: 1rem; }
+  .topbar { padding: .65rem .9rem; }
+  .topbar .brand { font-size: 1.1rem; }
   .topbar nav { flex-wrap: nowrap; overflow-x: auto; -webkit-overflow-scrolling: touch;
-                gap: .2rem; }
+                gap: .1rem; }
   .topbar nav::-webkit-scrollbar { display: none; }
-  .topbar nav a { padding: .35rem .55rem; font-size: .88rem; white-space: nowrap; }
+  .topbar nav a { padding: .5rem .65rem; font-size: .98rem; white-space: nowrap; }
 
-  .page-head { gap: .6rem; }
-  .sync-buttons { flex-wrap: wrap; gap: .4rem; }
-  .sync-buttons .btn, .sync-buttons label.btn { padding: .5rem .8rem; font-size: .88rem; }
+  .page-head { gap: .7rem; }
+  .sync-buttons { flex-wrap: wrap; gap: .5rem; }
+  .sync-buttons .btn, .sync-buttons label.btn { padding: .6rem 1rem; font-size: .98rem; }
 
-  .kpi-row { grid-template-columns: repeat(2, 1fr); gap: .6rem; }
-  .kpi { padding: .8rem .7rem; }
-  .kpi-value { font-size: 1.3rem; }
+  /* bigger, clearly readable KPI tiles */
+  .kpi-row { grid-template-columns: repeat(2, 1fr); gap: .7rem; margin: 1.2rem 0; }
+  .kpi { padding: 1.05rem .9rem; }
+  .kpi-value { font-size: 1.7rem; }
+  .kpi-label { font-size: .86rem; text-transform: none; letter-spacing: 0; }
 
-  .card { padding: .9rem 1rem; }
+  /* readable body text everywhere */
+  .muted, .filters label, .kpi-value small { font-size: .88rem; }
+  .card { padding: 1.1rem 1.1rem; }
   .card-head { flex-wrap: wrap; gap: .5rem; }
+  .card canvas { max-height: 300px; }
 
-  .window-bar { gap: .5rem .7rem; }
+  table.activities { font-size: 1rem; }
+  table.activities th { font-size: .8rem; }
+  table.activities td, table.metrics td { padding: .75rem .6rem; }
+  table.metrics { font-size: 1rem; }
+  .ai-analysis { font-size: 1.02rem; line-height: 1.6; }
+
+  .window-bar { gap: .6rem .8rem; }
+  .window-sizes, .window-nav { flex-wrap: wrap; }
   .window-sport { margin-left: 0; }
-  .window-label { min-width: 0; }
+  .window-label { min-width: 0; font-size: 1.02rem; }
+  .chip { padding: .5rem .8rem; font-size: .95rem; }
 
-  .chat-msg { max-width: 92%; }
+  .chat-msg { max-width: 92%; font-size: 1rem; }
+  .chat-input input, .login-form input, .edit-form input, .filters select { font-size: 1rem; }
   .filters { flex-wrap: wrap; }
 }

@@ -183,6 +183,7 @@
 Chart.defaults.color = "#8a97a9";
 Chart.defaults.borderColor = "rgba(255,255,255,.06)";
 Chart.defaults.font.family = "Inter, system-ui, sans-serif";
+if (window.innerWidth < 640) Chart.defaults.font.size = 13;
 function busy(btn) {
   setTimeout(() => { btn.disabled = true; btn.textContent = "Analisi in corso…"; }, 0);
 }
