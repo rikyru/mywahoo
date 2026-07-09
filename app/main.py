@@ -449,11 +449,13 @@ def conversation_delete(cid: int):
 # ---------------------------------------------------------------- routes (GPX)
 
 def _cycling_history() -> dict:
-    """Rider's cycling envelope (typical + max) to judge a route's feasibility."""
+    """Rider's cycling envelope (typical + max) to judge a route's feasibility.
+    Short rides (< 15 km, e.g. e-bike commutes auto-imported) are excluded so
+    they don't drag the 'typical' down and skew the comparison."""
     with Session(engine) as session:
         rides = [w for w in session.exec(select(Workout))
                  if any(k in (w.sport or "").lower() for k in ("cycl", "bik"))
-                 and (w.distance_m or 0) > 1000]
+                 and (w.distance_m or 0) >= 15000]
     if not rides:
         return {}
 
