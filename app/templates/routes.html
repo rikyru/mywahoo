@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}Percorsi — {{ app_name }}{% endblock %}
+{% block content %}
+
+<div class="page-head">
+  <h1>Percorsi</h1>
+  <form method="post" action="/routes/assess" enctype="multipart/form-data" class="sync-buttons">
+    <label class="btn" title="Carica un GPX (es. percorso pianificato su Komoot)">
+      Valuta un percorso (GPX)
+      <input type="file" name="file" accept=".gpx" hidden onchange="this.closest('form').submit()">
+    </label>
+  </form>
+</div>
+<p class="muted">Esporta il percorso pianificato da Komoot come <strong>GPX</strong> e caricalo:
+  l'AI valuta la fattibilità confrontandolo col tuo storico e con la forma attuale.</p>
+
+{% if error %}<div class="alert error">{{ error }}</div>{% endif %}
+
+{% if history %}
+<p class="muted">Il tuo tipico: ~{{ history.distanza_tipica_km }} km ·
+  {{ history.dislivello_tipico_m }} m dislivello ·
+  max {{ history.distanza_max_km }} km / {{ history.dislivello_max_m }} m
+  ({{ history.uscite_analizzate }} uscite).</p>
+{% else %}
+<div class="alert error">Nessuna uscita in bici nello storico: senza riferimenti il verdetto sarà generico.</div>
+{% endif %}
+
+{% if routes %}
+<section class="card">
+  <table class="activities">
+    <tbody>
+      {% for r in routes %}
+      <tr>
+        <td><a href="/routes/{{ r.id }}">{{ r.name }}</a></td>
+        <td>{{ "%.1f"|format(r.distance_km) }} km</td>
+        <td>{{ "%.0f"|format(r.ascent_m) }} m</td>
+        <td>{{ r.max_gradient and (("%.1f"|format(r.max_gradient)) ~ "% max") or "" }}</td>
+        <td class="muted">{{ r.created_at.strftime("%d/%m/%Y") }}</td>
+        <td class="row-actions">
+          <form method="post" action="/routes/{{ r.id }}/delete"
+                onsubmit="return confirm('Eliminare questo percorso?')">
+            <button type="submit" title="Elimina">🗑</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+{% endblock %}

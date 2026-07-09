@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block title %}{{ route.name }} — {{ app_name }}{% endblock %}
+{% block content %}
+
+<p><a href="/routes">&larr; Percorsi</a></p>
+<div class="page-head">
+  <h1>{{ route.name }}</h1>
+  <form method="post" action="/routes/{{ route.id }}/delete"
+        onsubmit="return confirm('Eliminare questo percorso?')">
+    <button class="btn btn-secondary" type="submit">Elimina</button>
+  </form>
+</div>
+
+<section class="kpi-row">
+  <div class="kpi"><span class="kpi-value">{{ "%.1f"|format(route.distance_km) }}</span><span class="kpi-label">km</span></div>
+  <div class="kpi"><span class="kpi-value">{{ "%.0f"|format(route.ascent_m) }}</span><span class="kpi-label">m dislivello</span></div>
+  {% if route.max_gradient %}<div class="kpi"><span class="kpi-value">{{ "%.1f"|format(route.max_gradient) }}%</span><span class="kpi-label">pendenza max</span></div>{% endif %}
+</section>
+
+{% if profile_json != '[]' %}
+<section class="card"><h3>Profilo altimetrico</h3><canvas id="profileChart" height="90"></canvas></section>
+{% endif %}
+
+<section class="card">
+  <h3>Verdetto AI</h3>
+  <p class="muted">Generato il {{ route.created_at.strftime("%d/%m/%Y %H:%M") }}</p>
+  <div class="ai-analysis">{{ verdict_html | safe }}</div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+{% if profile_json != '[]' %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<script>
+Chart.defaults.color = "#8a97a9";
+Chart.defaults.borderColor = "rgba(255,255,255,.06)";
+Chart.defaults.font.family = "Inter, system-ui, sans-serif";
+const prof = {{ profile_json | safe }};
+new Chart(document.getElementById("profileChart"), {
+  type: "line",
+  data: { labels: prof.map(p => p[0]),
+          datasets: [{ data: prof.map(p => p[1]), borderColor: "#8a7350",
+                       backgroundColor: "rgba(138,115,80,.25)", fill: true,
+                       pointRadius: 0, borderWidth: 1.4, tension: .2 }] },
+  options: { plugins: { legend: { display: false },
+             tooltip: { callbacks: { title: c => c[0].label + " km",
+                                     label: c => c.raw + " m" } } },
+             scales: { x: { title: { display: true, text: "km" }, ticks: { maxTicksLimit: 10 } },
+                       y: { title: { display: true, text: "quota (m)" } } },
+             animation: false, responsive: true },
+});
+</script>
+{% endif %}
+{% endblock %}

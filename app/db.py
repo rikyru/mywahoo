@@ -31,6 +31,18 @@ class AppSetting(SQLModel, table=True):
     value: str = ""
 
 
+class RouteAssessment(SQLModel, table=True):
+    """A planned route (GPX, e.g. from Komoot) with its AI feasibility verdict."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    name: str = ""
+    distance_km: float = 0.0
+    ascent_m: float = 0.0
+    max_gradient: Optional[float] = None
+    content: str = ""          # AI verdict (markdown)
+    profile_json: str = "[]"   # elevation profile for the chart
+    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+
+
 class Conversation(SQLModel, table=True):
     """A saved AI chat thread (e.g. a training-plan request) to review later."""
     id: Optional[int] = Field(default=None, primary_key=True)

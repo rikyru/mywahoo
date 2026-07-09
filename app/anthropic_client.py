@@ -205,6 +205,33 @@ async def analyze_workout(summary_row: dict, stream_stats: dict) -> str:
     return await _call_claude(SESSION_SYSTEM_PROMPT, body)
 
 
+ROUTE_SYSTEM_PROMPT = """\
+Sei un allenatore di ciclismo. Devi valutare la FATTIBILITÀ di un percorso
+pianificato per QUESTO ciclista, dato: i dati del percorso (distanza, dislivello,
+pendenza massima, % di strada oltre 6%/10%, salita più lunga), il suo STORICO
+di uscite (distanza/dislivello tipici e massimi, dislivello per km, potenza) e,
+se presente, la FORMA attuale (indice 0-100). Rispondi in italiano, Markdown,
+conciso, in questo formato:
+
+**Verdetto:** una tra "✅ Fattibile", "🟡 Fattibile con fatica", "🔴 Impegnativo".
+
+Poi 3-5 bullet di motivazione QUANTITATIVA che confrontano il percorso col suo
+solito (es. "48 km ok (tipico 45), ma 750 m di dislivello = 2.5× il tuo tipico
+300 m"), citando la pendenza massima del percorso e la salita più lunga. Infine
+una riga **Consiglio** pratica (gestione ritmo/salite, quando farlo dato il
+recupero). Sii onesto: se è ben oltre il suo solito, dillo. Non inventare dati
+mancanti."""
+
+
+async def assess_route(route: dict, history: dict, form: dict | None) -> str:
+    payload = {"percorso": route, "storico_ciclismo": history}
+    if form:
+        payload["forma_attuale"] = form
+    return await _call_claude(
+        ROUTE_SYSTEM_PROMPT,
+        json.dumps(payload, ensure_ascii=False, indent=1, default=str))
+
+
 async def summarize_period(period_label: str, workouts: list[dict]) -> str:
     body = (f"Periodo: {period_label}\n"
             f"Numero sessioni: {len(workouts)}\n\n"
