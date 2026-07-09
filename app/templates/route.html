@@ -17,18 +17,29 @@
   {% if route.max_gradient %}<div class="kpi"><span class="kpi-value">{{ "%.1f"|format(route.max_gradient) }}%</span><span class="kpi-label">pendenza max</span></div>{% endif %}
 </section>
 
+{% if error %}<div class="alert error">{{ error }}</div>{% endif %}
+
 {% if profile_json != '[]' %}
 <section class="card"><h3>Profilo altimetrico</h3><canvas id="profileChart" height="90"></canvas></section>
 {% endif %}
 
 <section class="card">
-  <h3>Verdetto AI</h3>
-  <p class="muted">Generato il {{ route.created_at.strftime("%d/%m/%Y %H:%M") }}</p>
+  <div class="card-head">
+    <h3>Verdetto AI</h3>
+    <form method="post" action="/routes/{{ route.id }}/regenerate">
+      <button class="btn btn-secondary" type="submit" onclick="busy(this)"
+              title="Rivaluta lo stesso percorso con la tua forma di oggi">Rigenera</button>
+    </form>
+  </div>
+  <p class="muted">Valutato il {{ route.created_at.strftime("%d/%m/%Y %H:%M") }} · Rigenera per aggiornare in base alla forma attuale</p>
   <div class="ai-analysis">{{ verdict_html | safe }}</div>
 </section>
 {% endblock %}
 
 {% block scripts %}
+<script>
+function busy(btn) { setTimeout(() => { btn.disabled = true; btn.textContent = "Rivalutazione…"; }, 0); }
+</script>
 {% if profile_json != '[]' %}
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
 <script>

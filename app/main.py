@@ -491,6 +491,17 @@ def routes_list(request: Request):
     })
 
 
+async def _current_form():
+    """Current readiness index (best-effort; needs Google Health)."""
+    if google_health.is_authenticated():
+        try:
+            overview = await google_health.fetch_health_overview()
+            return overview.get("score")
+        except google_health.GoogleHealthError:
+            return None
+    return None
+
+
 @app.post("/routes/assess", dependencies=[Depends(require_auth)])
 async def route_assess(file: UploadFile = File(...), name: str = Form("")):
     data = await file.read()
@@ -502,13 +513,7 @@ async def route_assess(file: UploadFile = File(...), name: str = Form("")):
         return RedirectResponse(f"/routes?{urlencode({'error': str(e)})}", status_code=303)
 
     history = _cycling_history()
-    form = None  # current readiness, best-effort (needs Google Health)
-    if google_health.is_authenticated():
-        try:
-            overview = await google_health.fetch_health_overview()
-            form = overview.get("score")
-        except google_health.GoogleHealthError:
-            pass
+    form = await _current_form()
     try:
         verdict = await anthropic_client.assess_route(route, history, form)
     except anthropic_client.AnthropicError as e:
@@ -519,11 +524,36 @@ async def route_assess(file: UploadFile = File(...), name: str = Form("")):
             name=name.strip() or os.path.splitext(file.filename or "")[0] or "Percorso",
             distance_km=route["distance_km"], ascent_m=route.get("ascent_m") or 0,
             max_gradient=route.get("max_gradient_pct"), content=verdict,
-            profile_json=json.dumps(route.get("profile") or []))
+            profile_json=json.dumps(route.get("profile") or []),
+            route_json=json.dumps(route))
         session.add(ra)
         session.commit()
         session.refresh(ra)
         rid = ra.id
+    return RedirectResponse(f"/routes/{rid}", status_code=303)
+
+
+@app.post("/routes/{rid}/regenerate", dependencies=[Depends(require_auth)])
+async def route_regenerate(rid: int):
+    """Re-assess the same route against the CURRENT form/history (days later)."""
+    with Session(engine) as session:
+        ra = session.get(RouteAssessment, rid)
+        if not ra:
+            raise HTTPException(404)
+        route = json.loads(ra.route_json or "{}")
+    if not route:
+        return RedirectResponse(f"/routes/{rid}?{urlencode({'error': 'Dati percorso non disponibili (ricarica il GPX)'})}",
+                                status_code=303)
+    try:
+        verdict = await anthropic_client.assess_route(route, _cycling_history(), await _current_form())
+    except anthropic_client.AnthropicError as e:
+        return RedirectResponse(f"/routes/{rid}?{urlencode({'error': str(e)})}", status_code=303)
+    with Session(engine) as session:
+        ra = session.get(RouteAssessment, rid)
+        ra.content = verdict
+        ra.created_at = datetime.utcnow()  # "valutato il" = ultima valutazione
+        session.add(ra)
+        session.commit()
     return RedirectResponse(f"/routes/{rid}", status_code=303)
 
 
@@ -537,6 +567,7 @@ def route_view(request: Request, rid: int):
         "route": ra,
         "verdict_html": md.markdown(ra.content, extensions=["tables"]),
         "profile_json": ra.profile_json,
+        "error": request.query_params.get("error"),
     })
 
 

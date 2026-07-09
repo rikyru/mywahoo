@@ -40,6 +40,7 @@ class RouteAssessment(SQLModel, table=True):
     max_gradient: Optional[float] = None
     content: str = ""          # AI verdict (markdown)
     profile_json: str = "[]"   # elevation profile for the chart
+    route_json: str = "{}"     # full parsed route summary (to re-assess later)
     created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
 
 
@@ -161,6 +162,25 @@ engine = create_engine(
 
 def init_db() -> None:
     SQLModel.metadata.create_all(engine)
+    _migrate()
+
+
+# Additive column migrations (create_all does NOT add columns to existing tables)
+_MIGRATIONS = {
+    "routeassessment": [("route_json", "TEXT DEFAULT '{}'")],
+}
+
+
+def _migrate() -> None:
+    with engine.connect() as conn:
+        for table, cols in _MIGRATIONS.items():
+            existing = {r[1] for r in conn.exec_driver_sql(f"PRAGMA table_info({table})")}
+            if not existing:
+                continue  # table not created yet (nothing to migrate)
+            for name, decl in cols:
+                if name not in existing:
+                    conn.exec_driver_sql(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
+        conn.commit()
 
 
 def get_session():
