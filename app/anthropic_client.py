@@ -232,6 +232,30 @@ async def assess_route(route: dict, history: dict, form: dict | None) -> str:
         json.dumps(payload, ensure_ascii=False, indent=1, default=str))
 
 
+FORM_SYSTEM_PROMPT = """\
+Sei un allenatore di endurance. Ti vengono forniti gli indicatori del modello di
+carico dell'atleta: CTL (fitness, carico cronico), ATL (affaticamento, carico
+acuto), TSB (forma/freschezza = CTL-ATL), con andamento negli ultimi mesi e la
+variazione della CTL. Spiega in italiano, Markdown, conciso:
+
+## Andamento fitness
+## Carico e recupero
+## Cosa farei ora
+
+Dì chiaramente se la fitness sta MIGLIORANDO, è stabile o in CALO (dalla CTL), se
+c'è affaticamento accumulato (TSB molto negativo) o se sei fresco (TSB positivo),
+e dai 2-3 indicazioni pratiche (costruire / mantenere / scaricare). Interpreta i
+numeri, sii concreto; ricorda che il carico è stimato dalla FC (TRIMP), quindi
+conta il trend più del valore assoluto. Non inventare dati mancanti."""
+
+
+async def summarize_form(summary: dict, recent_weeks: list[dict]) -> str:
+    payload = {"stato_attuale": summary, "ultime_settimane": recent_weeks}
+    return await _call_claude(
+        FORM_SYSTEM_PROMPT,
+        json.dumps(payload, ensure_ascii=False, indent=1, default=str))
+
+
 async def summarize_period(period_label: str, workouts: list[dict]) -> str:
     body = (f"Periodo: {period_label}\n"
             f"Numero sessioni: {len(workouts)}\n\n"

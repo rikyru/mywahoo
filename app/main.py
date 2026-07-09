@@ -17,7 +17,8 @@ from fastapi.templating import Jinja2Templates
 from sqlmodel import Session, select
 from starlette.middleware.sessions import SessionMiddleware
 
-from . import anthropic_client, fit as fitmod, google_health, gpx as gpxmod, nutrition, wahoo
+from . import (anthropic_client, fit as fitmod, form as formmod, google_health,
+               gpx as gpxmod, nutrition, wahoo)
 from .config import settings, setup_logging
 from .db import (AiAnalysis, ChatMessage, Conversation, IgnoredImport, PeriodSummary,
                  RouteAssessment, Workout, WorkoutStream, engine, get_setting, init_db,
@@ -579,6 +580,72 @@ def route_delete(rid: int):
             session.delete(ra)
             session.commit()
     return RedirectResponse("/routes", status_code=303)
+
+
+# ---------------------------------------------------------------- form timeline
+
+FORM_MONTHS = {"3": 3, "6": 6, "12": 12, "all": None}
+
+
+def _fitness_series() -> tuple[list, dict]:
+    """Full CTL/ATL/TSB series over all history + current-state summary."""
+    with Session(engine) as session:
+        ws = list(session.exec(select(Workout).order_by(Workout.start_date)))
+    max_hr = max([w.max_hr for w in ws if w.max_hr] + [190])
+    items = [(w.start_date.date(), w.avg_hr, (w.moving_s or 0) / 60) for w in ws]
+    series = formmod.fitness_series(items, rest_hr=55, max_hr=max_hr)
+    return series, formmod.summarize(series)
+
+
+@app.get("/form", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
+def form_page(request: Request, months: str = "6"):
+    if months not in FORM_MONTHS:
+        months = "6"
+    series, summary = _fitness_series()
+    shown = series
+    if FORM_MONTHS[months] and series:
+        cutoff = (date.today() - timedelta(days=FORM_MONTHS[months] * 30)).isoformat()
+        shown = [p for p in series if p["date"] >= cutoff]
+    with Session(engine) as session:
+        insight = session.get(PeriodSummary, f"form:{date.today().isoformat()}")
+    return templates.TemplateResponse(request, "form.html", {
+        "months": months, "windows": FORM_MONTHS, "summary": summary,
+        "series_json": json.dumps(shown),
+        "insight_html": md.markdown(insight.content, extensions=["tables"]) if insight else None,
+        "insight_date": insight.created_at if insight else None,
+        "error": request.query_params.get("error"),
+    })
+
+
+@app.post("/form/insight", dependencies=[Depends(require_auth)])
+async def form_insight(regenerate: str = Form(default="")):
+    key = f"form:{date.today().isoformat()}"
+    with Session(engine) as session:
+        cached = session.get(PeriodSummary, key)
+    if cached and not regenerate:
+        return RedirectResponse("/form", status_code=303)
+    series, summary = _fitness_series()
+    if not summary:
+        return RedirectResponse(f"/form?{urlencode({'error': 'Non ci sono abbastanza attività'})}",
+                                status_code=303)
+    # weekly-sampled last ~12 weeks for the AI (compact)
+    recent = series[-84:][::7]
+    try:
+        content = await anthropic_client.summarize_form(summary, recent)
+    except anthropic_client.AnthropicError as e:
+        return RedirectResponse(f"/form?{urlencode({'error': str(e)})}", status_code=303)
+    with Session(engine) as session:
+        existing = session.get(PeriodSummary, key)
+        if existing:
+            existing.content = content
+            existing.model = anthropic_client.effective_model()
+            existing.created_at = datetime.utcnow()
+            session.add(existing)
+        else:
+            session.add(PeriodSummary(key=key, content=content,
+                                      model=anthropic_client.effective_model()))
+        session.commit()
+    return RedirectResponse("/form", status_code=303)
 
 
 @app.get("/settings", response_class=HTMLResponse, dependencies=[Depends(require_auth)])

@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+{% block title %}Forma — {{ app_name }}{% endblock %}
+{% block content %}
+
+<div class="page-head">
+  <h1>Forma nel tempo</h1>
+  <span class="muted">carico e recupero · CTL / ATL / TSB</span>
+</div>
+
+<div class="window-bar">
+  <div class="window-sizes">
+    {% for m, lbl in [("3","3 mesi"),("6","6 mesi"),("12","1 anno"),("all","Tutto")] %}
+    <a class="chip {% if months == m %}chip-on{% endif %}" href="/form?months={{ m }}">{{ lbl }}</a>
+    {% endfor %}
+  </div>
+</div>
+
+{% if error %}<div class="alert error">{{ error }}</div>{% endif %}
+
+{% if not summary %}
+<div class="card"><p class="muted">Non ci sono ancora abbastanza attività per calcolare la forma.</p></div>
+{% else %}
+
+<section class="kpi-row">
+  <div class="kpi">
+    <span class="kpi-value">{{ summary.ctl }}</span>
+    <span class="kpi-label">Fitness (CTL)</span>
+    <span class="trend {{ 'good' if summary.delta_pct > 5 else ('bad' if summary.delta_pct < -5 else 'neutral') }}">
+      {{ '▲' if summary.delta_pct > 0 else ('▼' if summary.delta_pct < 0 else '') }} {{ summary.delta_pct }}% · {{ summary.trend }}</span>
+  </div>
+  <div class="kpi"><span class="kpi-value">{{ summary.atl }}</span><span class="kpi-label">Affaticamento (ATL)</span></div>
+  <div class="kpi">
+    <span class="kpi-value">{{ summary.tsb }}</span>
+    <span class="kpi-label">Forma (TSB)</span>
+    <span class="trend {{ 'good' if summary.tsb > 5 else ('bad' if summary.tsb < -20 else 'neutral') }}">{{ summary.state }}</span>
+  </div>
+</section>
+
+<section class="card">
+  <h3>Andamento</h3>
+  <canvas id="formChart" height="120"></canvas>
+  <p class="muted"><strong>CTL</strong> = fitness (sale se ti alleni con costanza) ·
+    <strong>ATL</strong> = affaticamento recente · <strong>TSB</strong> = freschezza
+    (positivo = scarico/fresco, molto negativo = affaticato). Carico stimato dalla FC.</p>
+</section>
+
+<section class="card">
+  <div class="card-head">
+    <h3>Commento AI</h3>
+    <form method="post" action="/form/insight">
+      {% if insight_html %}
+      <input type="hidden" name="regenerate" value="1">
+      <button class="btn btn-secondary" type="submit" onclick="busy(this)">Rigenera</button>
+      {% else %}
+      <button class="btn" type="submit" onclick="busy(this)">Analizza l'andamento</button>
+      {% endif %}
+    </form>
+  </div>
+  {% if insight_html %}
+  <p class="muted">Generato il {{ insight_date.strftime("%d/%m/%Y %H:%M") }}</p>
+  <div class="ai-analysis">{{ insight_html | safe }}</div>
+  {% else %}
+  <p class="muted">Fatti spiegare se stai migliorando, se sei affaticato e cosa fare ora.</p>
+  {% endif %}
+</section>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>function busy(btn){setTimeout(()=>{btn.disabled=true;btn.textContent="Analisi…";},0);}</script>
+{% if summary %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<script>
+Chart.defaults.color = "#8a97a9";
+Chart.defaults.borderColor = "rgba(255,255,255,.06)";
+Chart.defaults.font.family = "Inter, system-ui, sans-serif";
+if (window.innerWidth < 640) Chart.defaults.font.size = 13;
+const S = {{ series_json | safe }};
+new Chart(document.getElementById("formChart"), {
+  type: "line",
+  data: { labels: S.map(p => p.date.slice(0, 7)),
+    datasets: [
+      { label: "Fitness (CTL)", data: S.map(p => p.ctl), borderColor: "#4c8dff",
+        backgroundColor: "rgba(76,141,255,.15)", fill: true, pointRadius: 0, borderWidth: 2, tension: .2 },
+      { label: "Affaticamento (ATL)", data: S.map(p => p.atl), borderColor: "#e08a1e",
+        pointRadius: 0, borderWidth: 1.4, tension: .2 },
+      { label: "Forma (TSB)", data: S.map(p => p.tsb), borderColor: "#34d399",
+        pointRadius: 0, borderWidth: 1.4, tension: .2 },
+    ] },
+  options: { plugins: { legend: { position: "bottom" } },
+    scales: { x: { ticks: { maxTicksLimit: 10, callback: function(v,i){ const d=S[i]?S[i].date:''; return d.slice(0,7);} } } },
+    animation: false, responsive: true },
+});
+</script>
+{% endif %}
+{% endblock %}
