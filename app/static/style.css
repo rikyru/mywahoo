@@ -193,6 +193,11 @@ a.chip:hover { background: var(--card-hover); text-decoration: none; }
              border-bottom-right-radius: 3px; }
 .chat-assistant { align-self: flex-start; background: var(--bg-elev);
                   border: 1px solid var(--border); border-bottom-left-radius: 3px; }
+/* saved conversation review: full-width bubbles, no height cap */
+.chat-thread { display: flex; flex-direction: column; gap: .7rem; }
+.chat-thread .chat-msg { max-width: 100%; }
+.chat-thread .chat-user { max-width: 85%; }
+.chat-thread .ai-analysis { font-size: .95rem; }
 .chat-input { display: flex; gap: .5rem; }
 .chat-input input { flex: 1; padding: .6rem .75rem; background: var(--bg-elev);
                     color: var(--text); border: 1px solid var(--border);

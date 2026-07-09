@@ -152,11 +152,18 @@
 
   {# ---- chat assistant ---- #}
   <section class="card">
-    <h3>Chiedi all'assistente</h3>
-    <p class="muted">Domande sui tuoi dati del periodo selezionato (recupero, sonno, allenamenti).</p>
+    <div class="card-head">
+      <h3>Chiedi all'assistente</h3>
+      <div class="sync-buttons">
+        <button class="btn btn-secondary" type="button" id="chatNew">Nuova</button>
+        <a class="btn btn-secondary" href="/conversations">Salvate</a>
+      </div>
+    </div>
+    <p class="muted">Domande sui tuoi dati del periodo (recupero, sonno, allenamenti, alimentazione).
+      Ogni conversazione viene <strong>salvata</strong> — es. chiedi un piano di allenamento e lo rivedi in «Salvate».</p>
     <div id="chatLog" class="chat-log"></div>
     <form id="chatForm" class="chat-input">
-      <input type="text" id="chatMsg" placeholder="Es. come sto recuperando questa settimana?" autocomplete="off">
+      <input type="text" id="chatMsg" placeholder="Es. fammi un piano di allenamento per la prossima settimana" autocomplete="off">
       <button class="btn" type="submit">Invia</button>
     </form>
   </section>
@@ -198,7 +205,7 @@ const CHAT_WIN = { win: "{{ window.win }}", end: "{{ window.end_d | default('') 
 const chatLog = document.getElementById("chatLog");
 const chatForm = document.getElementById("chatForm");
 const chatMsg = document.getElementById("chatMsg");
-const chatHistory = [];
+let conversationId = null;   // server assigns one on the first message
 function addBubble(role, text) {
   const div = document.createElement("div");
   div.className = "chat-msg chat-" + role;
@@ -207,24 +214,28 @@ function addBubble(role, text) {
   chatLog.scrollTop = chatLog.scrollHeight;
   return div;
 }
+document.getElementById("chatNew").addEventListener("click", () => {
+  conversationId = null;
+  chatLog.innerHTML = "";
+  chatMsg.focus();
+});
 chatForm.addEventListener("submit", async (e) => {
   e.preventDefault();
   const text = chatMsg.value.trim();
   if (!text) return;
   chatMsg.value = "";
   addBubble("user", text);
-  chatHistory.push({ role: "user", content: text });
   const thinking = addBubble("assistant", "…");
   chatMsg.disabled = true;
   try {
     const r = await fetch("/health/chat", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ messages: chatHistory, ...CHAT_WIN }),
+      body: JSON.stringify({ message: text, conversation_id: conversationId, ...CHAT_WIN }),
     });
     const data = await r.json();
     if (data.reply) {
       thinking.textContent = data.reply;
-      chatHistory.push({ role: "assistant", content: data.reply });
+      conversationId = data.conversation_id;
     } else {
       thinking.textContent = "⚠️ " + (data.error || "errore");
     }

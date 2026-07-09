@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}Conversazioni — {{ app_name }}{% endblock %}
+{% block content %}
+
+<div class="page-head">
+  <h1>Conversazioni AI</h1>
+  <a class="btn" href="/health">Nuova domanda</a>
+</div>
+<p class="muted">Le chat con l'assistente vengono salvate qui: piani, consigli e
+risposte da rivedere quando vuoi.</p>
+
+{% if not convs %}
+<div class="card"><p class="muted">Nessuna conversazione ancora. Vai su
+  <a href="/health">Salute</a> e chiedi qualcosa all'assistente (es. un piano di allenamento).</p></div>
+{% else %}
+<section class="card">
+  <table class="activities">
+    <tbody>
+      {% for c in convs %}
+      <tr>
+        <td><a href="/conversations/{{ c.id }}">{{ c.title or "Conversazione" }}</a></td>
+        <td class="muted">{{ counts[c.id] }} messagg{{ 'io' if counts[c.id] == 1 else 'i' }}</td>
+        <td class="muted">{{ c.updated_at.strftime("%d/%m/%Y %H:%M") }}</td>
+        <td class="row-actions">
+          <form method="post" action="/conversations/{{ c.id }}/delete"
+                onsubmit="return confirm('Eliminare questa conversazione?')">
+            <button type="submit" title="Elimina">🗑</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}{{ conv.title or "Conversazione" }} — {{ app_name }}{% endblock %}
+{% block content %}
+
+<p><a href="/conversations">&larr; Conversazioni</a></p>
+<div class="page-head">
+  <h1>{{ conv.title or "Conversazione" }}</h1>
+  <form method="post" action="/conversations/{{ conv.id }}/delete"
+        onsubmit="return confirm('Eliminare questa conversazione?')">
+    <button class="btn btn-secondary" type="submit">Elimina</button>
+  </form>
+</div>
+<p class="muted">{{ conv.created_at.strftime("%d/%m/%Y %H:%M") }}</p>
+
+<section class="card chat-thread">
+  {% for m in messages %}
+  <div class="chat-msg chat-{{ m.role }}">
+    {% if m.html %}<div class="ai-analysis">{{ m.html | safe }}</div>{% else %}{{ m.content }}{% endif %}
+  </div>
+  {% endfor %}
+</section>
+
+<p><a class="btn" href="/health">Continua a chiedere</a></p>
+{% endblock %}

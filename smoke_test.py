@@ -58,9 +58,10 @@ with TestClient(app) as client:
     print("webhook accepts valid token OK")
 
     # --- seed data and render pages ---
-    from datetime import datetime
+    from datetime import datetime, timedelta
     from sqlmodel import Session
     from app.db import AiAnalysis, WahooToken, Workout, WorkoutStream, engine, pack_streams
+    recent = datetime.utcnow() - timedelta(days=3)  # within the default dashboard window
 
     streams = {
         "t": list(range(0, 3600, 2)),
@@ -75,7 +76,7 @@ with TestClient(app) as client:
         s.add(WahooToken(id=1, user_id=1, user_name="Test", access_token="t",
                          refresh_token="r", expires_at=9999999999))
         s.add(Workout(id=7, name="Giro test", sport="Biking",
-                      start_date=datetime(2026, 6, 9, 7, 0),
+                      start_date=recent,
                       duration_s=3700, moving_s=3600, distance_m=30000,
                       ascent_m=420, avg_speed_ms=8.3, max_speed_ms=15.1,
                       avg_hr=148, max_hr=171, avg_power=210, max_power=520,

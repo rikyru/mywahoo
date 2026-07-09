@@ -31,6 +31,23 @@ class AppSetting(SQLModel, table=True):
     value: str = ""
 
 
+class Conversation(SQLModel, table=True):
+    """A saved AI chat thread (e.g. a training-plan request) to review later."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    title: str = ""
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+
+
+class ChatMessage(SQLModel, table=True):
+    """One message (user or assistant) within a Conversation."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    conversation_id: int = Field(index=True, foreign_key="conversation.id")
+    role: str  # "user" | "assistant"
+    content: str
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
 def get_setting(key: str, default: str = "") -> str:
     with Session(engine) as session:
         row = session.get(AppSetting, key)

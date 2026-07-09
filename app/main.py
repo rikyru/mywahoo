@@ -19,8 +19,8 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from . import anthropic_client, fit as fitmod, google_health, nutrition, wahoo
 from .config import settings, setup_logging
-from .db import (AiAnalysis, IgnoredImport, PeriodSummary, Workout, WorkoutStream,
-                 engine, get_setting, init_db, set_setting)
+from .db import (AiAnalysis, ChatMessage, Conversation, IgnoredImport, PeriodSummary,
+                 Workout, WorkoutStream, engine, get_setting, init_db, set_setting)
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -352,26 +352,40 @@ async def health_insight(request: Request, regenerate: str = Form(default=""),
 
 @app.post("/health/chat", dependencies=[Depends(require_auth)])
 async def health_chat(request: Request):
-    """Grounded chat: answers follow-up questions using the window's health data
-    and activities. Stateless — the client sends the whole short history."""
+    """Grounded assistant, persisted: answers using the window's health data,
+    activities and nutrition. The thread is saved (Conversation) to review later.
+    Client sends {message, conversation_id?, win/end/from/to}."""
     try:
         body = await request.json()
     except json.JSONDecodeError:
         return JSONResponse({"error": "richiesta non valida"}, status_code=400)
-    history = body.get("messages") or []
-    # keep it small and well-formed
-    history = [{"role": m.get("role"), "content": str(m.get("content", ""))[:2000]}
-               for m in history if m.get("role") in ("user", "assistant") and m.get("content")][-12:]
-    if not history or history[-1]["role"] != "user":
+    msg = str(body.get("message", "")).strip()[:2000]
+    if not msg:
         return JSONResponse({"error": "nessuna domanda"}, status_code=400)
+
+    # load or create the conversation, gather prior turns as context
+    conv_id = body.get("conversation_id")
+    with Session(engine) as session:
+        conv = session.get(Conversation, conv_id) if conv_id else None
+        if conv is None:
+            conv = Conversation(title=msg[:60])
+            session.add(conv)
+            session.commit()
+            session.refresh(conv)
+        conv_id = conv.id
+        prior = list(session.exec(select(ChatMessage)
+                                  .where(ChatMessage.conversation_id == conv_id)
+                                  .order_by(ChatMessage.created_at)))
+    history = ([{"role": m.role, "content": m.content} for m in prior]
+               + [{"role": "user", "content": msg}])[-12:]
 
     window = resolve_window(body.get("win", "30"), body.get("end", ""),
                             body.get("from", ""), body.get("to", ""))
-    try:
+    try:  # health data is best-effort: the assistant still works without it
         data = await google_health.fetch_health_overview(window["start"].date(),
                                                          window["end"].date())
-    except google_health.GoogleHealthError as e:
-        return JSONResponse({"error": str(e)}, status_code=502)
+    except google_health.GoogleHealthError:
+        data = {"metrics": {}, "body": {}, "sleep": [], "score": None}
     with Session(engine) as session:
         workouts = [w.model_dump(exclude={"raw_summary", "fit_path", "updated_at"})
                     for w in query_range(session, window["start"], window["end"], None)]
@@ -380,7 +394,55 @@ async def health_chat(request: Request):
         reply = await anthropic_client.chat_health(data, workouts, history, nutri)
     except anthropic_client.AnthropicError as e:
         return JSONResponse({"error": str(e)}, status_code=502)
-    return JSONResponse({"reply": reply})
+
+    with Session(engine) as session:
+        session.add(ChatMessage(conversation_id=conv_id, role="user", content=msg))
+        session.add(ChatMessage(conversation_id=conv_id, role="assistant", content=reply))
+        c = session.get(Conversation, conv_id)
+        c.updated_at = datetime.utcnow()
+        session.add(c)
+        session.commit()
+    return JSONResponse({"reply": reply, "conversation_id": conv_id})
+
+
+@app.get("/conversations", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
+def conversations_list(request: Request):
+    with Session(engine) as session:
+        convs = list(session.exec(select(Conversation)
+                                  .order_by(Conversation.updated_at.desc())))
+        counts = {c.id: len(list(session.exec(select(ChatMessage)
+                  .where(ChatMessage.conversation_id == c.id)))) for c in convs}
+    return templates.TemplateResponse(request, "conversations.html",
+                                      {"convs": convs, "counts": counts})
+
+
+@app.get("/conversations/{cid}", response_class=HTMLResponse,
+         dependencies=[Depends(require_auth)])
+def conversation_view(request: Request, cid: int):
+    with Session(engine) as session:
+        conv = session.get(Conversation, cid)
+        if not conv:
+            raise HTTPException(404)
+        msgs = list(session.exec(select(ChatMessage)
+                    .where(ChatMessage.conversation_id == cid)
+                    .order_by(ChatMessage.created_at)))
+    rendered = [{"role": m.role, "created_at": m.created_at,
+                 "html": md.markdown(m.content, extensions=["tables"]) if m.role == "assistant"
+                 else None, "content": m.content} for m in msgs]
+    return templates.TemplateResponse(request, "conversation.html",
+                                      {"conv": conv, "messages": rendered})
+
+
+@app.post("/conversations/{cid}/delete", dependencies=[Depends(require_auth)])
+def conversation_delete(cid: int):
+    with Session(engine) as session:
+        for m in session.exec(select(ChatMessage).where(ChatMessage.conversation_id == cid)):
+            session.delete(m)
+        conv = session.get(Conversation, cid)
+        if conv:
+            session.delete(conv)
+        session.commit()
+    return RedirectResponse("/conversations", status_code=303)
 
 
 @app.get("/settings", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
