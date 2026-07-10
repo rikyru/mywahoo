@@ -35,6 +35,7 @@ class RouteAssessment(SQLModel, table=True):
     """A planned route (GPX, e.g. from Komoot) with its AI feasibility verdict."""
     id: Optional[int] = Field(default=None, primary_key=True)
     name: str = ""
+    sport: str = "Bici"        # Bici | Escursione | Corsa
     distance_km: float = 0.0
     ascent_m: float = 0.0
     max_gradient: Optional[float] = None
@@ -167,7 +168,8 @@ def init_db() -> None:
 
 # Additive column migrations (create_all does NOT add columns to existing tables)
 _MIGRATIONS = {
-    "routeassessment": [("route_json", "TEXT DEFAULT '{}'")],
+    "routeassessment": [("route_json", "TEXT DEFAULT '{}'"),
+                        ("sport", "TEXT DEFAULT 'Bici'")],
 }
 
 

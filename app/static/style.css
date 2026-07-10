@@ -198,6 +198,9 @@ a.chip:hover { background: var(--card-hover); text-decoration: none; }
 .chat-thread .chat-msg { max-width: 100%; }
 .chat-thread .chat-user { max-width: 85%; }
 .chat-thread .ai-analysis { font-size: .95rem; }
+.route-upload { display: flex; gap: .5rem; align-items: center; }
+.route-upload select { padding: .5rem .6rem; background: var(--card); color: var(--text);
+  border: 1px solid var(--border); border-radius: var(--radius-sm); font-family: inherit; font-size: .9rem; }
 .chat-input { display: flex; gap: .5rem; }
 .chat-input input { flex: 1; padding: .6rem .75rem; background: var(--bg-elev);
                     color: var(--text); border: 1px solid var(--border);

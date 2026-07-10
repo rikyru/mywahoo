@@ -449,36 +449,45 @@ def conversation_delete(cid: int):
 
 # ---------------------------------------------------------------- routes (GPX)
 
-def _cycling_history() -> dict:
-    """Rider's cycling envelope (typical + max) to judge a route's feasibility.
-    Short rides (< 15 km, e.g. e-bike commutes auto-imported) are excluded so
-    they don't drag the 'typical' down and skew the comparison."""
+# sport chosen at upload -> (label shown, sport family, min km to exclude noise)
+SPORT_CHOICES = {"bici": ("Bici", "bike", 15.0),
+                 "escursione": ("Escursione", "walk", 3.0),
+                 "corsa": ("Corsa", "run", 3.0)}
+SPORT_FAMILY = {label: fam for label, fam, _ in SPORT_CHOICES.values()}
+
+
+def _activity_history(family: str) -> dict:
+    """Athlete's envelope (typical + max) in a sport family, for feasibility.
+    Short activities are excluded so commutes/strolls don't drag the typical."""
+    min_m = next((mn for _, fam, mn in SPORT_CHOICES.values() if fam == family), 5.0) * 1000
     with Session(engine) as session:
-        rides = [w for w in session.exec(select(Workout))
-                 if any(k in (w.sport or "").lower() for k in ("cycl", "bik"))
-                 and (w.distance_m or 0) >= 15000]
-    if not rides:
+        acts = [w for w in session.exec(select(Workout))
+                if google_health._sport_family(w.sport or "") == family
+                and (w.distance_m or 0) >= min_m]
+    if not acts:
         return {}
 
     def med(xs):
         xs = sorted(xs)
         return xs[len(xs) // 2] if xs else None
 
-    dist = [w.distance_m / 1000 for w in rides]
-    asc = [w.ascent_m or 0 for w in rides]
-    dur = [w.moving_s / 60 for w in rides if w.moving_s]
-    apk = [(w.ascent_m or 0) / (w.distance_m / 1000) for w in rides]
-    powers = [w.avg_power for w in rides if w.avg_power]
-    hrs = [w.avg_hr for w in rides if w.avg_hr]
-    return {
-        "uscite_analizzate": len(rides),
+    dist = [w.distance_m / 1000 for w in acts]
+    asc = [w.ascent_m or 0 for w in acts]
+    dur = [w.moving_s / 60 for w in acts if w.moving_s]
+    apk = [(w.ascent_m or 0) / (w.distance_m / 1000) for w in acts]
+    powers = [w.avg_power for w in acts if w.avg_power]
+    hrs = [w.avg_hr for w in acts if w.avg_hr]
+    out = {
+        "attivita_analizzate": len(acts),
         "distanza_tipica_km": round(med(dist), 1), "distanza_max_km": round(max(dist), 1),
         "dislivello_tipico_m": round(med(asc)), "dislivello_max_m": round(max(asc)),
         "dislivello_per_km_tipico": round(med(apk), 1) if apk else None,
         "durata_tipica_min": round(med(dur)) if dur else None,
-        "potenza_media_tipica_w": round(med(powers)) if powers else None,
         "fc_media_tipica": round(med(hrs)) if hrs else None,
     }
+    if powers:
+        out["potenza_media_tipica_w"] = round(med(powers))
+    return out
 
 
 @app.get("/routes", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
@@ -487,8 +496,7 @@ def routes_list(request: Request):
         routes = list(session.exec(select(RouteAssessment)
                                    .order_by(RouteAssessment.created_at.desc())))
     return templates.TemplateResponse(request, "routes.html", {
-        "routes": routes, "history": _cycling_history(),
-        "error": request.query_params.get("error"),
+        "routes": routes, "error": request.query_params.get("error"),
     })
 
 
@@ -504,7 +512,8 @@ async def _current_form():
 
 
 @app.post("/routes/assess", dependencies=[Depends(require_auth)])
-async def route_assess(file: UploadFile = File(...), name: str = Form("")):
+async def route_assess(file: UploadFile = File(...), name: str = Form(""),
+                       sport: str = Form("bici")):
     data = await file.read()
     if not data:
         return RedirectResponse(f"/routes?{urlencode({'error': 'File vuoto'})}", status_code=303)
@@ -513,16 +522,18 @@ async def route_assess(file: UploadFile = File(...), name: str = Form("")):
     except gpxmod.GpxError as e:
         return RedirectResponse(f"/routes?{urlencode({'error': str(e)})}", status_code=303)
 
-    history = _cycling_history()
+    label, family, _ = SPORT_CHOICES.get(sport, SPORT_CHOICES["bici"])
+    history = _activity_history(family)
     form = await _current_form()
     try:
-        verdict = await anthropic_client.assess_route(route, history, form)
+        verdict = await anthropic_client.assess_route(route, history, form, label)
     except anthropic_client.AnthropicError as e:
         return RedirectResponse(f"/routes?{urlencode({'error': str(e)})}", status_code=303)
 
     with Session(engine) as session:
         ra = RouteAssessment(
             name=name.strip() or os.path.splitext(file.filename or "")[0] or "Percorso",
+            sport=label,
             distance_km=route["distance_km"], ascent_m=route.get("ascent_m") or 0,
             max_gradient=route.get("max_gradient_pct"), content=verdict,
             profile_json=json.dumps(route.get("profile") or []),
@@ -545,8 +556,10 @@ async def route_regenerate(rid: int):
     if not route:
         return RedirectResponse(f"/routes/{rid}?{urlencode({'error': 'Dati percorso non disponibili (ricarica il GPX)'})}",
                                 status_code=303)
+    family = SPORT_FAMILY.get(ra.sport, "bike")
     try:
-        verdict = await anthropic_client.assess_route(route, _cycling_history(), await _current_form())
+        verdict = await anthropic_client.assess_route(
+            route, _activity_history(family), await _current_form(), ra.sport)
     except anthropic_client.AnthropicError as e:
         return RedirectResponse(f"/routes/{rid}?{urlencode({'error': str(e)})}", status_code=303)
     with Session(engine) as session:
