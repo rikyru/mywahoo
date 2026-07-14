@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block title %}Piani — {{ app_name }}{% endblock %}
+{% block content %}
+
+<div class="page-head">
+  <h1>Piani di allenamento</h1>
+</div>
+
+{% if message %}<div class="alert ok">{{ message }}</div>{% endif %}
+{% if error %}<div class="alert error">{{ error }}</div>{% endif %}
+
+<section class="card">
+  <h3>Nuovo piano con AI</h3>
+  <p class="muted">Descrivi l'obiettivo (es. «tornare in forma con allenamenti a
+    corpo libero in casa, 3 volte a settimana») e l'AI prepara le sessioni,
+    spacchettate per giorni.</p>
+  <form method="post" action="/plans/generate" class="plan-form" onsubmit="busy(this)">
+    <label>Obiettivo
+      <textarea name="goal" rows="3" class="nw-desc" required
+        placeholder="Es. rinforzo gambe e core a corpo libero, 3 sessioni a settimana da 40 minuti"></textarea>
+    </label>
+    <div class="plan-form-row">
+      <label>Giorni da coprire
+        <input type="number" name="n_days" value="7" min="1" max="60">
+      </label>
+      <label>Inizio
+        <input type="date" name="start" value="{{ today }}">
+      </label>
+      <button class="btn" type="submit">Genera piano</button>
+    </div>
+  </form>
+</section>
+
+<section class="card">
+  <h3>I tuoi piani</h3>
+  {% for p in plans %}
+  {% set c = counts[p.id] %}
+  <div class="plan-item">
+    <a href="/plans/{{ p.id }}" class="plan-item-main">
+      <strong>{{ p.title or "Piano" }}</strong>
+      <span class="muted">{{ c[0] }}/{{ c[1] }} sessioni · creato il {{ p.created_at.strftime("%d/%m/%Y") }}</span>
+    </a>
+    <form method="post" action="/plans/{{ p.id }}/delete"
+          onsubmit="return confirm('Eliminare il piano «{{ p.title }}»?')">
+      <button type="submit" class="btn btn-secondary" title="Elimina">🗑</button>
+    </form>
+  </div>
+  {% else %}
+  <p class="muted">Nessun piano ancora. Creane uno qui sopra.</p>
+  {% endfor %}
+</section>
+
+{% endblock %}
+{% block scripts %}
+<script>
+function busy(form) {
+  const b = form.querySelector('button[type=submit]');
+  if (b) setTimeout(() => { b.disabled = true; b.textContent = "Generazione…"; }, 0);
+}
+</script>
+{% endblock %}

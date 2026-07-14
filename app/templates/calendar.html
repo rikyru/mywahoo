@@ -32,6 +32,11 @@
           {{ sport_icon(w.sport) }}
         </a>
         {% endfor %}
+        {% for ps in planned[day] %}
+        <a href="/plans/{{ ps.plan_id }}" class="cal-act cal-planned" title="Pianificato: {{ ps.title }} · {{ ps.sport }}{% if ps.duration_min %} · {{ ps.duration_min }} min{% endif %}">
+          {{ sport_icon(ps.sport) }}
+        </a>
+        {% endfor %}
       </div>
     </div>
     {% else %}<div class="cal-cell cal-empty"></div>{% endif %}
@@ -41,5 +46,5 @@
 </section>
 
 <p class="muted">🚴 bici · 🏊 nuoto · 🏃 corsa · 🥾 camminata/escursione · 🏋️ forza/corpo libero · 🧘 yoga/mobilità.
-  Tocca un'icona per aprire l'allenamento.</p>
+  Le icone sbiadite sono sessioni <a href="/plans">pianificate</a>. Tocca un'icona per aprirla.</p>
 {% endblock %}

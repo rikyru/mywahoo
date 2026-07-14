@@ -266,6 +266,32 @@ queste chiavi esatte:
 Stima durata e calorie in modo realistico dal contenuto. Nessun altro testo."""
 
 
+PLAN_SYSTEM_PROMPT = """\
+Sei un allenatore. Crea un piano di allenamento per l'atleta dato l'obiettivo, i
+giorni disponibili e la data di inizio. Spesso è allenamento A CASA / corpo
+libero (se indicato usa esercizi a corpo libero con serie e ripetizioni concrete).
+Rispondi SOLO con JSON valido, senza testo attorno né code fence:
+{"title": "titolo breve del piano", "sessions": [{"date": "YYYY-MM-DD", "day": "es. Lun 14/07", "title": "titolo sessione", "sport": "tipo (Corpo libero, Corsa, Bici, Forza, Yoga, Riposo)", "durata_min": intero, "description": "esercizi/serie/ripetizioni o dettagli"}]}
+Assegna le date a partire dalla data di inizio ed entro il numero di giorni
+indicato. Inserisci giorni di riposo solo se sensato (sport "Riposo", durata 0).
+Adatta carico e volume a un atleta amatoriale. Nessun altro testo."""
+
+
+async def generate_plan(goal: str, n_days: int, start_date: str) -> dict:
+    """Generate a structured training plan (JSON of dated sessions)."""
+    import re
+    user = (f"Obiettivo: {goal}\nGiorni disponibili: {n_days}\n"
+            f"Data di inizio: {start_date}")
+    raw = await _call_claude(PLAN_SYSTEM_PROMPT, user)
+    m = re.search(r"\{.*\}", raw, re.S)
+    if not m:
+        return {}
+    try:
+        return json.loads(m.group(0))
+    except json.JSONDecodeError:
+        return {}
+
+
 async def structure_workout(description: str) -> dict:
     """Turn a free-text workout description into structured fields (JSON)."""
     import re

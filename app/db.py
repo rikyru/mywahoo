@@ -45,6 +45,30 @@ class RouteAssessment(SQLModel, table=True):
     created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
 
 
+class TrainingPlan(SQLModel, table=True):
+    """An AI-generated training plan, broken into per-day sessions."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    title: str = ""
+    goal: str = ""
+    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+
+
+class PlanSession(SQLModel, table=True):
+    """One session of a TrainingPlan; can be edited and marked done (which
+    creates a manual Workout)."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    plan_id: int = Field(index=True, foreign_key="trainingplan.id")
+    order: int = 0
+    day_label: str = ""
+    date: Optional[datetime] = Field(default=None, index=True)
+    title: str = ""
+    sport: str = ""
+    duration_min: int = 0
+    description: str = ""
+    done: bool = False
+    workout_id: Optional[int] = None
+
+
 class Conversation(SQLModel, table=True):
     """A saved AI chat thread (e.g. a training-plan request) to review later."""
     id: Optional[int] = Field(default=None, primary_key=True)

@@ -22,8 +22,8 @@ from . import (anthropic_client, fit as fitmod, form as formmod, google_health,
                gpx as gpxmod, nutrition, wahoo)
 from .config import settings, setup_logging
 from .db import (AiAnalysis, ChatMessage, Conversation, IgnoredImport, PeriodSummary,
-                 RouteAssessment, Workout, WorkoutStream, engine, get_setting, init_db,
-                 set_setting)
+                 PlanSession, RouteAssessment, TrainingPlan, Workout, WorkoutStream,
+                 engine, get_setting, init_db, set_setting)
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -695,9 +695,17 @@ def calendar_page(request: Request, month: str = ""):
     with Session(engine) as session:
         ws = query_range(session, datetime.combine(first, time.min),
                          datetime.combine(last, time.max), None)
+        planned = session.exec(
+            select(PlanSession).where(
+                PlanSession.done == False,  # noqa: E712
+                PlanSession.date >= datetime.combine(first, time.min),
+                PlanSession.date <= datetime.combine(last, time.max))).all()
     byday: dict = defaultdict(list)
     for w in ws:
         byday[w.start_date.day].append(w)
+    planned_byday: dict = defaultdict(list)
+    for ps in planned:
+        planned_byday[ps.date.day].append(ps)
     cells = [None] * first.weekday() + list(range(1, ndays + 1))
     while len(cells) % 7:
         cells.append(None)
@@ -706,6 +714,7 @@ def calendar_page(request: Request, month: str = ""):
                  "Luglio", "Agosto", "Settembre", "Ottobre", "Novembre", "Dicembre"]
     return templates.TemplateResponse(request, "calendar.html", {
         "weeks": weeks, "days": {d: byday.get(d, []) for d in range(1, ndays + 1)},
+        "planned": {d: planned_byday.get(d, []) for d in range(1, ndays + 1)},
         "month_label": f"{IT_MONTHS[first.month]} {first.year}",
         "prev": (first - timedelta(days=1)).strftime("%Y-%m"),
         "next": (last + timedelta(days=1)).strftime("%Y-%m"),
@@ -739,6 +748,25 @@ async def workout_parse(request: Request):
     return JSONResponse(fields or {})
 
 
+def _create_manual_workout(name, sport, start, duration_min, notes="",
+                           distance_km=None, calories=None, avg_hr=None) -> int:
+    """Create a manual Workout and return its id."""
+    wid = int(datetime.utcnow().timestamp() * 1000)
+    mins = duration_min or 0
+    with Session(engine) as session:
+        w = Workout(id=wid, name=(name or "").strip() or "Allenamento",
+                    sport=(sport or "").strip() or "Allenamento",
+                    start_date=start, manual=True, notes=(notes or "").strip(),
+                    duration_s=int(mins * 60), moving_s=int(mins * 60),
+                    distance_m=(distance_km * 1000) if distance_km else 0.0,
+                    avg_hr=avg_hr, calories=calories)
+        if w.distance_m and w.moving_s:
+            w.avg_speed_ms = w.distance_m / w.moving_s
+        session.add(w)
+        session.commit()
+    return wid
+
+
 @app.post("/workout/manual", dependencies=[Depends(require_auth)])
 def workout_manual(name: str = Form(""), sport: str = Form(""), date_: str = Form("", alias="date"),
                    durata_min: str = Form(""), distanza_km: str = Form(""),
@@ -753,22 +781,152 @@ def workout_manual(name: str = Form(""), sport: str = Form(""), date_: str = For
     d = _parse_date(date_)
     if d:
         start = datetime.combine(d, datetime.utcnow().time())
-    mins = num(durata_min) or 0
-    km = num(distanza_km)
-    wid = int(datetime.utcnow().timestamp() * 1000)
-    with Session(engine) as session:
-        w = Workout(
-            id=wid, name=name.strip() or "Allenamento", sport=sport.strip() or "Allenamento",
-            start_date=start, manual=True, notes=note.strip(),
-            duration_s=int(mins * 60), moving_s=int(mins * 60),
-            distance_m=(km * 1000) if km else 0.0,
-            avg_hr=num(fc_media), calories=num(calorie))
-        if w.distance_m and w.moving_s:
-            w.avg_speed_ms = w.distance_m / w.moving_s
-        session.add(w)
-        session.commit()
+    wid = _create_manual_workout(name, sport, start, num(durata_min) or 0, note,
+                                 num(distanza_km), num(calorie), num(fc_media))
     return RedirectResponse(f"/workout/{wid}?{urlencode({'msg': 'Allenamento aggiunto'})}",
                             status_code=303)
+
+
+# ---- Piani di allenamento ------------------------------------------------
+
+@app.get("/plans", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
+def plans_page(request: Request):
+    with Session(engine) as session:
+        plans = session.exec(select(TrainingPlan).order_by(
+            TrainingPlan.created_at.desc())).all()
+        counts = {}
+        for p in plans:
+            sess = session.exec(select(PlanSession).where(
+                PlanSession.plan_id == p.id)).all()
+            counts[p.id] = (sum(1 for s in sess if s.done), len(sess))
+    return templates.TemplateResponse(request, "plans.html", {
+        "plans": plans, "counts": counts,
+        "today": date.today().isoformat(),
+        "message": request.query_params.get("msg"),
+        "error": request.query_params.get("err")})
+
+
+@app.post("/plans/generate", dependencies=[Depends(require_auth)])
+async def plans_generate(goal: str = Form(""), n_days: str = Form("7"),
+                         start: str = Form("")):
+    goal = goal.strip()
+    if not goal:
+        return RedirectResponse(f"/plans?{urlencode({'err': 'Descrivi un obiettivo'})}",
+                                status_code=303)
+    try:
+        n = max(1, min(60, int(n_days)))
+    except ValueError:
+        n = 7
+    start_d = _parse_date(start) or date.today()
+    try:
+        data = await anthropic_client.generate_plan(goal, n, start_d.isoformat())
+    except anthropic_client.AnthropicError as e:
+        return RedirectResponse(f"/plans?{urlencode({'err': str(e)})}", status_code=303)
+    sessions = data.get("sessions") or []
+    if not sessions:
+        return RedirectResponse(
+            f"/plans?{urlencode({'err': 'AI non ha restituito un piano valido'})}",
+            status_code=303)
+    with Session(engine) as session:
+        plan = TrainingPlan(title=(data.get("title") or goal)[:200], goal=goal)
+        session.add(plan)
+        session.commit()
+        session.refresh(plan)
+        for i, s in enumerate(sessions):
+            sd = _parse_date(str(s.get("date", "")))
+            session.add(PlanSession(
+                plan_id=plan.id, order=i, day_label=str(s.get("day", ""))[:40],
+                date=datetime.combine(sd, time(12, 0)) if sd else None,
+                title=str(s.get("title", ""))[:200], sport=str(s.get("sport", ""))[:60],
+                duration_min=int(s.get("durata_min") or 0),
+                description=str(s.get("description", ""))))
+        session.commit()
+        pid = plan.id
+    return RedirectResponse(f"/plans/{pid}", status_code=303)
+
+
+@app.get("/plans/{plan_id}", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
+def plan_detail(request: Request, plan_id: int):
+    with Session(engine) as session:
+        plan = session.get(TrainingPlan, plan_id)
+        if not plan:
+            return RedirectResponse("/plans", status_code=303)
+        sessions = session.exec(select(PlanSession).where(
+            PlanSession.plan_id == plan_id).order_by(PlanSession.order)).all()
+    done = sum(1 for s in sessions if s.done)
+    return templates.TemplateResponse(request, "plan.html", {
+        "plan": plan, "sessions": sessions, "done": done, "total": len(sessions),
+        "message": request.query_params.get("msg")})
+
+
+@app.post("/plans/{plan_id}/delete", dependencies=[Depends(require_auth)])
+def plan_delete(plan_id: int):
+    with Session(engine) as session:
+        for s in session.exec(select(PlanSession).where(
+                PlanSession.plan_id == plan_id)).all():
+            session.delete(s)
+        plan = session.get(TrainingPlan, plan_id)
+        if plan:
+            session.delete(plan)
+        session.commit()
+    return RedirectResponse(f"/plans?{urlencode({'msg': 'Piano eliminato'})}",
+                            status_code=303)
+
+
+@app.post("/plans/{plan_id}/session/{sid}/done", dependencies=[Depends(require_auth)])
+def plan_session_done(plan_id: int, sid: int):
+    with Session(engine) as session:
+        ps = session.get(PlanSession, sid)
+        if not ps or ps.plan_id != plan_id or ps.done:
+            return RedirectResponse(f"/plans/{plan_id}", status_code=303)
+        start = ps.date or datetime.utcnow()
+        wid = _create_manual_workout(
+            ps.title, ps.sport, start, ps.duration_min, ps.description)
+        ps.done = True
+        ps.workout_id = wid
+        session.add(ps)
+        session.commit()
+    return RedirectResponse(
+        f"/plans/{plan_id}?{urlencode({'msg': 'Sessione segnata come fatta'})}",
+        status_code=303)
+
+
+@app.post("/plans/{plan_id}/session/{sid}/undo", dependencies=[Depends(require_auth)])
+def plan_session_undo(plan_id: int, sid: int):
+    with Session(engine) as session:
+        ps = session.get(PlanSession, sid)
+        if ps and ps.plan_id == plan_id and ps.done:
+            if ps.workout_id:
+                w = session.get(Workout, ps.workout_id)
+                if w and w.manual:
+                    session.delete(w)
+            ps.done = False
+            ps.workout_id = None
+            session.add(ps)
+            session.commit()
+    return RedirectResponse(f"/plans/{plan_id}", status_code=303)
+
+
+@app.post("/plans/{plan_id}/session/{sid}/edit", dependencies=[Depends(require_auth)])
+def plan_session_edit(plan_id: int, sid: int, title: str = Form(""),
+                      sport: str = Form(""), durata_min: str = Form("0"),
+                      date_: str = Form("", alias="date"), description: str = Form("")):
+    with Session(engine) as session:
+        ps = session.get(PlanSession, sid)
+        if ps and ps.plan_id == plan_id:
+            ps.title = title.strip() or ps.title
+            ps.sport = sport.strip()
+            try:
+                ps.duration_min = max(0, int(durata_min))
+            except ValueError:
+                pass
+            d = _parse_date(date_)
+            ps.date = datetime.combine(d, time(12, 0)) if d else None
+            ps.description = description.strip()
+            session.add(ps)
+            session.commit()
+    return RedirectResponse(
+        f"/plans/{plan_id}?{urlencode({'msg': 'Sessione aggiornata'})}", status_code=303)
 
 
 @app.get("/settings", response_class=HTMLResponse, dependencies=[Depends(require_auth)])

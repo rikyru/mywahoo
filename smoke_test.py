@@ -113,6 +113,51 @@ with TestClient(app) as client:
     assert r.status_code == 200 and "Motore AI" in r.text
     print("settings page OK")
 
+    # --- calendar + training plans ---
+    from app.db import PlanSession, TrainingPlan
+    with Session(engine) as s:
+        plan = TrainingPlan(title="Piano test", goal="rimettersi in forma")
+        s.add(plan)
+        s.commit()
+        s.refresh(plan)
+        pid = plan.id
+        ps = PlanSession(plan_id=pid, order=0, day_label="Lun", date=recent,
+                         title="Circuito corpo libero", sport="Corpo libero",
+                         duration_min=40, description="3x squat, 3x push up")
+        s.add(ps)
+        s.commit()
+        s.refresh(ps)
+        sid = ps.id
+
+    r = client.get("/calendar")
+    assert r.status_code == 200 and "Circuito corpo libero" in r.text
+    print("calendar shows planned session OK")
+
+    r = client.get("/plans")
+    assert r.status_code == 200 and "Piano test" in r.text and "0/1" in r.text
+    print("plans list OK")
+
+    r = client.get(f"/plans/{pid}")
+    assert r.status_code == 200 and "Circuito corpo libero" in r.text
+    print("plan detail OK")
+
+    r = client.post(f"/plans/{pid}/session/{sid}/done", follow_redirects=False)
+    assert r.status_code == 303
+    with Session(engine) as s:
+        done = s.get(PlanSession, sid)
+        assert done.done and done.workout_id
+        w = s.get(Workout, done.workout_id)
+        assert w and w.manual and w.name == "Circuito corpo libero"
+    print("plan session done -> manual workout OK")
+
+    r = client.post(f"/plans/{pid}/session/{sid}/undo", follow_redirects=False)
+    assert r.status_code == 303
+    with Session(engine) as s:
+        un = s.get(PlanSession, sid)
+        assert not un.done and un.workout_id is None
+        assert s.get(Workout, w.id) is None  # manual workout removed on undo
+    print("plan session undo OK")
+
 # --- FIT helpers with synthetic data (no FIT file needed) ---
 from app.fit import ai_stats, compute_normalized_power, downsample
 

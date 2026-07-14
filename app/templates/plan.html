@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}{{ plan.title }} — {{ app_name }}{% endblock %}
+{% block content %}
+
+<div class="page-head">
+  <h1>{{ plan.title or "Piano" }}</h1>
+  <a class="btn btn-secondary" href="/plans">← Tutti i piani</a>
+</div>
+
+{% if message %}<div class="alert ok">{{ message }}</div>{% endif %}
+
+<section class="card">
+  <p class="muted">Obiettivo: {{ plan.goal }}</p>
+  <div class="plan-progress">
+    <div class="plan-progress-bar">
+      <span style="width: {{ (100 * done / total) if total else 0 }}%"></span>
+    </div>
+    <span class="muted">{{ done }}/{{ total }} completate</span>
+  </div>
+</section>
+
+{% for s in sessions %}
+<section class="card plan-session {% if s.done %}plan-session-done{% endif %}">
+  <div class="plan-session-head">
+    <span class="plan-session-icon">{{ sport_icon(s.sport) }}</span>
+    <div class="plan-session-info">
+      <strong>{{ s.title }}</strong>
+      <span class="muted">
+        {% if s.day_label %}{{ s.day_label }}{% elif s.date %}{{ s.date.strftime("%a %d/%m") }}{% endif %}
+        {% if s.sport %} · {{ s.sport }}{% endif %}
+        {% if s.duration_min %} · {{ s.duration_min }} min{% endif %}
+      </span>
+    </div>
+    {% if s.done %}
+    <form method="post" action="/plans/{{ plan.id }}/session/{{ s.id }}/undo">
+      <button type="submit" class="btn btn-secondary" title="Annulla">↩ Fatto ✓</button>
+    </form>
+    {% else %}
+    <form method="post" action="/plans/{{ plan.id }}/session/{{ s.id }}/done">
+      <button type="submit" class="btn">Segna fatto</button>
+    </form>
+    {% endif %}
+  </div>
+
+  {% if s.description %}<p class="plan-session-desc">{{ s.description }}</p>{% endif %}
+  {% if s.done and s.workout_id %}
+  <p class="muted"><a href="/workout/{{ s.workout_id }}">→ Vedi allenamento registrato</a></p>
+  {% endif %}
+
+  <details class="plan-session-edit">
+    <summary class="muted">Modifica</summary>
+    <form method="post" action="/plans/{{ plan.id }}/session/{{ s.id }}/edit" class="plan-edit-form">
+      <label>Titolo <input type="text" name="title" value="{{ s.title }}"></label>
+      <div class="plan-edit-row">
+        <label>Sport <input type="text" name="sport" value="{{ s.sport }}"></label>
+        <label>Durata (min) <input type="number" name="durata_min" value="{{ s.duration_min }}" min="0"></label>
+        <label>Data <input type="date" name="date" value="{{ s.date.strftime('%Y-%m-%d') if s.date else '' }}"></label>
+      </div>
+      <label>Dettagli
+        <textarea name="description" rows="3" class="nw-desc">{{ s.description }}</textarea>
+      </label>
+      <button type="submit" class="btn btn-secondary">Salva modifiche</button>
+    </form>
+  </details>
+</section>
+{% endfor %}
+
+{% endblock %}

@@ -220,7 +220,44 @@ a.chip:hover { background: var(--card-hover); text-decoration: none; }
 .cal-acts { display: flex; flex-wrap: wrap; gap: 2px; margin-top: .2rem; }
 .cal-act { font-size: 1.05rem; text-decoration: none; line-height: 1.15; }
 .cal-act:hover { text-decoration: none; filter: brightness(1.25); }
+.cal-planned { opacity: .42; filter: grayscale(.35); }
+.cal-planned:hover { opacity: .85; }
 @media (max-width: 640px) { .cal-cell { min-height: 52px; padding: .2rem; } .cal-act { font-size: .95rem; } }
+
+/* ---------- training plans ---------- */
+.plan-form { display: flex; flex-direction: column; gap: .8rem; margin-top: .6rem; }
+.plan-form-row { display: flex; gap: 1rem; align-items: flex-end; flex-wrap: wrap; }
+.plan-form-row label { display: flex; flex-direction: column; gap: .3rem; font-size: .78rem;
+  text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+.plan-form-row input { padding: .5rem .6rem; background: var(--bg-elev); color: var(--text);
+  border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.plan-item { display: flex; align-items: center; gap: .6rem; padding: .7rem 0;
+  border-bottom: 1px solid var(--border); }
+.plan-item:last-child { border-bottom: none; }
+.plan-item-main { flex: 1; display: flex; flex-direction: column; gap: .15rem;
+  text-decoration: none; color: var(--text); }
+.plan-item-main:hover strong { color: var(--accent); }
+.plan-progress { display: flex; align-items: center; gap: .8rem; margin-top: .4rem; }
+.plan-progress-bar { flex: 1; height: 8px; background: var(--bg-elev);
+  border-radius: 999px; overflow: hidden; }
+.plan-progress-bar span { display: block; height: 100%; background: var(--accent);
+  border-radius: 999px; transition: width .3s; }
+.plan-session-head { display: flex; align-items: center; gap: .7rem; }
+.plan-session-icon { font-size: 1.5rem; }
+.plan-session-info { flex: 1; display: flex; flex-direction: column; gap: .1rem; }
+.plan-session-desc { margin: .6rem 0 .2rem; white-space: pre-wrap; }
+.plan-session-done { opacity: .72; }
+.plan-session-done .plan-session-info strong { text-decoration: line-through; }
+.plan-session-edit { margin-top: .5rem; }
+.plan-session-edit summary { cursor: pointer; font-size: .85rem; }
+.plan-edit-form { display: flex; flex-direction: column; gap: .6rem; margin-top: .6rem; }
+.plan-edit-form > label { display: flex; flex-direction: column; gap: .3rem; font-size: .78rem;
+  text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+.plan-edit-form input { padding: .5rem .6rem; background: var(--bg-elev); color: var(--text);
+  border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.plan-edit-row { display: flex; gap: 1rem; flex-wrap: wrap; }
+.plan-edit-row label { flex: 1; min-width: 120px; display: flex; flex-direction: column;
+  gap: .3rem; font-size: .78rem; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
 
 /* ---------- manual workout form ---------- */
 .nw-desc { display: flex; flex-direction: column; gap: .3rem; font-size: .78rem;
