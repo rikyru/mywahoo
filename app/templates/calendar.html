@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}Calendario — {{ app_name }}{% endblock %}
+{% block content %}
+
+<div class="page-head">
+  <h1>Calendario</h1>
+  <a class="btn" href="/workout/new">+ Aggiungi allenamento</a>
+</div>
+
+<div class="window-bar">
+  <div class="window-nav">
+    <a class="chip" href="/calendar?month={{ prev }}" title="Mese precedente">←</a>
+    <span class="window-label">{{ month_label }}</span>
+    <a class="chip" href="/calendar?month={{ next }}" title="Mese successivo">→</a>
+    {% if not is_current %}<a class="chip" href="/calendar">Oggi</a>{% endif %}
+  </div>
+</div>
+
+<section class="card">
+  <div class="cal-grid cal-head">
+    {% for d in ["Lun","Mar","Mer","Gio","Ven","Sab","Dom"] %}<div class="cal-dow">{{ d }}</div>{% endfor %}
+  </div>
+  {% for week in weeks %}
+  <div class="cal-grid">
+    {% for day in week %}
+    {% if day %}
+    <div class="cal-cell {% if day == today_day %}cal-today{% endif %}">
+      <div class="cal-daynum">{{ day }}</div>
+      <div class="cal-acts">
+        {% for w in days[day] %}
+        <a href="/workout/{{ w.id }}" class="cal-act" title="{{ w.name }} · {{ w.sport }}{% if w.moving_s %} · {{ w.moving_s | duration }}{% endif %}">
+          {{ sport_icon(w.sport) }}
+        </a>
+        {% endfor %}
+      </div>
+    </div>
+    {% else %}<div class="cal-cell cal-empty"></div>{% endif %}
+    {% endfor %}
+  </div>
+  {% endfor %}
+</section>
+
+<p class="muted">🚴 bici · 🏊 nuoto · 🏃 corsa · 🥾 camminata/escursione · 🏋️ forza/corpo libero · 🧘 yoga/mobilità.
+  Tocca un'icona per aprire l'allenamento.</p>
+{% endblock %}

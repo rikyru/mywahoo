@@ -2,6 +2,7 @@
 import json
 import logging
 import secrets
+import calendar as pycal
 import os
 from collections import defaultdict
 from datetime import date, datetime, time, timedelta, timezone
@@ -86,8 +87,26 @@ def fmt_speed(w: Workout) -> str:
 
 
 templates.env.filters["duration"] = fmt_duration
+def sport_icon(sport: str) -> str:
+    s = (sport or "").lower()
+    if any(k in s for k in ("swim", "nuot")):
+        return "🏊"
+    if any(k in s for k in ("bik", "cycl", "cicl", "bici")):
+        return "🚴"
+    if any(k in s for k in ("run", "cors")):
+        return "🏃"
+    if any(k in s for k in ("walk", "hik", "cammin", "escurs", "trek")):
+        return "🥾"
+    if any(k in s for k in ("forza", "strength", "corpo", "pesi", "hiit", "gym", "palestra", "wod")):
+        return "🏋️"
+    if any(k in s for k in ("yoga", "stretch", "mobilit", "pilates")):
+        return "🧘"
+    return "🔵"
+
+
 templates.env.globals["fmt_speed"] = fmt_speed
 templates.env.globals["app_name"] = settings.app_name
+templates.env.globals["sport_icon"] = sport_icon
 # Cache-busting for the stylesheet (Cloudflare/edge caches /static aggressively):
 # the URL changes whenever style.css changes, so a deploy invalidates the cache.
 try:
@@ -659,6 +678,97 @@ async def form_insight(regenerate: str = Form(default="")):
                                       model=anthropic_client.effective_model()))
         session.commit()
     return RedirectResponse("/form", status_code=303)
+
+
+# ------------------------------------------------ calendar & manual workouts
+
+@app.get("/calendar", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
+def calendar_page(request: Request, month: str = ""):
+    today = date.today()
+    try:
+        y, m = (int(x) for x in month.split("-"))
+        first = date(y, m, 1)
+    except (ValueError, TypeError):
+        first = date(today.year, today.month, 1)
+    ndays = pycal.monthrange(first.year, first.month)[1]
+    last = date(first.year, first.month, ndays)
+    with Session(engine) as session:
+        ws = query_range(session, datetime.combine(first, time.min),
+                         datetime.combine(last, time.max), None)
+    byday: dict = defaultdict(list)
+    for w in ws:
+        byday[w.start_date.day].append(w)
+    cells = [None] * first.weekday() + list(range(1, ndays + 1))
+    while len(cells) % 7:
+        cells.append(None)
+    weeks = [cells[i:i + 7] for i in range(0, len(cells), 7)]
+    IT_MONTHS = ["", "Gennaio", "Febbraio", "Marzo", "Aprile", "Maggio", "Giugno",
+                 "Luglio", "Agosto", "Settembre", "Ottobre", "Novembre", "Dicembre"]
+    return templates.TemplateResponse(request, "calendar.html", {
+        "weeks": weeks, "days": {d: byday.get(d, []) for d in range(1, ndays + 1)},
+        "month_label": f"{IT_MONTHS[first.month]} {first.year}",
+        "prev": (first - timedelta(days=1)).strftime("%Y-%m"),
+        "next": (last + timedelta(days=1)).strftime("%Y-%m"),
+        "is_current": first.year == today.year and first.month == today.month,
+        "today_day": today.day if (first.year, first.month) == (today.year, today.month) else 0,
+    })
+
+
+@app.get("/workout/new", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
+def workout_new(request: Request):
+    with Session(engine) as session:
+        sports = sorted({s for s in session.exec(select(Workout.sport).distinct()) if s})
+    return templates.TemplateResponse(request, "workout_new.html", {
+        "sports": sports, "today": date.today().isoformat()})
+
+
+@app.post("/workout/parse", dependencies=[Depends(require_auth)])
+async def workout_parse(request: Request):
+    """AI-structure a free-text workout description into editable fields."""
+    try:
+        body = await request.json()
+    except json.JSONDecodeError:
+        return JSONResponse({"error": "richiesta non valida"}, status_code=400)
+    desc = str(body.get("description", "")).strip()[:2000]
+    if not desc:
+        return JSONResponse({"error": "descrizione vuota"}, status_code=400)
+    try:
+        fields = await anthropic_client.structure_workout(desc)
+    except anthropic_client.AnthropicError as e:
+        return JSONResponse({"error": str(e)}, status_code=502)
+    return JSONResponse(fields or {})
+
+
+@app.post("/workout/manual", dependencies=[Depends(require_auth)])
+def workout_manual(name: str = Form(""), sport: str = Form(""), date_: str = Form("", alias="date"),
+                   durata_min: str = Form(""), distanza_km: str = Form(""),
+                   calorie: str = Form(""), fc_media: str = Form(""), note: str = Form("")):
+    def num(s):
+        try:
+            return float(s) if str(s).strip() != "" else None
+        except ValueError:
+            return None
+
+    start = datetime.utcnow()
+    d = _parse_date(date_)
+    if d:
+        start = datetime.combine(d, datetime.utcnow().time())
+    mins = num(durata_min) or 0
+    km = num(distanza_km)
+    wid = int(datetime.utcnow().timestamp() * 1000)
+    with Session(engine) as session:
+        w = Workout(
+            id=wid, name=name.strip() or "Allenamento", sport=sport.strip() or "Allenamento",
+            start_date=start, manual=True, notes=note.strip(),
+            duration_s=int(mins * 60), moving_s=int(mins * 60),
+            distance_m=(km * 1000) if km else 0.0,
+            avg_hr=num(fc_media), calories=num(calorie))
+        if w.distance_m and w.moving_s:
+            w.avg_speed_ms = w.distance_m / w.moving_s
+        session.add(w)
+        session.commit()
+    return RedirectResponse(f"/workout/{wid}?{urlencode({'msg': 'Allenamento aggiunto'})}",
+                            status_code=303)
 
 
 @app.get("/settings", response_class=HTMLResponse, dependencies=[Depends(require_auth)])

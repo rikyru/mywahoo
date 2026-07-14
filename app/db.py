@@ -114,6 +114,8 @@ class Workout(SQLModel, table=True):
     has_fit: bool = False                # True once the FIT was downloaded AND parsed
     fit_path: str = ""                   # path of the stored .fit file
     raw_summary: str = "{}"              # raw JSON from Wahoo (webhook or API)
+    manual: bool = False                 # created by the user (not imported)
+    notes: str = ""                      # free-text description (manual/home workouts)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
 
@@ -170,6 +172,7 @@ def init_db() -> None:
 _MIGRATIONS = {
     "routeassessment": [("route_json", "TEXT DEFAULT '{}'"),
                         ("sport", "TEXT DEFAULT 'Bici'")],
+    "workout": [("manual", "INTEGER DEFAULT 0"), ("notes", "TEXT DEFAULT ''")],
 }
 
 

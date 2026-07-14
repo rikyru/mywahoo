@@ -258,6 +258,27 @@ async def summarize_form(summary: dict, recent_weeks: list[dict]) -> str:
         json.dumps(payload, ensure_ascii=False, indent=1, default=str))
 
 
+WORKOUT_STRUCTURE_PROMPT = """\
+Struttura la descrizione di un allenamento (spesso a casa / corpo libero) in
+campi. Rispondi SOLO con un JSON valido, senza testo attorno né code fence, con
+queste chiavi esatte:
+{"name": "nome breve", "sport": "tipo (es. Forza, Corpo libero, Corsa, Bici, Nuoto, Yoga, HIIT, Camminata)", "durata_min": intero (stima realistica se non indicato), "distanza_km": numero o null, "calorie": intero o null (stima ragionevole), "fc_media": intero o null, "note": "riassunto degli esercizi svolti"}
+Stima durata e calorie in modo realistico dal contenuto. Nessun altro testo."""
+
+
+async def structure_workout(description: str) -> dict:
+    """Turn a free-text workout description into structured fields (JSON)."""
+    import re
+    raw = await _call_claude(WORKOUT_STRUCTURE_PROMPT, description)
+    m = re.search(r"\{.*\}", raw, re.S)
+    if not m:
+        return {}
+    try:
+        return json.loads(m.group(0))
+    except json.JSONDecodeError:
+        return {}
+
+
 async def summarize_period(period_label: str, workouts: list[dict]) -> str:
     body = (f"Periodo: {period_label}\n"
             f"Numero sessioni: {len(workouts)}\n\n"

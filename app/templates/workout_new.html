@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block title %}Aggiungi allenamento — {{ app_name }}{% endblock %}
+{% block content %}
+
+<p><a href="/calendar">&larr; Calendario</a></p>
+<h1>Aggiungi allenamento</h1>
+<p class="muted">Descrivi cosa hai fatto (es. allenamento a casa): l'AI lo struttura,
+  tu controlli e correggi, poi salvi.</p>
+
+<section class="card">
+  <label class="nw-desc">Descrizione
+    <textarea id="desc" rows="3" placeholder="Es. 35 minuti di circuito a corpo libero: 4 giri di flessioni, squat, affondi e plank"></textarea>
+  </label>
+  <div class="edit-actions">
+    <button class="btn" type="button" id="parseBtn">Struttura con AI</button>
+  </div>
+  <p id="parseErr" class="alert error" style="display:none"></p>
+</section>
+
+<form method="post" action="/workout/manual" id="manualForm" class="card" style="display:none">
+  <h3>Controlla e salva</h3>
+  <div class="edit-form">
+    <label>Nome<input type="text" name="name" id="f_name"></label>
+    <label>Sport<input type="text" name="sport" id="f_sport" list="sports"></label>
+    <label>Data<input type="date" name="date" id="f_date" value="{{ today }}"></label>
+    <label>Durata (min)<input type="number" step="1" name="durata_min" id="f_dur"></label>
+    <label>Distanza (km)<input type="number" step="0.01" name="distanza_km" id="f_dist"></label>
+    <label>Calorie<input type="number" step="1" name="calorie" id="f_cal"></label>
+    <label>FC media<input type="number" step="1" name="fc_media" id="f_hr"></label>
+    <label class="nw-full">Note<input type="text" name="note" id="f_note"></label>
+    <div class="edit-actions">
+      <button class="btn" type="submit">Salva allenamento</button>
+    </div>
+  </div>
+</form>
+<datalist id="sports">
+  {% for s in sports %}<option value="{{ s }}">{% endfor %}
+  <option value="Forza"><option value="Corpo libero"><option value="HIIT"><option value="Yoga">
+</datalist>
+
+<script>
+const set = (id, v) => { document.getElementById(id).value = (v ?? "") === null ? "" : (v ?? ""); };
+document.getElementById("parseBtn").addEventListener("click", async (e) => {
+  const desc = document.getElementById("desc").value.trim();
+  const err = document.getElementById("parseErr");
+  err.style.display = "none";
+  if (!desc) return;
+  e.target.disabled = true; e.target.textContent = "Analisi…";
+  try {
+    const r = await fetch("/workout/parse", { method: "POST",
+      headers: { "Content-Type": "application/json" }, body: JSON.stringify({ description: desc }) });
+    const d = await r.json();
+    if (d.error) throw new Error(d.error);
+    set("f_name", d.name); set("f_sport", d.sport); set("f_dur", d.durata_min);
+    set("f_dist", d.distanza_km); set("f_cal", d.calorie); set("f_hr", d.fc_media);
+    set("f_note", d.note || desc);
+    document.getElementById("manualForm").style.display = "";
+    document.getElementById("f_name").focus();
+  } catch (ex) {
+    err.textContent = "⚠️ " + ex.message; err.style.display = "";
+  } finally {
+    e.target.disabled = false; e.target.textContent = "Struttura con AI";
+  }
+});
+</script>
+{% endblock %}

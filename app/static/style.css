@@ -207,6 +207,29 @@ a.chip:hover { background: var(--card-hover); text-decoration: none; }
                     border-radius: var(--radius-sm); font-size: .95rem; font-family: inherit; }
 .chat-input input:focus { outline: 2px solid var(--accent-soft); border-color: var(--accent); }
 
+/* ---------- calendar ---------- */
+.cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; }
+.cal-head { margin-bottom: 4px; }
+.cal-dow { text-align: center; font-size: .72rem; text-transform: uppercase;
+           letter-spacing: .04em; color: var(--muted); padding: .3rem 0; }
+.cal-cell { min-height: 68px; border: 1px solid var(--border-soft); border-radius: 8px;
+            padding: .3rem; background: var(--bg-elev); }
+.cal-empty { background: transparent; border: 0; }
+.cal-today { border-color: var(--accent); }
+.cal-daynum { font-size: .78rem; color: var(--muted); font-family: var(--mono); }
+.cal-acts { display: flex; flex-wrap: wrap; gap: 2px; margin-top: .2rem; }
+.cal-act { font-size: 1.05rem; text-decoration: none; line-height: 1.15; }
+.cal-act:hover { text-decoration: none; filter: brightness(1.25); }
+@media (max-width: 640px) { .cal-cell { min-height: 52px; padding: .2rem; } .cal-act { font-size: .95rem; } }
+
+/* ---------- manual workout form ---------- */
+.nw-desc { display: flex; flex-direction: column; gap: .3rem; font-size: .78rem;
+           text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+.nw-desc textarea { padding: .6rem .7rem; background: var(--bg-elev); color: var(--text);
+  border: 1px solid var(--border); border-radius: var(--radius-sm); font-family: inherit;
+  font-size: .95rem; resize: vertical; }
+.edit-form .nw-full { grid-column: 1 / -1; }
+
 /* ---------- charts sizing ---------- */
 .card canvas { max-height: 300px; }
 
