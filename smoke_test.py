@@ -141,14 +141,40 @@ with TestClient(app) as client:
     assert r.status_code == 200 and "Circuito corpo libero" in r.text
     print("plan detail OK")
 
-    r = client.post(f"/plans/{pid}/session/{sid}/done", follow_redirects=False)
+    # marking done records what was ACTUALLY done (overriding the plan)
+    r = client.post(f"/plans/{pid}/session/{sid}/done", follow_redirects=False,
+                    data={"done_notes": "3x12 squat, 3x8 push up, 2x1' plank",
+                          "done_min": "45", "done_date": recent.strftime("%Y-%m-%d")})
     assert r.status_code == 303
     with Session(engine) as s:
         done = s.get(PlanSession, sid)
         assert done.done and done.workout_id
         w = s.get(Workout, done.workout_id)
         assert w and w.manual and w.name == "Circuito corpo libero"
-    print("plan session done -> manual workout OK")
+        assert w.notes == "3x12 squat, 3x8 push up, 2x1' plank", w.notes
+        assert w.moving_s == 45 * 60, w.moving_s
+    print("plan session done -> manual workout with actual notes OK")
+
+    r = client.get(f"/workout/{w.id}")
+    assert r.status_code == 200 and "Cosa hai fatto" in r.text and "3x12 squat" in r.text
+    print("workout page shows notes OK")
+
+    # the notes must reach the AI payloads (otherwise the analysis can't judge it)
+    from app.anthropic_client import _activity_log, _health_payload
+    log = _activity_log([w.model_dump()])
+    assert log[0]["cosa_ha_fatto"].startswith("3x12 squat"), log
+    assert log[0]["nome"] == "Circuito corpo libero"
+    payload = _health_payload({"metrics": {}, "body": {}}, [w.model_dump()])
+    assert "3x12 squat" in jsonlib.dumps(payload, default=str)
+    print("notes reach AI health payload OK")
+
+    r = client.post(f"/workout/{w.id}/edit", follow_redirects=False,
+                    data={"name": "Circuito corpo libero", "sport": "Corpo libero",
+                          "notes": "corretto: 4x12 squat"})
+    assert r.status_code == 303
+    with Session(engine) as s:
+        assert s.get(Workout, w.id).notes == "corretto: 4x12 squat"
+    print("workout notes editable OK")
 
     r = client.post(f"/plans/{pid}/session/{sid}/undo", follow_redirects=False)
     assert r.status_code == 303

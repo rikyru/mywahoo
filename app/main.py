@@ -856,7 +856,7 @@ def plan_detail(request: Request, plan_id: int):
     done = sum(1 for s in sessions if s.done)
     return templates.TemplateResponse(request, "plan.html", {
         "plan": plan, "sessions": sessions, "done": done, "total": len(sessions),
-        "message": request.query_params.get("msg")})
+        "now": datetime.utcnow(), "message": request.query_params.get("msg")})
 
 
 @app.post("/plans/{plan_id}/delete", dependencies=[Depends(require_auth)])
@@ -874,14 +874,23 @@ def plan_delete(plan_id: int):
 
 
 @app.post("/plans/{plan_id}/session/{sid}/done", dependencies=[Depends(require_auth)])
-def plan_session_done(plan_id: int, sid: int):
+def plan_session_done(plan_id: int, sid: int, done_notes: str = Form(""),
+                      done_min: str = Form(""), done_date: str = Form("")):
+    """Mark a session done, recording what was *actually* done (defaults to the
+    planned session) as the workout notes, so the AI can judge the real load."""
     with Session(engine) as session:
         ps = session.get(PlanSession, sid)
         if not ps or ps.plan_id != plan_id or ps.done:
             return RedirectResponse(f"/plans/{plan_id}", status_code=303)
-        start = ps.date or datetime.utcnow()
-        wid = _create_manual_workout(
-            ps.title, ps.sport, start, ps.duration_min, ps.description)
+        notes = done_notes.strip() or ps.description
+        try:
+            mins = int(done_min) if done_min.strip() else ps.duration_min
+        except ValueError:
+            mins = ps.duration_min
+        d = _parse_date(done_date)
+        start = (datetime.combine(d, time(12, 0)) if d
+                 else (ps.date or datetime.utcnow()))
+        wid = _create_manual_workout(ps.title, ps.sport, start, mins, notes)
         ps.done = True
         ps.workout_id = wid
         session.add(ps)
@@ -1174,7 +1183,8 @@ def workout_edit_form(request: Request, workout_id: int):
 def workout_edit(workout_id: int, name: str = Form(""), sport: str = Form(""),
                  distance_km: str = Form(""), ascent_m: str = Form(""),
                  moving_min: str = Form(""), avg_hr: str = Form(""),
-                 avg_power: str = Form(""), calories: str = Form("")):
+                 avg_power: str = Form(""), calories: str = Form(""),
+                 notes: str = Form("")):
     def num(s):
         try:
             return float(s) if s.strip() != "" else None
@@ -1198,6 +1208,7 @@ def workout_edit(workout_id: int, name: str = Form(""), sport: str = Form(""),
         w.avg_hr = num(avg_hr)
         w.avg_power = num(avg_power)
         w.calories = num(calories)
+        w.notes = notes.strip()
         w.updated_at = datetime.utcnow()
         session.add(w)
         session.commit()

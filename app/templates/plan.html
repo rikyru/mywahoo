@@ -35,16 +35,33 @@
     <form method="post" action="/plans/{{ plan.id }}/session/{{ s.id }}/undo">
       <button type="submit" class="btn btn-secondary" title="Annulla">↩ Fatto ✓</button>
     </form>
-    {% else %}
-    <form method="post" action="/plans/{{ plan.id }}/session/{{ s.id }}/done">
-      <button type="submit" class="btn">Segna fatto</button>
-    </form>
     {% endif %}
   </div>
 
   {% if s.description %}<p class="plan-session-desc">{{ s.description }}</p>{% endif %}
   {% if s.done and s.workout_id %}
   <p class="muted"><a href="/workout/{{ s.workout_id }}">→ Vedi allenamento registrato</a></p>
+  {% endif %}
+
+  {% if not s.done %}
+  <details class="plan-done">
+    <summary class="btn">Segna fatto</summary>
+    <form method="post" action="/plans/{{ plan.id }}/session/{{ s.id }}/done" class="plan-edit-form">
+      <label>Cosa hai fatto davvero <span class="muted">(l'AI la usa per valutare carico e forma)</span>
+        <textarea name="done_notes" rows="4" class="nw-desc">{{ s.description }}</textarea>
+      </label>
+      <div class="plan-edit-row">
+        <label>Durata effettiva (min)
+          <input type="number" name="done_min" value="{{ s.duration_min }}" min="0">
+        </label>
+        <label>Quando
+          <input type="date" name="done_date"
+                 value="{{ (s.date or now).strftime('%Y-%m-%d') }}">
+        </label>
+      </div>
+      <button type="submit" class="btn">Conferma fatto</button>
+    </form>
+  </details>
   {% endif %}
 
   <details class="plan-session-edit">

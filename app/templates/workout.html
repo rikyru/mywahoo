@@ -41,6 +41,18 @@
   {% endif %}
 </section>
 
+{% if w.notes %}
+<section class="card">
+  <div class="card-head">
+    <h3>Cosa hai fatto</h3>
+    <a class="btn btn-secondary" href="/workout/{{ w.id }}/edit">Modifica</a>
+  </div>
+  <p class="workout-notes">{{ w.notes }}</p>
+  <p class="muted">Questa descrizione viene passata all'AI nelle analisi di
+    allenamenti, salute e forma.</p>
+</section>
+{% endif %}
+
 <section class="card">
   <h3>Metriche</h3>
   <table class="metrics">

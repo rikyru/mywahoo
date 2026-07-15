@@ -44,14 +44,26 @@ Markdown, con queste sezioni:
 Per le anomalie considera ad esempio: FC sproporzionata rispetto alla potenza,
 drift cardiaco elevato (>5% indica affaticamento/disidratazione/caldo), cali di
 potenza o cadenza nei decimi finali, pause anomale. Se un dato non è disponibile
-dillo esplicitamente invece di inventare. Sii concreto e quantitativo."""
+dillo esplicitamente invece di inventare. Sii concreto e quantitativo.
+
+Se la sessione ha "manual": true è stata inserita a mano (spesso allenamento a
+casa / corpo libero): il campo "notes" descrive gli esercizi realmente svolti e
+tipicamente non ci sono stream, FC né potenza. In quel caso basa l'analisi sulla
+descrizione (volume, serie/ripetizioni, gruppi muscolari, densità del lavoro),
+stima lo sforzo e adatta le sezioni a un allenamento di forza/corpo libero
+invece di lamentare i dati mancanti."""
 
 PERIOD_SYSTEM_PROMPT = """\
 Sei un allenatore esperto di endurance. Ti viene fornito l'elenco delle sessioni
 di un periodo. Scrivi in italiano, in Markdown, una sintesi del periodo con:
 carico complessivo e distribuzione, progressione o regressione, equilibrio tra
 intensità e recupero, e 2-3 raccomandazioni per il periodo successivo.
-Sii concreto e quantitativo dove possibile."""
+Sii concreto e quantitativo dove possibile.
+Le sessioni con "manual": true sono inserite a mano (spesso allenamenti a casa /
+corpo libero): per queste il campo "notes" descrive gli esercizi realmente
+svolti (serie, ripetizioni, carichi) e spesso mancano FC e potenza. Usa quella
+descrizione per stimare il carico e valutare la qualità del lavoro, e citala nel
+merito (es. progressione di serie/ripetizioni) invece di ignorarla."""
 
 HEALTH_SYSTEM_PROMPT = """\
 Sei un coach di salute, recupero e sonno per uno sportivo amatoriale. Ti vengono
@@ -59,8 +71,11 @@ forniti gli indicatori del periodo selezionato (FC a riposo, HRV, SpO2, frequenz
 respiratoria, temperatura cutanea notturna, peso, composizione corporea, sonno)
 con valori più recenti, variazioni e min/media/max, un "indice di forma" 0-100
 calcolato sulla baseline personale, E l'elenco delle attività fisiche del periodo
-(data, sport, durata, distanza, FC/potenza media, TSS). Rispondi in italiano, in
-Markdown, conciso, con queste sezioni:
+(data, sport, durata, distanza, FC/potenza media, TSS). Alcune attività hanno un
+campo "cosa_ha_fatto": è la descrizione degli esercizi realmente svolti (tipico
+degli allenamenti a casa / corpo libero, dove FC e potenza mancano). Usala per
+stimare il carico reale di quelle sessioni. Rispondi in italiano, in Markdown,
+conciso, con queste sezioni:
 
 ## Recupero e forma
 ## Sonno
@@ -320,12 +335,18 @@ def _activity_log(workouts: list[dict] | None) -> list[dict]:
         date = d.strftime("%Y-%m-%d") if hasattr(d, "strftime") else str(d)[:10]
         row = {"data": date, "sport": w.get("sport") or "?",
                "durata_min": round((w.get("moving_s") or 0) / 60)}
+        if w.get("name"):
+            row["nome"] = w["name"]
         if w.get("distance_m"):
             row["distanza_km"] = round(w["distance_m"] / 1000, 1)
         for src, dst in (("avg_hr", "fc_media"), ("avg_power", "potenza_media"),
                          ("tss", "tss")):
             if w.get(src):
                 row[dst] = round(w[src], 1)
+        # What the user actually did (home/bodyweight sessions have no HR/power:
+        # the description is the only signal about the real load).
+        if w.get("notes"):
+            row["cosa_ha_fatto"] = str(w["notes"])[:600]
         out.append(row)
     out.sort(key=lambda r: r["data"])
     return out

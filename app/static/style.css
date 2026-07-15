@@ -248,6 +248,11 @@ a.chip:hover { background: var(--card-hover); text-decoration: none; }
 .plan-session-desc { margin: .6rem 0 .2rem; white-space: pre-wrap; }
 .plan-session-done { opacity: .72; }
 .plan-session-done .plan-session-info strong { text-decoration: line-through; }
+.plan-done { margin-top: .6rem; }
+.plan-done > summary { display: inline-block; list-style: none; cursor: pointer; }
+.plan-done > summary::-webkit-details-marker { display: none; }
+.plan-done[open] > summary { opacity: .6; }
+.workout-notes { white-space: pre-wrap; margin: .4rem 0; }
 .plan-session-edit { margin-top: .5rem; }
 .plan-session-edit summary { cursor: pointer; font-size: .85rem; }
 .plan-edit-form { display: flex; flex-direction: column; gap: .6rem; margin-top: .6rem; }
