@@ -141,10 +141,16 @@ with TestClient(app) as client:
     assert r.status_code == 200 and "Circuito corpo libero" in r.text
     print("plan detail OK")
 
-    # marking done records what was ACTUALLY done (overriding the plan)
+    # marking done records what was ACTUALLY done (overriding the plan). The RPE
+    # estimate calls the AI, which the smoke test must not do: stub it out.
+    import app.anthropic_client as ac
+    async def _fake_rpe(*a, **k):
+        return 7.5
+    ac_real, ac.estimate_rpe = ac.estimate_rpe, _fake_rpe
     r = client.post(f"/plans/{pid}/session/{sid}/done", follow_redirects=False,
                     data={"done_notes": "3x12 squat, 3x8 push up, 2x1' plank",
                           "done_min": "45", "done_date": recent.strftime("%Y-%m-%d")})
+    ac.estimate_rpe = ac_real
     assert r.status_code == 303
     with Session(engine) as s:
         done = s.get(PlanSession, sid)
@@ -153,7 +159,8 @@ with TestClient(app) as client:
         assert w and w.manual and w.name == "Circuito corpo libero"
         assert w.notes == "3x12 squat, 3x8 push up, 2x1' plank", w.notes
         assert w.moving_s == 45 * 60, w.moving_s
-    print("plan session done -> manual workout with actual notes OK")
+        assert w.rpe == 7.5 and w.avg_hr is None  # estimate must not fake measured HR
+    print("plan session done -> manual workout with actual notes + RPE OK")
 
     r = client.get(f"/workout/{w.id}")
     assert r.status_code == 200 and "Cosa hai fatto" in r.text and "3x12 squat" in r.text
@@ -183,6 +190,59 @@ with TestClient(app) as client:
         assert not un.done and un.workout_id is None
         assert s.get(Workout, w.id) is None  # manual workout removed on undo
     print("plan session undo OK")
+
+    # --- profile: drives the TRIMP scale, so a wrong range skews all of Forma ---
+    from app import profile as profilemod
+    r = client.post("/settings/profile", follow_redirects=False,
+                    data={"height_cm": "178", "weight_kg": "74.5", "birth_year": "1992",
+                          "sex": "M", "rest_hr": "48", "max_hr": ""})
+    assert r.status_code == 303
+    p = profilemod.load()
+    assert p["height_cm"] == 178 and p["weight_kg"] == 74.5 and p["rest_hr"] == 48
+    assert profilemod.age(p) and profilemod.bmi(p) == 23.5, profilemod.bmi(p)
+    print(f"profile saved OK (BMI {profilemod.bmi(p)}, età {profilemod.age(p)})")
+
+    # empty max_hr: higher of the measured peak and Tanaka (208-0.7*age)
+    rest, mx, sex = profilemod.hr_anchors(p, measured_max=171)
+    assert (rest, sex) == (48.0, "M") and abs(mx - (208 - 0.7 * profilemod.age(p))) < 0.1
+    # a measured peak above the age estimate is real and must win
+    assert profilemod.hr_anchors(p, measured_max=198)[1] == 198.0
+    # an explicit value overrides both
+    assert profilemod.hr_anchors({**p, "max_hr": 195}, measured_max=171)[1] == 195.0
+    print(f"HR anchors OK (rest {rest:.0f}, max {mx:.0f} da Tanaka, 198 se misurata)")
+
+    assert profilemod.ai_context(p)["peso_kg"] == 74.5
+    print("profile reaches AI context OK")
+
+    r = client.get("/settings")
+    assert r.status_code == 200 and "I miei dati" in r.text and "178" in r.text
+    print("settings profile section OK")
+
+    r = client.get("/form")
+    assert r.status_code == 200 and "Forma" in r.text
+    print("form page renders with profile-driven load OK")
+
+# --- load model: every source must land on the same TRIMP scale ---
+from app.form import activity_load, sport_rpe, trimp
+
+assert sport_rpe("Yoga") == 3.0 and sport_rpe("Corpo libero") == 6.0
+assert sport_rpe("HIIT in casa") == 8.5 and sport_rpe("Sconosciuto") == 5.0
+print("per-sport RPE defaults OK")
+
+# measured HR wins over any estimate
+m = activity_load(140, 60, "Cycling", rpe=2, rest_hr=55, max_hr=190)
+assert abs(m - trimp(140, 60, 55, 190)) < 1e-9
+print(f"measured HR takes precedence OK (TRIMP={m:.1f})")
+
+# an explicit RPE must beat the sport default, and harder must mean more load
+easy = activity_load(None, 40, "Corpo libero", rpe=3)
+hard = activity_load(None, 40, "Corpo libero", rpe=9)
+default = activity_load(None, 40, "Corpo libero")
+assert easy < default < hard, (easy, default, hard)
+# yoga must no longer cost the same as HIIT for the same duration
+assert activity_load(None, 40, "Yoga") < activity_load(None, 40, "HIIT") / 2
+print(f"RPE-based load OK (yoga={activity_load(None, 40, 'Yoga'):.0f} "
+      f"< corpo libero={default:.0f} < HIIT={activity_load(None, 40, 'HIIT'):.0f})")
 
 # --- FIT helpers with synthetic data (no FIT file needed) ---
 from app.fit import ai_stats, compute_normalized_power, downsample

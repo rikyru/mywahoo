@@ -140,6 +140,10 @@ class Workout(SQLModel, table=True):
     raw_summary: str = "{}"              # raw JSON from Wahoo (webhook or API)
     manual: bool = False                 # created by the user (not imported)
     notes: str = ""                      # free-text description (manual/home workouts)
+    rpe: Optional[float] = None          # 1-10 perceived effort: estimated by the AI
+                                         # from `notes` (kept apart from avg_hr, which
+                                         # must stay measured data), used for the load
+                                         # model when there is no heart rate
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
 
@@ -196,7 +200,8 @@ def init_db() -> None:
 _MIGRATIONS = {
     "routeassessment": [("route_json", "TEXT DEFAULT '{}'"),
                         ("sport", "TEXT DEFAULT 'Bici'")],
-    "workout": [("manual", "INTEGER DEFAULT 0"), ("notes", "TEXT DEFAULT ''")],
+    "workout": [("manual", "INTEGER DEFAULT 0"), ("notes", "TEXT DEFAULT ''"),
+                ("rpe", "REAL")],
 }
 
 

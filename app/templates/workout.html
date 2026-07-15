@@ -67,6 +67,9 @@
             {{ w.np_power and ("%.0f"|format(w.np_power)) or "-" }} W</td></tr>
     <tr><td>Cadenza media</td><td>{{ w.avg_cadence and ("%.0f"|format(w.avg_cadence)) or "-" }}</td></tr>
     <tr><td>Calorie</td><td>{{ w.calories and ("%.0f"|format(w.calories)) or "-" }}</td></tr>
+    {% if w.rpe %}<tr><td>Sforzo percepito</td>
+        <td>{{ "%.1f"|format(w.rpe) }}/10 <span class="muted">· stimato dalla descrizione,
+          usato per il carico</span></td></tr>{% endif %}
     {% if w.tss %}<tr><td>TSS / IF</td>
         <td>{{ "%.0f"|format(w.tss) }} / {{ w.intensity_factor and ("%.2f"|format(w.intensity_factor)) or "-" }}</td></tr>{% endif %}
   </table>

@@ -39,6 +39,11 @@
     <label>Calorie
       <input type="number" step="1" name="calories" value="{{ '%.0f'|format(w.calories) if w.calories else '' }}">
     </label>
+    <label>Sforzo percepito (1-10)
+      <input type="number" step="0.5" min="1" max="10" name="rpe"
+             value="{{ '%.1f'|format(w.rpe) if w.rpe else '' }}"
+             placeholder="{{ '%.1f'|format(default_rpe) }} (tipico per {{ w.sport }})">
+    </label>
     <label class="nw-desc nw-full">Cosa hai fatto (l'AI la usa per valutare il carico)
       <textarea name="notes" rows="4"
         placeholder="Es. 3x12 squat, 3x10 push up, 2x1' plank, circuito ripetuto 3 volte">{{ w.notes }}</textarea>

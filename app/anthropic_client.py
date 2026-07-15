@@ -9,6 +9,7 @@ import logging
 
 import httpx
 
+from . import profile as _profile
 from .config import settings
 
 logger = logging.getLogger(__name__)
@@ -209,8 +210,11 @@ async def _call_messages(system: str, messages: list) -> str:
 
 async def analyze_workout(summary_row: dict, stream_stats: dict) -> str:
     """Generate the AI analysis for one workout: summary + aggregated stream stats."""
-    body = ("Dati di riepilogo della sessione:\n"
-            + json.dumps(summary_row, ensure_ascii=False, indent=2, default=str))
+    body = ""
+    if (who := _profile.ai_context()):
+        body += ("Atleta:\n" + json.dumps(who, ensure_ascii=False, default=str) + "\n\n")
+    body += ("Dati di riepilogo della sessione:\n"
+             + json.dumps(summary_row, ensure_ascii=False, indent=2, default=str))
     if stream_stats:
         body += ("\n\nStatistiche aggregate dagli stream del file FIT "
                  "(medie per decimo di sessione, drift cardiaco):\n"
@@ -277,8 +281,8 @@ WORKOUT_STRUCTURE_PROMPT = """\
 Struttura la descrizione di un allenamento (spesso a casa / corpo libero) in
 campi. Rispondi SOLO con un JSON valido, senza testo attorno né code fence, con
 queste chiavi esatte:
-{"name": "nome breve", "sport": "tipo (es. Forza, Corpo libero, Corsa, Bici, Nuoto, Yoga, HIIT, Camminata)", "durata_min": intero (stima realistica se non indicato), "distanza_km": numero o null, "calorie": intero o null (stima ragionevole), "fc_media": intero o null, "note": "riassunto degli esercizi svolti"}
-Stima durata e calorie in modo realistico dal contenuto. Nessun altro testo."""
+{"name": "nome breve", "sport": "tipo (es. Forza, Corpo libero, Corsa, Bici, Nuoto, Yoga, HIIT, Camminata)", "durata_min": intero (stima realistica se non indicato), "distanza_km": numero o null, "calorie": intero o null (stima ragionevole), "fc_media": intero o null (SOLO se indicata esplicitamente: non inventarla), "rpe": numero 1-10 con un decimale (sforzo percepito stimato: 3 = molto leggero/mobilità, 5 = moderato, 7 = intenso, 9-10 = massimale), "note": "riassunto degli esercizi svolti"}
+Stima durata, calorie e rpe in modo realistico dal contenuto. Nessun altro testo."""
 
 
 PLAN_SYSTEM_PROMPT = """\
@@ -307,6 +311,39 @@ async def generate_plan(goal: str, n_days: int, start_date: str) -> dict:
         return {}
 
 
+RPE_SYSTEM_PROMPT = """\
+Stima lo sforzo percepito (RPE) di un allenamento dalla sua descrizione, sulla
+scala 1-10 (1 = riposo assoluto, 3 = molto leggero/mobilità, 5 = moderato,
+7 = intenso continuo, 9-10 = massimale). Considera densità del lavoro, recuperi,
+serie/ripetizioni, carichi e durata. Rispondi SOLO con JSON valido, senza testo
+attorno né code fence: {"rpe": numero con un decimale, "motivo": "una frase breve"}
+Nessun altro testo."""
+
+
+async def estimate_rpe(title: str, sport: str, minutes: float, description: str,
+                       profile: dict | None = None) -> float | None:
+    """Estimate perceived effort (1-10) from a workout description.
+
+    Used for home/bodyweight sessions that carry no heart rate, so the load model
+    has something better than a per-sport average to work with.
+    """
+    import re
+    payload = {"titolo": title, "sport": sport, "durata_min": minutes,
+               "descrizione": description}
+    if profile:
+        payload["atleta"] = profile
+    raw = await _call_claude(RPE_SYSTEM_PROMPT,
+                             json.dumps(payload, ensure_ascii=False, default=str))
+    m = re.search(r"\{.*\}", raw, re.S)
+    if not m:
+        return None
+    try:
+        rpe = float(json.loads(m.group(0)).get("rpe"))
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return None
+    return min(10.0, max(1.0, rpe))
+
+
 async def structure_workout(description: str) -> dict:
     """Turn a free-text workout description into structured fields (JSON)."""
     import re
@@ -321,10 +358,13 @@ async def structure_workout(description: str) -> dict:
 
 
 async def summarize_period(period_label: str, workouts: list[dict]) -> str:
-    body = (f"Periodo: {period_label}\n"
-            f"Numero sessioni: {len(workouts)}\n\n"
-            + json.dumps(workouts, ensure_ascii=False, indent=1, default=str))
-    return await _call_claude(PERIOD_SYSTEM_PROMPT, body)
+    payload = {"periodo": period_label, "numero_sessioni": len(workouts),
+               "sessioni": workouts}
+    if (who := _profile.ai_context()):
+        payload["atleta"] = who
+    return await _call_claude(
+        PERIOD_SYSTEM_PROMPT,
+        json.dumps(payload, ensure_ascii=False, indent=1, default=str))
 
 
 def _activity_log(workouts: list[dict] | None) -> list[dict]:
@@ -386,6 +426,8 @@ def _health_payload(overview: dict, workouts: list[dict] | None,
     out = {"indice_di_forma": overview.get("score"),
            "metriche_vitali": metrics, "composizione_corporea": body,
            "sonno": sleep, "attivita_fisiche": _activity_log(workouts)}
+    if (who := _profile.ai_context()):
+        out["atleta"] = who
     if nutrition:
         out["alimentazione"] = nutrition
     return out

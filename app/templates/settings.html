@@ -7,6 +7,62 @@
 {% if error %}<div class="alert error">{{ error }}</div>{% endif %}
 
 <section class="card">
+  <div class="card-head">
+    <h3>I miei dati</h3>
+    <form method="post" action="/settings/profile/sync">
+      <button class="btn btn-secondary" type="submit"
+              title="Prende peso e FC a riposo dagli ultimi 30 giorni">Aggiorna da Google Health</button>
+    </form>
+  </div>
+  <p class="muted">Servono al modello di carico e alle analisi AI. La FC a riposo e
+    la FC max definiscono la scala del TRIMP: se sono sbagliate, tutta la Forma
+    (CTL/ATL/TSB) è sfalsata.</p>
+
+  <form method="post" action="/settings/profile" class="edit-form">
+    <label>Altezza (cm)
+      <input type="number" step="1" name="height_cm"
+             value="{{ profile.height_cm | round | int if profile.height_cm else '' }}">
+    </label>
+    <label>Peso (kg)
+      <input type="number" step="0.1" name="weight_kg"
+             value="{{ '%.1f'|format(profile.weight_kg) if profile.weight_kg else '' }}">
+    </label>
+    <label>Anno di nascita
+      <input type="number" step="1" min="1900" name="birth_year"
+             value="{{ profile.birth_year | int if profile.birth_year else '' }}">
+    </label>
+    <label>Sesso
+      <select name="sex">
+        <option value="" {% if not profile.sex %}selected{% endif %}>—</option>
+        <option value="M" {% if profile.sex == 'M' %}selected{% endif %}>Uomo</option>
+        <option value="F" {% if profile.sex == 'F' %}selected{% endif %}>Donna</option>
+      </select>
+    </label>
+    <label>FC a riposo (bpm)
+      <input type="number" step="1" name="rest_hr" placeholder="{{ eff_rest_hr }}"
+             value="{{ profile.rest_hr | round | int if profile.rest_hr else '' }}">
+    </label>
+    <label>FC max (bpm)
+      <input type="number" step="1" name="max_hr"
+             placeholder="{{ eff_max_hr }}{% if measured_max_hr %} (misurata){% endif %}"
+             value="{{ profile.max_hr | round | int if profile.max_hr else '' }}">
+    </label>
+    <div class="edit-actions">
+      <button class="btn" type="submit">Salva dati</button>
+    </div>
+  </form>
+
+  <p class="muted">
+    In uso ora: <strong>FC riposo {{ eff_rest_hr }}</strong> ·
+    <strong>FC max {{ eff_max_hr }}</strong>
+    {%- if not profile.max_hr and measured_max_hr %} (dalla tua max misurata){% endif %}
+    {%- if age %} · età {{ age }}{% endif %}
+    {%- if bmi %} · BMI {{ bmi }}{% endif %}.
+    I campi vuoti usano questi valori automatici.
+  </p>
+</section>
+
+<section class="card">
   <h3>Accesso</h3>
   <p class="muted">Password per accedere all'app (login rapido, indipendente da Wahoo).
     {% if not has_password %}Attualmente nessuna password: si accede solo via Wahoo.{% endif %}</p>

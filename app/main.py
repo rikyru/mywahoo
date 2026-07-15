@@ -15,11 +15,12 @@ from fastapi import (BackgroundTasks, Depends, FastAPI, File, Form, HTTPExceptio
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from sqlalchemy import func
 from sqlmodel import Session, select
 from starlette.middleware.sessions import SessionMiddleware
 
 from . import (anthropic_client, fit as fitmod, form as formmod, google_health,
-               gpx as gpxmod, nutrition, wahoo)
+               gpx as gpxmod, nutrition, profile as profilemod, wahoo)
 from .config import settings, setup_logging
 from .db import (AiAnalysis, ChatMessage, Conversation, IgnoredImport, PeriodSummary,
                  PlanSession, RouteAssessment, TrainingPlan, Workout, WorkoutStream,
@@ -623,9 +624,11 @@ def _fitness_series() -> tuple[list, dict]:
     """Full CTL/ATL/TSB series over all history + current-state summary."""
     with Session(engine) as session:
         ws = list(session.exec(select(Workout).order_by(Workout.start_date)))
-    max_hr = max([w.max_hr for w in ws if w.max_hr] + [190])
-    items = [(w.start_date.date(), w.avg_hr, (w.moving_s or 0) / 60) for w in ws]
-    series = formmod.fitness_series(items, rest_hr=55, max_hr=max_hr)
+    measured_max = max([w.max_hr for w in ws if w.max_hr] + [0]) or None
+    rest_hr, max_hr, sex = profilemod.hr_anchors(measured_max=measured_max)
+    items = [(w.start_date.date(), w.avg_hr, (w.moving_s or 0) / 60, w.sport, w.rpe)
+             for w in ws]
+    series = formmod.fitness_series(items, rest_hr=rest_hr, max_hr=max_hr, sex=sex)
     return series, formmod.summarize(series)
 
 
@@ -749,7 +752,8 @@ async def workout_parse(request: Request):
 
 
 def _create_manual_workout(name, sport, start, duration_min, notes="",
-                           distance_km=None, calories=None, avg_hr=None) -> int:
+                           distance_km=None, calories=None, avg_hr=None,
+                           rpe=None) -> int:
     """Create a manual Workout and return its id."""
     wid = int(datetime.utcnow().timestamp() * 1000)
     mins = duration_min or 0
@@ -759,7 +763,7 @@ def _create_manual_workout(name, sport, start, duration_min, notes="",
                     start_date=start, manual=True, notes=(notes or "").strip(),
                     duration_s=int(mins * 60), moving_s=int(mins * 60),
                     distance_m=(distance_km * 1000) if distance_km else 0.0,
-                    avg_hr=avg_hr, calories=calories)
+                    avg_hr=avg_hr, calories=calories, rpe=rpe)
         if w.distance_m and w.moving_s:
             w.avg_speed_ms = w.distance_m / w.moving_s
         session.add(w)
@@ -770,7 +774,8 @@ def _create_manual_workout(name, sport, start, duration_min, notes="",
 @app.post("/workout/manual", dependencies=[Depends(require_auth)])
 def workout_manual(name: str = Form(""), sport: str = Form(""), date_: str = Form("", alias="date"),
                    durata_min: str = Form(""), distanza_km: str = Form(""),
-                   calorie: str = Form(""), fc_media: str = Form(""), note: str = Form("")):
+                   calorie: str = Form(""), fc_media: str = Form(""),
+                   note: str = Form(""), rpe: str = Form("")):
     def num(s):
         try:
             return float(s) if str(s).strip() != "" else None
@@ -782,7 +787,8 @@ def workout_manual(name: str = Form(""), sport: str = Form(""), date_: str = For
     if d:
         start = datetime.combine(d, datetime.utcnow().time())
     wid = _create_manual_workout(name, sport, start, num(durata_min) or 0, note,
-                                 num(distanza_km), num(calorie), num(fc_media))
+                                 num(distanza_km), num(calorie), num(fc_media),
+                                 rpe=num(rpe))
     return RedirectResponse(f"/workout/{wid}?{urlencode({'msg': 'Allenamento aggiunto'})}",
                             status_code=303)
 
@@ -874,23 +880,38 @@ def plan_delete(plan_id: int):
 
 
 @app.post("/plans/{plan_id}/session/{sid}/done", dependencies=[Depends(require_auth)])
-def plan_session_done(plan_id: int, sid: int, done_notes: str = Form(""),
-                      done_min: str = Form(""), done_date: str = Form("")):
+async def plan_session_done(plan_id: int, sid: int, done_notes: str = Form(""),
+                            done_min: str = Form(""), done_date: str = Form("")):
     """Mark a session done, recording what was *actually* done (defaults to the
     planned session) as the workout notes, so the AI can judge the real load."""
     with Session(engine) as session:
         ps = session.get(PlanSession, sid)
         if not ps or ps.plan_id != plan_id or ps.done:
             return RedirectResponse(f"/plans/{plan_id}", status_code=303)
+        title, sport, planned_min = ps.title, ps.sport, ps.duration_min
         notes = done_notes.strip() or ps.description
+    try:
+        mins = int(done_min) if done_min.strip() else planned_min
+    except ValueError:
+        mins = planned_min
+    d = _parse_date(done_date)
+    # Home sessions carry no heart rate: ask the AI to rate the effort from the
+    # description so the load model sees more than a per-sport average. Best
+    # effort — a failure here must not lose the fact that the session was done.
+    rpe = None
+    if notes:
         try:
-            mins = int(done_min) if done_min.strip() else ps.duration_min
-        except ValueError:
-            mins = ps.duration_min
-        d = _parse_date(done_date)
+            rpe = await anthropic_client.estimate_rpe(
+                title, sport, mins, notes, profilemod.ai_context())
+        except anthropic_client.AnthropicError as e:
+            logger.warning("RPE estimate failed for plan session %s: %s", sid, e)
+    with Session(engine) as session:
+        ps = session.get(PlanSession, sid)
+        if not ps or ps.done:
+            return RedirectResponse(f"/plans/{plan_id}", status_code=303)
         start = (datetime.combine(d, time(12, 0)) if d
                  else (ps.date or datetime.utcnow()))
-        wid = _create_manual_workout(ps.title, ps.sport, start, mins, notes)
+        wid = _create_manual_workout(title, sport, start, mins, notes, rpe=rpe)
         ps.done = True
         ps.workout_id = wid
         session.add(ps)
@@ -942,6 +963,10 @@ def plan_session_edit(plan_id: int, sid: int, title: str = Form(""),
 async def settings_page(request: Request):
     provider = anthropic_client.effective_provider()
     openai_models = await anthropic_client.list_openai_models() if settings.openai_api_key else []
+    p = profilemod.load()
+    with Session(engine) as session:
+        measured_max = session.exec(select(func.max(Workout.max_hr))).one()
+    rest_hr, max_hr, _ = profilemod.hr_anchors(p, measured_max=measured_max)
     return templates.TemplateResponse(request, "settings.html", {
         "provider": provider,
         "model": anthropic_client.effective_model(),
@@ -949,9 +974,57 @@ async def settings_page(request: Request):
         "has_openai": bool(settings.openai_api_key),
         "has_anthropic": bool(settings.anthropic_api_key),
         "has_password": bool(app_password()),
+        "profile": p,
+        "age": profilemod.age(p),
+        "bmi": profilemod.bmi(p),
+        "eff_rest_hr": round(rest_hr),
+        "eff_max_hr": round(max_hr),
+        "measured_max_hr": round(measured_max) if measured_max else None,
         "message": request.query_params.get("msg"),
         "error": request.query_params.get("error"),
     })
+
+
+@app.post("/settings/profile", dependencies=[Depends(require_auth)])
+def settings_profile(height_cm: str = Form(""), weight_kg: str = Form(""),
+                     birth_year: str = Form(""), sex: str = Form(""),
+                     rest_hr: str = Form(""), max_hr: str = Form("")):
+    profilemod.save({"height_cm": height_cm, "weight_kg": weight_kg,
+                     "birth_year": birth_year, "sex": sex if sex in ("M", "F") else "",
+                     "rest_hr": rest_hr, "max_hr": max_hr})
+    return RedirectResponse(
+        f"/settings?{urlencode({'msg': 'Dati personali salvati (rivedi la Forma: il carico è ricalcolato)'})}",
+        status_code=303)
+
+
+@app.post("/settings/profile/sync", dependencies=[Depends(require_auth)])
+async def settings_profile_sync():
+    """Pull weight and resting HR from Google Health into the profile."""
+    try:
+        overview = await google_health.fetch_health_overview(
+            date.today() - timedelta(days=29), date.today())
+    except google_health.GoogleHealthError as e:
+        logger.warning("Profile sync from Google Health failed: %s", e)
+        return RedirectResponse(
+            f"/settings?{urlencode({'error': f'Google Health non disponibile: {e}'})}",
+            status_code=303)
+    vals, got = {}, []
+    if (w := (overview.get("body") or {}).get("weight", {}).get("latest")):
+        vals["weight_kg"] = round(float(w), 1)
+        got.append(f"peso {vals['weight_kg']} kg")
+    rh = (overview.get("metrics") or {}).get("resting_hr", {}).get("series") or []
+    if rh:
+        median = sorted(p["value"] for p in rh)[len(rh) // 2]
+        vals["rest_hr"] = round(float(median))
+        got.append(f"FC riposo {vals['rest_hr']} bpm")
+    if not vals:
+        return RedirectResponse(
+            f"/settings?{urlencode({'error': 'Nessun dato di peso/FC a riposo da Google Health'})}",
+            status_code=303)
+    profilemod.save(vals)
+    return RedirectResponse(
+        f"/settings?{urlencode({'msg': 'Da Google Health: ' + ', '.join(got)})}",
+        status_code=303)
 
 
 @app.post("/settings", dependencies=[Depends(require_auth)])
@@ -1176,7 +1249,8 @@ def workout_edit_form(request: Request, workout_id: int):
         if not w:
             raise HTTPException(404, "Attività non trovata")
         sports = sorted({s for s in session.exec(select(Workout.sport).distinct()) if s})
-    return templates.TemplateResponse(request, "workout_edit.html", {"w": w, "sports": sports})
+    return templates.TemplateResponse(request, "workout_edit.html", {
+        "w": w, "sports": sports, "default_rpe": formmod.sport_rpe(w.sport)})
 
 
 @app.post("/workout/{workout_id}/edit", dependencies=[Depends(require_auth)])
@@ -1184,7 +1258,7 @@ def workout_edit(workout_id: int, name: str = Form(""), sport: str = Form(""),
                  distance_km: str = Form(""), ascent_m: str = Form(""),
                  moving_min: str = Form(""), avg_hr: str = Form(""),
                  avg_power: str = Form(""), calories: str = Form(""),
-                 notes: str = Form("")):
+                 notes: str = Form(""), rpe: str = Form("")):
     def num(s):
         try:
             return float(s) if s.strip() != "" else None
@@ -1209,6 +1283,7 @@ def workout_edit(workout_id: int, name: str = Form(""), sport: str = Form(""),
         w.avg_power = num(avg_power)
         w.calories = num(calories)
         w.notes = notes.strip()
+        w.rpe = num(rpe)
         w.updated_at = datetime.utcnow()
         session.add(w)
         session.commit()
