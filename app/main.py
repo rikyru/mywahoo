@@ -638,6 +638,13 @@ def route_delete(rid: int):
 FORM_MONTHS = {"3": 3, "6": 6, "12": 12, "all": None}
 
 
+def _hr_anchors() -> tuple[float, float, str]:
+    """(rest_hr, max_hr, sex) for the load model, from the profile + measured max."""
+    with Session(engine) as session:
+        measured_max = session.exec(select(func.max(Workout.max_hr))).one()
+    return profilemod.hr_anchors(measured_max=measured_max)
+
+
 def _fitness_series() -> tuple[list, dict]:
     """Full CTL/ATL/TSB series over all history + current-state summary."""
     with Session(engine) as session:
@@ -877,9 +884,18 @@ def plan_detail(request: Request, plan_id: int):
             return RedirectResponse("/plans", status_code=303)
         sessions = session.exec(select(PlanSession).where(
             PlanSession.plan_id == plan_id).order_by(PlanSession.order)).all()
+        # Persisted AI threads, so reopening the page keeps the conversation
+        chats = {s.id: [{"role": m.role, "content": m.content}
+                        for m in session.exec(
+                            select(ChatMessage)
+                            .where(ChatMessage.conversation_id == s.conversation_id)
+                            .order_by(ChatMessage.created_at))]
+                 for s in sessions if s.conversation_id}
     done = sum(1 for s in sessions if s.done)
+    loads = {s.id: round(_session_load(s.sport, s.duration_min)) for s in sessions}
     return templates.TemplateResponse(request, "plan.html", {
         "plan": plan, "sessions": sessions, "done": done, "total": len(sessions),
+        "loads": loads, "chats_json": json.dumps(chats),
         "now": datetime.utcnow(), "message": request.query_params.get("msg")})
 
 
@@ -953,6 +969,92 @@ def plan_session_undo(plan_id: int, sid: int):
             session.add(ps)
             session.commit()
     return RedirectResponse(f"/plans/{plan_id}", status_code=303)
+
+
+def _session_load(sport: str, minutes: float, rpe: float | None = None) -> float:
+    """Estimated TRIMP load of a planned/proposed session (no HR by definition)."""
+    rest_hr, max_hr, sex = _hr_anchors()
+    return formmod.activity_load(None, minutes, sport, rpe, rest_hr, max_hr, sex)
+
+
+@app.post("/plans/{plan_id}/session/{sid}/chat", dependencies=[Depends(require_auth)])
+async def plan_session_chat(plan_id: int, sid: int, request: Request):
+    """Talk to the AI about adapting one planned session ("today it rains, give
+    me an equivalent session at home"). Returns a reply plus, when the AI is
+    proposing a concrete swap, a structured proposal the UI can apply.
+
+    The thread is persisted (Conversation) and hangs off the PlanSession.
+    """
+    try:
+        body = await request.json()
+    except json.JSONDecodeError:
+        return JSONResponse({"error": "richiesta non valida"}, status_code=400)
+    msg = str(body.get("message", "")).strip()[:2000]
+    if not msg:
+        return JSONResponse({"error": "nessuna domanda"}, status_code=400)
+
+    with Session(engine) as session:
+        ps = session.get(PlanSession, sid)
+        if not ps or ps.plan_id != plan_id:
+            return JSONResponse({"error": "sessione non trovata"}, status_code=404)
+        plan = session.get(TrainingPlan, plan_id)
+        conv = session.get(Conversation, ps.conversation_id) if ps.conversation_id else None
+        if conv is None:
+            conv = Conversation(title=f"Piano · {ps.title}"[:60])
+            session.add(conv)
+            session.commit()
+            session.refresh(conv)
+            ps.conversation_id = conv.id
+            session.add(ps)
+            session.commit()
+        conv_id = conv.id
+        planned = {"title": ps.title, "sport": ps.sport, "durata_min": ps.duration_min,
+                   "descrizione": ps.description,
+                   "carico_trimp": round(_session_load(ps.sport, ps.duration_min))}
+        goal = plan.goal if plan else ""
+        prior = list(session.exec(select(ChatMessage)
+                                  .where(ChatMessage.conversation_id == conv_id)
+                                  .order_by(ChatMessage.created_at)))
+    history = ([{"role": m.role, "content": m.content} for m in prior]
+               + [{"role": "user", "content": msg}])[-12:]
+
+    _, form_summary = _fitness_series()
+    ctx = {"sessione_pianificata": planned, "obiettivo_del_piano": goal,
+           "atleta": profilemod.ai_context(), "forma_attuale": form_summary}
+    try:
+        out = await anthropic_client.chat_plan_session(ctx, history)
+    except anthropic_client.AnthropicError as e:
+        return JSONResponse({"error": str(e)}, status_code=502)
+
+    reply, proposal = out.get("risposta") or "", out.get("proposta")
+    if proposal:
+        # Quantify the swap: the AI aims for an equivalent load, so show what it
+        # actually landed on rather than taking its word for it.
+        try:
+            mins = int(proposal.get("durata_min") or 0)
+            proposal["durata_min"] = mins
+            proposal["carico_trimp"] = round(_session_load(
+                str(proposal.get("sport") or ""), mins,
+                float(proposal["rpe"]) if proposal.get("rpe") else None))
+        except (TypeError, ValueError):
+            proposal = None
+    # Store the turn as prose, not raw JSON: it has to stay readable on the
+    # Conversations page while still telling the AI what it already proposed.
+    stored = reply
+    if proposal:
+        stored += (f"\n\n[Proposta] {proposal.get('title')} · {proposal.get('sport')} · "
+                   f"{proposal['durata_min']} min · RPE {proposal.get('rpe')} · "
+                   f"carico ~{proposal['carico_trimp']}\n{proposal.get('description')}")
+    with Session(engine) as session:
+        session.add(ChatMessage(conversation_id=conv_id, role="user", content=msg))
+        session.add(ChatMessage(conversation_id=conv_id, role="assistant", content=stored))
+        c = session.get(Conversation, conv_id)
+        c.updated_at = datetime.utcnow()
+        session.add(c)
+        session.commit()
+    return JSONResponse({"reply": reply, "proposal": proposal,
+                         "planned_load": planned["carico_trimp"],
+                         "conversation_id": conv_id})
 
 
 @app.post("/plans/{plan_id}/session/{sid}/edit", dependencies=[Depends(require_auth)])

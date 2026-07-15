@@ -296,6 +296,49 @@ indicato. Inserisci giorni di riposo solo se sensato (sport "Riposo", durata 0).
 Adatta carico e volume a un atleta amatoriale. Nessun altro testo."""
 
 
+PLAN_CHAT_SYSTEM_PROMPT = """\
+Sei l'allenatore di questo atleta e state parlando di UNA sessione pianificata.
+Può chiederti di adattarla (maltempo, poco tempo, palestra chiusa, niente
+attrezzi, stanchezza, infortunio leggero) oppure farti domande su di essa.
+
+Ti vengono forniti: la sessione pianificata con il suo CARICO STIMATO su scala
+TRIMP, l'obiettivo del piano, il profilo dell'atleta e la sua forma attuale
+(CTL = fitness, ATL = affaticamento, TSB = freschezza).
+
+Quando proponi un'alternativa punta a un carico EQUIVALENTE a quello pianificato
+(entro ±15%), giocando su durata e intensità: se l'alternativa è più intensa
+accorciala, se è più blanda allungala. Rispetta i vincoli dichiarati (in casa,
+senza attrezzi, tempo disponibile) e resta coerente con l'obiettivo del piano.
+Se la forma indica molto affaticamento puoi proporre meno carico, ma dillo.
+
+Rispondi SOLO con JSON valido, senza testo attorno né code fence:
+{"risposta": "risposta conversazionale in italiano, Markdown, concisa",
+ "proposta": {"title": "titolo breve", "sport": "tipo", "durata_min": intero, "rpe": numero 1-10, "description": "esercizi concreti con serie/ripetizioni"}}
+Metti "proposta" SOLO se stai proponendo una sessione sostitutiva concreta;
+altrimenti usa null. Nessun altro testo."""
+
+
+async def chat_plan_session(ctx: dict, history: list[dict]) -> dict:
+    """Conversation about adapting one planned session.
+
+    Returns {"risposta": str, "proposta": dict|None} — the proposal is what the
+    UI offers to apply to the session.
+    """
+    import re
+    system = (PLAN_CHAT_SYSTEM_PROMPT + "\n\nCONTESTO (JSON):\n"
+              + json.dumps(ctx, ensure_ascii=False, default=str))
+    raw = await _call_messages(system, history)
+    m = re.search(r"\{.*\}", raw, re.S)
+    if not m:
+        return {"risposta": raw.strip(), "proposta": None}
+    try:
+        d = json.loads(m.group(0))
+    except json.JSONDecodeError:
+        return {"risposta": raw.strip(), "proposta": None}
+    return {"risposta": str(d.get("risposta") or "").strip(),
+            "proposta": d.get("proposta") or None}
+
+
 async def generate_plan(goal: str, n_days: int, start_date: str) -> dict:
     """Generate a structured training plan (JSON of dated sessions)."""
     import re

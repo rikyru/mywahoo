@@ -59,7 +59,7 @@ with TestClient(app) as client:
 
     # --- seed data and render pages ---
     from datetime import datetime, timedelta
-    from sqlmodel import Session
+    from sqlmodel import Session, select
     from app.db import AiAnalysis, WahooToken, Workout, WorkoutStream, engine, pack_streams
     recent = datetime.utcnow() - timedelta(days=3)  # within the default dashboard window
 
@@ -132,7 +132,7 @@ with TestClient(app) as client:
     print("settings page OK")
 
     # --- calendar + training plans ---
-    from app.db import PlanSession, TrainingPlan
+    from app.db import ChatMessage, PlanSession, TrainingPlan
     with Session(engine) as s:
         plan = TrainingPlan(title="Piano test", goal="rimettersi in forma")
         s.add(plan)
@@ -208,6 +208,44 @@ with TestClient(app) as client:
         assert not un.done and un.workout_id is None
         assert s.get(Workout, w.id) is None  # manual workout removed on undo
     print("plan session undo OK")
+
+    # --- AI chat to adapt a session ("piove, dammi qualcosa a casa") ---
+    captured = {}
+    async def _fake_chat(ctx, history):
+        captured["ctx"], captured["history"] = ctx, history
+        return {"risposta": "Piove: ecco un circuito equivalente a casa.",
+                "proposta": {"title": "Circuito indoor", "sport": "Corpo libero",
+                             "durata_min": 50, "rpe": 6.0,
+                             "description": "4 giri: 15 squat, 10 push up, 1' plank"}}
+    ac.chat_plan_session, real_chat = _fake_chat, ac.chat_plan_session
+    r = client.post(f"/plans/{pid}/session/{sid}/chat",
+                    json={"message": "oggi piove, non esco in bici"})
+    ac.chat_plan_session = real_chat
+    assert r.status_code == 200, r.text
+    d = r.json()
+    assert "circuito equivalente" in d["reply"]
+    # the AI must be told the planned load, the goal, the athlete and the form
+    assert captured["ctx"]["sessione_pianificata"]["carico_trimp"] > 0
+    assert captured["ctx"]["obiettivo_del_piano"] == "rimettersi in forma"
+    assert "atleta" in captured["ctx"] and "forma_attuale" in captured["ctx"]
+    assert captured["history"][-1]["content"] == "oggi piove, non esco in bici"
+    # the proposal's load is computed here, not taken on trust from the AI
+    assert d["proposal"]["carico_trimp"] > 0 and d["planned_load"] > 0
+    print(f"plan session AI chat OK (pianificato ~{d['planned_load']}, "
+          f"proposto ~{d['proposal']['carico_trimp']})")
+
+    # thread persisted and readable (not raw JSON) on the Conversations page
+    with Session(engine) as s:
+        ps = s.get(PlanSession, sid)
+        assert ps.conversation_id
+        msgs = list(s.exec(select(ChatMessage).where(
+            ChatMessage.conversation_id == ps.conversation_id)))
+        assert len(msgs) == 2 and msgs[0].role == "user"
+        assert "[Proposta] Circuito indoor" in msgs[1].content and "{" not in msgs[1].content
+    r = client.get(f"/plans/{pid}")
+    assert r.status_code == 200 and "Circuito indoor" in r.text  # thread replayed
+    assert f'id="chatLog{sid}"' in r.text  # panel present while the session is open
+    print("plan chat thread persisted + replayed OK")
 
     # --- profile: drives the TRIMP scale, so a wrong range skews all of Forma ---
     from app import profile as profilemod

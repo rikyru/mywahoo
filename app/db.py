@@ -67,6 +67,7 @@ class PlanSession(SQLModel, table=True):
     description: str = ""
     done: bool = False
     workout_id: Optional[int] = None
+    conversation_id: Optional[int] = None   # AI thread about adapting this session
 
 
 class Conversation(SQLModel, table=True):
@@ -202,6 +203,7 @@ _MIGRATIONS = {
                         ("sport", "TEXT DEFAULT 'Bici'")],
     "workout": [("manual", "INTEGER DEFAULT 0"), ("notes", "TEXT DEFAULT ''"),
                 ("rpe", "REAL")],
+    "plansession": [("conversation_id", "INTEGER")],
 }
 
 

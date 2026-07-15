@@ -29,6 +29,7 @@
         {% if s.day_label %}{{ s.day_label }}{% elif s.date %}{{ s.date | it_day }}{% endif %}
         {% if s.sport %} · {{ s.sport }}{% endif %}
         {% if s.duration_min %} · {{ s.duration_min }} min{% endif %}
+        {% if loads[s.id] %} · carico ~{{ loads[s.id] }}{% endif %}
       </span>
     </div>
     {% if s.done %}
@@ -64,7 +65,21 @@
   </details>
   {% endif %}
 
-  <details class="plan-session-edit">
+  {% if not s.done %}
+  <details class="plan-chat" data-sid="{{ s.id }}">
+    <summary class="muted">💬 Chiedi all'AI di adattarla</summary>
+    <p class="muted">Es. «oggi piove, non esco in bici: dammi qualcosa di equivalente
+      da fare a casa», «ho solo 30 minuti», «sono a pezzi, alleggerisci».</p>
+    <div class="chat-log" id="chatLog{{ s.id }}"></div>
+    <div class="chat-proposal" id="prop{{ s.id }}" style="display:none"></div>
+    <form class="chat-input chat-form" data-sid="{{ s.id }}">
+      <input type="text" placeholder="Scrivi qui…" autocomplete="off">
+      <button class="btn" type="submit">Invia</button>
+    </form>
+  </details>
+  {% endif %}
+
+  <details class="plan-session-edit" id="edit{{ s.id }}">
     <summary class="muted">Modifica</summary>
     <form method="post" action="/plans/{{ plan.id }}/session/{{ s.id }}/edit" class="plan-edit-form">
       <label>Titolo <input type="text" name="title" value="{{ s.title }}"></label>
@@ -82,4 +97,90 @@
 </section>
 {% endfor %}
 
+{% endblock %}
+{% block scripts %}
+<script>
+const PLAN_ID = {{ plan.id }};
+const CHATS = {{ chats_json | safe }};
+
+function bubble(log, role, text) {
+  const d = document.createElement("div");
+  d.className = "chat-msg chat-" + role;
+  d.textContent = text;                  // never innerHTML: the AI writes this
+  log.appendChild(d);
+  log.scrollTop = log.scrollHeight;
+  return d;
+}
+
+// Replay the persisted thread so reopening the page keeps the conversation
+for (const [sid, msgs] of Object.entries(CHATS)) {
+  const log = document.getElementById("chatLog" + sid);
+  if (log) msgs.forEach(m => bubble(log, m.role, m.content));
+}
+
+function showProposal(sid, p, plannedLoad) {
+  const host = document.getElementById("prop" + sid);
+  const delta = plannedLoad ? Math.round((p.carico_trimp - plannedLoad) / plannedLoad * 100) : null;
+  host.innerHTML = "";
+  const h = document.createElement("div");
+  h.className = "chat-prop-head";
+  h.textContent = `${p.title} · ${p.sport} · ${p.durata_min} min`;
+  const meta = document.createElement("p");
+  meta.className = "muted";
+  meta.textContent = `Carico stimato ~${p.carico_trimp}`
+    + (plannedLoad ? ` contro ~${plannedLoad} pianificato (${delta >= 0 ? "+" : ""}${delta}%)` : "")
+    + (p.rpe ? ` · sforzo ${p.rpe}/10` : "");
+  const desc = document.createElement("p");
+  desc.className = "chat-prop-desc";
+  desc.textContent = p.description || "";
+  const btn = document.createElement("button");
+  btn.className = "btn";
+  btn.textContent = "Usa questa proposta";
+  btn.onclick = () => {
+    // Fill the edit form and open it: applying still goes through the normal
+    // edit + save, so nothing changes without a look first.
+    const box = document.getElementById("edit" + sid);
+    const f = box.querySelector("form");
+    f.querySelector('[name=title]').value = p.title || "";
+    f.querySelector('[name=sport]').value = p.sport || "";
+    f.querySelector('[name=durata_min]').value = p.durata_min || 0;
+    f.querySelector('[name=description]').value = p.description || "";
+    box.open = true;
+    box.scrollIntoView({ behavior: "smooth", block: "center" });
+  };
+  host.append(h, meta, desc, btn);
+  host.style.display = "";
+}
+
+document.querySelectorAll(".chat-form").forEach(form => {
+  form.addEventListener("submit", async e => {
+    e.preventDefault();
+    const sid = form.dataset.sid;
+    const input = form.querySelector("input");
+    const text = input.value.trim();
+    if (!text) return;
+    const log = document.getElementById("chatLog" + sid);
+    bubble(log, "user", text);
+    input.value = "";
+    const btn = form.querySelector("button");
+    btn.disabled = true;
+    const thinking = bubble(log, "assistant", "…");
+    try {
+      const r = await fetch(`/plans/${PLAN_ID}/session/${sid}/chat`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: text }),
+      });
+      const d = await r.json();
+      if (d.error) { thinking.textContent = "⚠️ " + d.error; return; }
+      thinking.textContent = d.reply || "(nessuna risposta)";
+      if (d.proposal) showProposal(sid, d.proposal, d.planned_load);
+    } catch (ex) {
+      thinking.textContent = "⚠️ errore di rete";
+    } finally {
+      btn.disabled = false;
+      input.focus();
+    }
+  });
+});
+</script>
 {% endblock %}
