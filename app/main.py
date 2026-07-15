@@ -112,6 +112,8 @@ def sport_icon(sport: str) -> str:
         return "🏋️"
     if any(k in s for k in ("yoga", "stretch", "mobilit", "pilates")):
         return "🧘"
+    if any(k in s for k in ("riposo", "rest", "recupero")):
+        return "😴"
     return "🔵"
 
 

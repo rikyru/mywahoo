@@ -324,6 +324,15 @@ assert sport_rpe("Yoga") == 3.0 and sport_rpe("Corpo libero") == 6.0
 assert sport_rpe("HIIT in casa") == 8.5 and sport_rpe("Sconosciuto") == 5.0
 print("per-sport RPE defaults OK")
 
+# Every label we tell the AI to use must map to a real icon and a per-sport RPE:
+# an off-vocabulary label ("Home workout") silently gets the generic icon and 5.0
+from app.anthropic_client import SPORT_VOCAB
+from app.main import sport_icon
+for label in [s.strip() for s in SPORT_VOCAB.split(",")]:
+    assert sport_icon(label) != "🔵", f"{label}: icona generica"
+    assert sport_rpe(label) != 5.0 or label == "Riposo", f"{label}: RPE default generico"
+print(f"AI sport vocabulary maps to icons + RPE OK ({len(SPORT_VOCAB.split(','))} etichette)")
+
 # measured HR wins over any estimate
 m = activity_load(140, 60, "Cycling", rpe=2, rest_hr=55, max_hr=190)
 assert abs(m - trimp(140, 60, 55, 190)) < 1e-9

@@ -277,11 +277,17 @@ async def summarize_form(summary: dict, recent_weeks: list[dict]) -> str:
         json.dumps(payload, ensure_ascii=False, indent=1, default=str))
 
 
+# Sport labels the app understands: they drive the calendar icon (sport_icon) and
+# the per-sport intensity fallback (form.sport_rpe), so the AI must not invent its
+# own ("Home workout" would land on the generic icon and a wrong default RPE).
+SPORT_VOCAB = ("Bici, Corsa, Nuoto, Camminata, Escursione, Corpo libero, Forza, "
+               "HIIT, Yoga, Riposo")
+
 WORKOUT_STRUCTURE_PROMPT = """\
 Struttura la descrizione di un allenamento (spesso a casa / corpo libero) in
 campi. Rispondi SOLO con un JSON valido, senza testo attorno né code fence, con
 queste chiavi esatte:
-{"name": "nome breve", "sport": "tipo (es. Forza, Corpo libero, Corsa, Bici, Nuoto, Yoga, HIIT, Camminata)", "durata_min": intero (stima realistica se non indicato), "distanza_km": numero o null, "calorie": intero o null (stima ragionevole), "fc_media": intero o null (SOLO se indicata esplicitamente: non inventarla), "rpe": numero 1-10 con un decimale (sforzo percepito stimato: 3 = molto leggero/mobilità, 5 = moderato, 7 = intenso, 9-10 = massimale), "note": "riassunto degli esercizi svolti"}
+{"name": "nome breve", "sport": "UNA di: """ + SPORT_VOCAB + """", "durata_min": intero (stima realistica se non indicato), "distanza_km": numero o null, "calorie": intero o null (stima ragionevole), "fc_media": intero o null (SOLO se indicata esplicitamente: non inventarla), "rpe": numero 1-10 con un decimale (sforzo percepito stimato: 3 = molto leggero/mobilità, 5 = moderato, 7 = intenso, 9-10 = massimale), "note": "riassunto degli esercizi svolti"}
 Stima durata, calorie e rpe in modo realistico dal contenuto. Nessun altro testo."""
 
 
@@ -290,7 +296,7 @@ Sei un allenatore. Crea un piano di allenamento per l'atleta dato l'obiettivo, i
 giorni disponibili e la data di inizio. Spesso è allenamento A CASA / corpo
 libero (se indicato usa esercizi a corpo libero con serie e ripetizioni concrete).
 Rispondi SOLO con JSON valido, senza testo attorno né code fence:
-{"title": "titolo breve del piano", "sessions": [{"date": "YYYY-MM-DD", "day": "es. Lun 14/07", "title": "titolo sessione", "sport": "tipo (Corpo libero, Corsa, Bici, Forza, Yoga, Riposo)", "durata_min": intero, "description": "esercizi/serie/ripetizioni o dettagli"}]}
+{"title": "titolo breve del piano", "sessions": [{"date": "YYYY-MM-DD", "day": "es. Lun 14/07", "title": "titolo sessione", "sport": "UNA di: """ + SPORT_VOCAB + """", "durata_min": intero, "description": "esercizi/serie/ripetizioni o dettagli"}]}
 Assegna le date a partire dalla data di inizio ed entro il numero di giorni
 indicato. Inserisci giorni di riposo solo se sensato (sport "Riposo", durata 0).
 Adatta carico e volume a un atleta amatoriale. Nessun altro testo."""
@@ -313,7 +319,7 @@ Se la forma indica molto affaticamento puoi proporre meno carico, ma dillo.
 
 Rispondi SOLO con JSON valido, senza testo attorno né code fence:
 {"risposta": "risposta conversazionale in italiano, Markdown, concisa",
- "proposta": {"title": "titolo breve", "sport": "tipo", "durata_min": intero, "rpe": numero 1-10, "description": "esercizi concreti con serie/ripetizioni"}}
+ "proposta": {"title": "titolo breve", "sport": "UNA di: """ + SPORT_VOCAB + """", "durata_min": intero, "rpe": numero 1-10, "description": "esercizi concreti con serie/ripetizioni"}}
 Metti "proposta" SOLO se stai proponendo una sessione sostitutiva concreta;
 altrimenti usa null. Nessun altro testo."""
 
