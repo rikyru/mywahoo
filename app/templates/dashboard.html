@@ -26,6 +26,47 @@
 {% if message %}<div class="alert ok">{{ message }}</div>{% endif %}
 {% if error %}<div class="alert error">{{ error }}</div>{% endif %}
 
+<section class="glance">
+  <div class="card glance-card">
+    <div class="card-head"><h3>Forma</h3><a class="muted" href="/form">Dettagli →</a></div>
+    {% if form %}
+    <div class="glance-state">{{ form.state }}</div>
+    <div class="glance-metrics">
+      <div><span class="gm-value">{{ form.ctl }}</span><span class="gm-label">fitness</span></div>
+      <div><span class="gm-value">{{ form.atl }}</span><span class="gm-label">affaticamento</span></div>
+      <div><span class="gm-value {% if form.tsb > 5 %}gm-good{% elif form.tsb < -20 %}gm-warn{% endif %}">
+        {{ form.tsb }}</span><span class="gm-label">freschezza</span></div>
+    </div>
+    <p class="muted">Fitness {{ form.trend }}
+      {%- if form.delta_pct %} ({{ "+" if form.delta_pct > 0 }}{{ form.delta_pct }}% in 30 giorni){% endif %}.</p>
+    {% else %}
+    <p class="muted">Nessuna attività: la forma si costruisce dallo storico.</p>
+    {% endif %}
+  </div>
+
+  <div class="card glance-card">
+    <div class="card-head"><h3>Salute</h3><a class="muted" href="/health">Dettagli →</a></div>
+    <div id="healthGlance"><p class="muted">Caricamento da Google Health…</p></div>
+  </div>
+
+  <div class="card glance-card">
+    <div class="card-head"><h3>In programma</h3><a class="muted" href="/plans">Piani →</a></div>
+    {% for u in upcoming %}
+    <a class="glance-next" href="/plans/{{ u.plan.id }}">
+      <span class="glance-next-icon">{{ sport_icon(u.s.sport) }}</span>
+      <span class="glance-next-info">
+        <strong>{{ u.s.title }}</strong>
+        <span class="muted">{{ u.s.date | it_day }}
+          {%- if u.s.duration_min %} · {{ u.s.duration_min }} min{% endif %}</span>
+      </span>
+    </a>
+    {% else %}
+    <p class="muted">Niente in programma nei prossimi 7 giorni.
+      <a href="/plans">Crea un piano</a> e le sessioni compaiono qui.</p>
+    {% endfor %}
+  </div>
+</section>
+
 {% set qs_sport = ('&sport=' ~ sport) if sport else '' %}
 <div class="window-bar">
   <div class="window-sizes">
@@ -188,6 +229,36 @@ if (window.innerWidth < 640) Chart.defaults.font.size = 13;
 function busy(btn) {
   setTimeout(() => { btn.disabled = true; btn.textContent = "Analisi in corso…"; }, 0);
 }
+// Health card: fetched after render — Google Health takes seconds and must not
+// hold up the page.
+(async () => {
+  const host = document.getElementById("healthGlance");
+  const esc = s => String(s).replace(/[<>&]/g, c => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c]));
+  try {
+    const r = await fetch("/api/health/summary");
+    const d = await r.json();
+    if (d.error) throw new Error(d.error);
+    const parts = [];
+    if (d.score) {
+      const cls = d.score.score >= 67 ? "gm-good" : d.score.score < 40 ? "gm-warn" : "";
+      parts.push(`<div class="glance-state">${esc(d.score.label)}
+        <span class="glance-score ${cls}">${d.score.score}<small>/100</small></span></div>`);
+    }
+    const cells = (d.metrics || []).map(m =>
+      `<div><span class="gm-value">${esc(m.value)}<small>${esc(m.unit)}</small></span>
+         <span class="gm-label">${esc(m.label)}</span></div>`);
+    if (d.sleep_h) cells.push(`<div><span class="gm-value">${d.sleep_h}<small>h</small></span>
+        <span class="gm-label">sonno medio</span></div>`);
+    if (cells.length) parts.push(`<div class="glance-metrics">${cells.join("")}</div>`);
+    if (!parts.length) parts.push('<p class="muted">Nessun dato negli ultimi 7 giorni.</p>');
+    else if (d.nights) parts.push(`<p class="muted">Ultimi 7 giorni · ${d.nights} notti.</p>`);
+    host.innerHTML = parts.join("");
+  } catch (e) {
+    host.innerHTML = `<p class="muted">Dati salute non disponibili: ${esc(e.message)}
+      <br><a href="/health">Apri Salute</a></p>`;
+  }
+})();
+
 const data = {{ charts_json | safe }};
 const opts = { plugins: { legend: { display: false } }, responsive: true };
 // Categorical palette for the activity-type doughnut (legible on dark)

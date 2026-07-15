@@ -87,7 +87,17 @@ def fmt_speed(w: Workout) -> str:
     return f"{w.avg_speed_ms * 3.6:.1f} km/h"
 
 
+IT_DAYS = ["Lun", "Mar", "Mer", "Gio", "Ven", "Sab", "Dom"]
+
+
+def fmt_day(d) -> str:
+    """"Gio 16/07" — strftime("%a") would follow the server locale (English in
+    the container), and the rest of the UI is Italian."""
+    return f"{IT_DAYS[d.weekday()]} {d.strftime('%d/%m')}" if d else ""
+
+
 templates.env.filters["duration"] = fmt_duration
+templates.env.filters["it_day"] = fmt_day
 def sport_icon(sport: str) -> str:
     s = (sport or "").lower()
     if any(k in s for k in ("swim", "nuot")):
@@ -108,13 +118,21 @@ def sport_icon(sport: str) -> str:
 templates.env.globals["fmt_speed"] = fmt_speed
 templates.env.globals["app_name"] = settings.app_name
 templates.env.globals["sport_icon"] = sport_icon
-# Cache-busting for the stylesheet (Cloudflare/edge caches /static aggressively):
-# the URL changes whenever style.css changes, so a deploy invalidates the cache.
-try:
-    templates.env.globals["static_ver"] = str(int(
-        (BASE_DIR / "static" / "style.css").stat().st_mtime))
-except OSError:
-    templates.env.globals["static_ver"] = "1"
+def asset(name: str) -> str:
+    """/static URL stamped with the file's mtime.
+
+    Cloudflare/edge caches /static aggressively, so the URL has to change when
+    the file does. Per-file (not one global version) or touching any asset would
+    have to invalidate all the others to take effect.
+    """
+    try:
+        v = int((BASE_DIR / "static" / name).stat().st_mtime)
+    except OSError:
+        v = 1
+    return f"/static/{name}?v={v}"
+
+
+templates.env.globals["asset"] = asset
 
 
 # Movable analysis window for the dashboard
@@ -1115,6 +1133,58 @@ async def webhook_wahoo(request: Request, background: BackgroundTasks):
 
 # ---------------------------------------------------------------- pages
 
+def _upcoming_sessions(days: int = 7, limit: int = 4) -> list:
+    """Planned, not-yet-done plan sessions from today onwards."""
+    start = datetime.combine(date.today(), time.min)
+    with Session(engine) as session:
+        rows = session.exec(
+            select(PlanSession, TrainingPlan)
+            .join(TrainingPlan, TrainingPlan.id == PlanSession.plan_id)
+            .where(PlanSession.done == False,  # noqa: E712
+                   PlanSession.date >= start,
+                   PlanSession.date <= start + timedelta(days=days))
+            .order_by(PlanSession.date)).all()
+    return [{"s": s, "plan": p} for s, p in rows][:limit]
+
+
+# Google Health needs ~9s per call, far too slow to block the dashboard: the card
+# is filled in client-side from here, and a short TTL keeps repeat visits instant
+# without hammering the API. Single-user, single-container: memory is enough.
+_HEALTH_CACHE: dict = {}
+_HEALTH_TTL = timedelta(minutes=20)
+
+
+@app.get("/api/health/summary", dependencies=[Depends(require_auth)])
+async def api_health_summary():
+    """Compact health snapshot for the dashboard card (cached, best-effort)."""
+    now = datetime.utcnow()
+    hit = _HEALTH_CACHE.get("data")
+    if hit and now - hit["at"] < _HEALTH_TTL:
+        return JSONResponse(hit["payload"])
+    try:
+        data = await google_health.fetch_health_overview(
+            date.today() - timedelta(days=6), date.today())
+    except google_health.GoogleHealthError as e:
+        return JSONResponse({"error": str(e)}, status_code=502)
+
+    def latest(key):
+        m = (data.get("metrics") or {}).get(key)
+        return None if not m else {"label": m["label"], "unit": m["unit"],
+                                   "value": m["latest"], "dir": m.get("dir"),
+                                   "delta": m.get("delta")}
+
+    nights = data.get("sleep") or []
+    payload = {
+        "score": data.get("score"),
+        "metrics": [m for m in (latest("resting_hr"), latest("hrv"), latest("spo2")) if m],
+        "sleep_h": (round(sum(n["asleep_min"] for n in nights) / len(nights) / 60, 1)
+                    if nights else None),
+        "nights": len(nights),
+    }
+    _HEALTH_CACHE["data"] = {"at": now, "payload": payload}
+    return JSONResponse(payload)
+
+
 @app.get("/", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
 def dashboard(request: Request, win: str = "30", end: str = "",
               sport: str = "", sort: str = "date", order: str = "desc"):
@@ -1139,8 +1209,16 @@ def dashboard(request: Request, win: str = "30", end: str = "",
     with Session(engine) as session:
         analysis = session.get(PeriodSummary, _window_key("training", window))
 
+    # "Current state" strip: independent of the selected window, and cheap enough
+    # to render inline (the health card is fetched client-side instead — see
+    # /api/health/summary — because Google Health takes seconds).
+    _, form_summary = _fitness_series()
+    upcoming = _upcoming_sessions()
+
     return templates.TemplateResponse(request, "dashboard.html", {
         "user": wahoo.get_user_name(),
+        "form": form_summary, "upcoming": upcoming,
+        "last_workout": max(workouts, key=lambda w: w.start_date) if workouts else None,
         "window": window, "windows": WINDOWS,
         "sport": sport, "sort": sort, "order": order,
         "all_sports": all_sports,

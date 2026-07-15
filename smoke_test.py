@@ -100,6 +100,24 @@ with TestClient(app) as client:
     assert r.status_code == 200
     print("dashboard filters OK")
 
+    # "current state" strip: rendered inline, must not wait on Google Health
+    assert "Forma" in r.text and "In programma" in r.text and "healthGlance" in r.text
+    assert "fitness" in r.text and "freschezza" in r.text
+    print("dashboard glance strip OK")
+
+    from datetime import date as _date
+    from app.main import fmt_day
+    assert fmt_day(_date(2026, 7, 16)) == "Gio 16/07", fmt_day(_date(2026, 7, 16))
+    assert fmt_day(_date(2026, 7, 19)) == "Dom 19/07"
+    print("italian day names OK")
+
+    r = client.get("/static/favicon.svg")
+    assert r.status_code == 200 and r.text.startswith("<svg")
+    r = client.get("/")
+    assert 'rel="icon"' in r.text and "favicon.svg?v=" in r.text  # cache-busted per file
+    assert "style.css?v=" in r.text
+    print("favicon + per-file cache busting OK")
+
     r = client.get("/workout/7")
     assert r.status_code == 200 and "Buon giro" in r.text and "Rigenera" in r.text
     assert '"latlng"' in r.text  # downsampled streams embedded for charts/map
@@ -221,6 +239,45 @@ with TestClient(app) as client:
     r = client.get("/form")
     assert r.status_code == 200 and "Forma" in r.text
     print("form page renders with profile-driven load OK")
+
+    # health card endpoint: served from cache on the second call (Google is ~9s)
+    import app.main as mainmod
+    calls = []
+    async def _fake_overview(*a, **k):
+        calls.append(1)
+        return {"metrics": {"resting_hr": {"label": "FC a riposo", "unit": "bpm",
+                                           "latest": 48, "dir": "down", "delta": -1,
+                                           "series": [{"value": 48}]}},
+                "body": {}, "sleep": [{"date": "2026-07-14", "asleep_min": 402}],
+                "score": {"score": 71, "label": "Buono", "n_inputs": 3}}
+    real_overview = mainmod.google_health.fetch_health_overview
+    mainmod.google_health.fetch_health_overview = _fake_overview
+    mainmod._HEALTH_CACHE.clear()
+    try:
+        r = client.get("/api/health/summary")
+        assert r.status_code == 200
+        d = r.json()
+        assert d["score"]["score"] == 71 and d["sleep_h"] == 6.7, d
+        assert d["metrics"][0]["value"] == 48
+        client.get("/api/health/summary")
+        assert len(calls) == 1, f"TTL cache not used: {len(calls)} calls"
+        print(f"health summary endpoint OK (sonno {d['sleep_h']}h, cache hit)")
+    finally:
+        mainmod.google_health.fetch_health_overview = real_overview
+        mainmod._HEALTH_CACHE.clear()
+
+    # a Google outage must degrade the card, never break the dashboard
+    async def _boom(*a, **k):
+        raise mainmod.google_health.GoogleHealthError("token scaduto")
+    mainmod.google_health.fetch_health_overview = _boom
+    try:
+        r = client.get("/api/health/summary")
+        assert r.status_code == 502 and "token scaduto" in r.json()["error"]
+        assert client.get("/").status_code == 200
+        print("health outage degrades card only OK")
+    finally:
+        mainmod.google_health.fetch_health_overview = real_overview
+        mainmod._HEALTH_CACHE.clear()
 
 # --- load model: every source must land on the same TRIMP scale ---
 from app.form import activity_load, sport_rpe, trimp

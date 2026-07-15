@@ -224,6 +224,33 @@ a.chip:hover { background: var(--card-hover); text-decoration: none; }
 .cal-planned:hover { opacity: .85; }
 @media (max-width: 640px) { .cal-cell { min-height: 52px; padding: .2rem; } .cal-act { font-size: .95rem; } }
 
+/* ---------- dashboard "current state" strip ---------- */
+.glance { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem;
+  margin-bottom: 1.2rem; align-items: start; }
+.glance-card { margin: 0; min-height: 168px; }
+.glance-card .card-head { margin-bottom: .5rem; }
+.glance-card .card-head a { font-size: .82rem; text-decoration: none; }
+.glance-state { font-size: 1.05rem; font-weight: 600; margin-bottom: .7rem;
+  display: flex; align-items: baseline; gap: .5rem; justify-content: space-between; }
+.glance-score { font-family: var(--mono); font-size: 1.3rem; }
+.glance-score small { font-size: .7rem; color: var(--muted); }
+.glance-metrics { display: flex; gap: 1.1rem; flex-wrap: wrap; }
+.glance-metrics > div { display: flex; flex-direction: column; gap: .1rem; }
+.gm-value { font-family: var(--mono); font-size: 1.35rem; font-weight: 600; }
+.gm-value small { font-size: .65rem; color: var(--muted); margin-left: 1px; }
+.gm-label { font-size: .72rem; text-transform: uppercase; letter-spacing: .04em;
+  color: var(--muted); }
+.gm-good { color: #34d399; }
+.gm-warn { color: #f87171; }
+.glance-next { display: flex; align-items: center; gap: .6rem; padding: .4rem 0;
+  text-decoration: none; color: var(--text); border-bottom: 1px solid var(--border); }
+.glance-next:last-child { border-bottom: none; }
+.glance-next:hover strong { color: var(--accent); }
+.glance-next-icon { font-size: 1.3rem; }
+.glance-next-info { display: flex; flex-direction: column; gap: .05rem; font-size: .9rem; }
+@media (max-width: 900px) { .glance { grid-template-columns: 1fr; }
+  .glance-card { min-height: 0; } }
+
 /* ---------- training plans ---------- */
 .plan-form { display: flex; flex-direction: column; gap: .8rem; margin-top: .6rem; }
 .plan-form-row { display: flex; gap: 1rem; align-items: flex-end; flex-wrap: wrap; }

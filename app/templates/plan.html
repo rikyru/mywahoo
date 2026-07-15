@@ -26,7 +26,7 @@
     <div class="plan-session-info">
       <strong>{{ s.title }}</strong>
       <span class="muted">
-        {% if s.day_label %}{{ s.day_label }}{% elif s.date %}{{ s.date.strftime("%a %d/%m") }}{% endif %}
+        {% if s.day_label %}{{ s.day_label }}{% elif s.date %}{{ s.date | it_day }}{% endif %}
         {% if s.sport %} · {{ s.sport }}{% endif %}
         {% if s.duration_min %} · {{ s.duration_min }} min{% endif %}
       </span>
