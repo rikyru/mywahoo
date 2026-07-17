@@ -400,6 +400,36 @@ assert activity_load(None, 40, "Yoga") < activity_load(None, 40, "HIIT") / 2
 print(f"RPE-based load OK (yoga={activity_load(None, 40, 'Yoga'):.0f} "
       f"< corpo libero={default:.0f} < HIIT={activity_load(None, 40, 'HIIT'):.0f})")
 
+# --- nutrition: calories + macros from planmydinner's integration summary ---
+from datetime import date as _d
+from app.nutrition import _shape
+
+_summary = {  # shape of planmydinner /integration/summary
+    "adherence": {"planned_slots": 16, "free_meals": 3, "not_eaten_slots": 0,
+                  "in_plan_consumed": 15, "adherence_score": 0.94, "free_meal_quota": 2},
+    "days": [
+        {"date": "2026-07-14", "free_meals": 0,
+         "nutrition": {"kcal": 840.5, "protein_g": 68.4, "carbs_g": 101.2, "fat_g": 15.8}},
+        {"date": "2026-07-15", "free_meals": 1,
+         "nutrition": {"kcal": 1026.3, "protein_g": 56.6, "carbs_g": 97.0, "fat_g": 48.3}},
+    ],
+    "averages": {"kcal": 933.4, "protein_g": 62.5, "carbs_g": 99.1, "fat_g": 32.1,
+                 "days_with_data": 2},
+}
+n = _shape(_summary, {"allergies": ["noci"]}, _d(2026, 7, 14), _d(2026, 7, 15), 74.5)
+assert n["aderenza_al_piano"]["punteggio_pct"] == 94
+trk = n["alimentazione_tracciata"]
+assert trk["kcal_medie"] == 933 and trk["proteine_g_medie"] == 62
+# protein-per-kg is the quality signal derived from profile weight
+assert trk["proteine_g_per_kg"] == round(62.5 / 74.5, 2)
+assert len(trk["per_giorno"]) == 2 and "PASTI TRACCIATI" in trk["nota"]
+assert n["profilo"]["allergies"] == ["noci"]
+# no data -> None, so the AI simply omits the whole section
+assert _shape({"averages": {"days_with_data": 0}, "adherence": {}}, None,
+              _d(2026, 7, 14), _d(2026, 7, 15), 74.5) is None
+print(f"nutrition shape OK (kcal {trk['kcal_medie']}, "
+      f"proteine {trk['proteine_g_per_kg']} g/kg, aderenza {n['aderenza_al_piano']['punteggio_pct']}%)")
+
 # --- FIT helpers with synthetic data (no FIT file needed) ---
 from app.fit import ai_stats, compute_normalized_power, downsample
 

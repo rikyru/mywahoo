@@ -1,15 +1,20 @@
 """Read-only integration with planmydinner (separate app) to bring nutrition
-context — plan adherence, meals eaten/free, profile preferences — into the
+context — plan adherence, energy/macros of tracked meals, preferences — into the
 health AI analysis and chat. Its API is open on the LAN; we only read.
 
-No macros/calories are available in planmydinner, so the correlation is
-qualitative (adherence, free meals, meal composition), not an energy balance.
+planmydinner exposes a purpose-built /integration/summary (versioned) with daily
+and average kcal + macros and adherence. Calories are for TRACKED meals only
+(coverage over planned slots), not necessarily the full daily intake, so they are
+labelled as such and never treated as a complete energy balance. planmydinner has
+no meal-quality index, so quality is left to the AI to judge from the macro split,
+protein-per-kg and the in-plan vs free/mensa ratio.
 """
 import logging
 from datetime import date
 
 import httpx
 
+from . import profile as profilemod
 from .config import settings
 
 logger = logging.getLogger(__name__)
@@ -34,39 +39,74 @@ async def fetch_nutrition(start: date, end: date) -> dict | None:
         return None
     base = settings.planmydinner_url.rstrip("/")
     prof = settings.planmydinner_profile
-    days = (end - start).days + 1
 
     async with httpx.AsyncClient(timeout=15) as client:
-        adherence = await _get(client, base, "/planner/adherence",
-                               {"profile_id_A": prof, "start_date": start.isoformat(), "days": days})
-        consumed = await _get(client, base, "/consumed-entries/",
-                              {"profile_id": prof, "start_date": start.isoformat(),
-                               "end_date": end.isoformat()})
+        summary = await _get(client, base, "/integration/summary",
+                             {"profile_id": prof, "start_date": start.isoformat(),
+                              "end_date": end.isoformat()})
         profile = await _get(client, base, f"/profiles/{prof}", {})
 
-    a = adherence or {}
-    consumed = consumed if isinstance(consumed, list) else []
-    has_data = bool(consumed) or bool(a.get("planned_slots") or a.get("free_meals")
-                                      or a.get("in_plan_consumed"))
-    if not has_data:
+    return _shape(summary, profile, start, end, profilemod.load().get("weight_kg"))
+
+
+def _shape(summary, profile, start: date, end: date, weight_kg) -> dict | None:
+    """Turn the raw /integration/summary (+ profile) into the compact Italian view
+    the AI prompts consume, or None when there's no usable data."""
+    summary = summary if isinstance(summary, dict) else {}
+    adh = summary.get("adherence") or {}
+    avg = summary.get("averages") or {}
+    days = summary.get("days") or []
+    if not (avg.get("days_with_data") or adh.get("planned_slots") or adh.get("free_meals")):
         return None
 
     out: dict = {"periodo": f"{start.isoformat()} → {end.isoformat()}"}
-    if a:
-        score = a.get("adherence_score") or 0
+
+    if adh:
+        score = adh.get("adherence_score") or 0
         out["aderenza_al_piano"] = {
             "punteggio_pct": round(score * 100) if score <= 1 else round(score),
-            "pasti_pianificati": a.get("planned_slots"),
-            "pasti_da_piano_consumati": a.get("in_plan_consumed"),
-            "pasti_liberi_usati": a.get("free_meals"),
-            "quota_pasti_liberi": a.get("free_meal_quota"),
-            "pasti_saltati": a.get("not_eaten_slots"),
+            "pasti_pianificati": adh.get("planned_slots"),
+            "pasti_da_piano_consumati": adh.get("in_plan_consumed"),
+            "pasti_liberi_usati": adh.get("free_meals"),
+            "quota_pasti_liberi": adh.get("free_meal_quota"),
+            "pasti_saltati": adh.get("not_eaten_slots"),
         }
-    if consumed:
-        out["pasti_registrati"] = len(consumed)
+
+    if avg.get("days_with_data"):
+        prot = avg.get("protein_g")
+        macros = {
+            "nota": "valori dei PASTI TRACCIATI (pasti pianificati), non "
+                    "necessariamente l'intero introito giornaliero",
+            "giorni_con_dati": avg.get("days_with_data"),
+            "kcal_medie": _r(avg.get("kcal")),
+            "proteine_g_medie": _r(prot),
+            "carboidrati_g_medi": _r(avg.get("carbs_g")),
+            "grassi_g_medi": _r(avg.get("fat_g")),
+        }
+        # protein per kg: the single most useful quality signal for an athlete
+        if prot and weight_kg:
+            macros["proteine_g_per_kg"] = round(prot / weight_kg, 2)
+        # per-day energy/macros so the AI can see variability, not just the mean
+        macros["per_giorno"] = [
+            {"data": d.get("date"), "kcal": _r((d.get("nutrition") or {}).get("kcal")),
+             "proteine_g": _r((d.get("nutrition") or {}).get("protein_g")),
+             "carboidrati_g": _r((d.get("nutrition") or {}).get("carbs_g")),
+             "grassi_g": _r((d.get("nutrition") or {}).get("fat_g")),
+             "pasti_liberi": d.get("free_meals")}
+            for d in days if (d.get("nutrition") or {}).get("kcal") is not None]
+        out["alimentazione_tracciata"] = macros
+
     if profile:
         prefs = {k: v for k in ("preferences", "allergies", "excluded_foods")
                  if (v := profile.get(k))}
         if prefs:
             out["profilo"] = prefs
     return out
+
+
+def _r(v, nd: int = 0):
+    """Round a possibly-None number, keeping None as None."""
+    try:
+        return round(float(v), nd) if v is not None else None
+    except (TypeError, ValueError):
+        return None
