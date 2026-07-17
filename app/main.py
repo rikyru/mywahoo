@@ -1520,6 +1520,53 @@ async def sync(full: str = Form(default="")):
     return RedirectResponse(f"/?{urlencode({'msg': msg})}", status_code=303)
 
 
+def _fit_merge_target(session, start: datetime, fit_sport: str) -> Workout | None:
+    """Pick the existing workout an uploaded FIT should merge into, or None.
+
+    Two kinds of candidate:
+      - a near-simultaneous activity (±25 min): a real duplicate, e.g. the same
+        swim exported from swim.com and delivered by Wahoo.
+      - a manual/plan workout logged the same calendar day: marking a plan
+        session done stamps a placeholder noon time, so the real FIT (done in the
+        morning or evening) falls outside the ±25 min window — yet it is exactly
+        the data that session was waiting for. Guarded by sport so a swim FIT
+        never absorbs that day's strength session.
+    Merging keeps the same workout id, so the plan link and description survive.
+    """
+    lo, hi = start - timedelta(minutes=25), start + timedelta(minutes=25)
+    day_lo = datetime.combine(start.date(), time.min)
+    day_hi = datetime.combine(start.date(), time.max)
+    near = list(session.exec(select(Workout).where(
+        Workout.start_date >= lo, Workout.start_date <= hi)))
+    near_ids = {w.id for w in near}
+
+    # Same-day manual guard: the two are NOT close in time, so require a real
+    # sport match. If the FIT sport is known (swim/bike/run/walk) the manual must
+    # be the same family; if the FIT sport is unknown (generic "training"), only
+    # merge into an equally family-less manual (a home/bodyweight session) so a
+    # bodyweight FIT never lands on that day's ride.
+    fe = google_health._sport_family(fit_sport)
+
+    def sameday_ok(w: Workout) -> bool:
+        return (google_health._matches_sport(w.sport, fit_sport) if fe
+                else google_health._sport_family(w.sport) is None)
+
+    sameday_manual = [w for w in session.exec(select(Workout).where(
+        Workout.manual == True,  # noqa: E712
+        Workout.start_date >= day_lo, Workout.start_date <= day_hi))
+        if w.id not in near_ids and not w.has_fit and sameday_ok(w)]
+    candidates = near + sameday_manual
+    if not candidates:
+        return None
+    # prefer a data-less stub over a FIT-backed activity, then a matching sport
+    # family, then the closest start time
+    candidates.sort(key=lambda w: (
+        w.has_fit,
+        not google_health._matches_sport(w.sport, fit_sport),
+        abs((w.start_date - start).total_seconds())))
+    return candidates[0]
+
+
 @app.post("/upload/fit", dependencies=[Depends(require_auth)])
 async def upload_fit(file: UploadFile = File(...)):
     """Ingest a manually exported FIT (e.g. a full swim from swim.com). Matched
@@ -1546,18 +1593,15 @@ async def upload_fit(file: UploadFile = File(...)):
         return RedirectResponse(f"/?{urlencode({'error': 'FIT senza orario di inizio'})}",
                                 status_code=303)
 
-    lo, hi = start - timedelta(minutes=25), start + timedelta(minutes=25)
+    fit_sport = session_data.get("sport") or ""
     with Session(engine) as session:
-        near = list(session.exec(select(Workout).where(
-            Workout.start_date >= lo, Workout.start_date <= hi)))
-        # prefer a data-less stub over an existing FIT-backed activity
-        near.sort(key=lambda w: (w.has_fit, abs((w.start_date - start).total_seconds())))
-        match = near[0] if near else None
+        match = _fit_merge_target(session, start, fit_sport)
         wid = match.id if match else int(start.timestamp())
         if match is None:
             session.add(Workout(id=wid, name=os.path.splitext(file.filename or "")[0] or "Attività",
                                 sport="", start_date=start))
             session.commit()
+        merged_manual = bool(match and match.manual)
 
     fit_path = os.path.join(settings.fit_dir, f"{wid}.fit")
     os.replace(tmp, fit_path)
@@ -1567,10 +1611,10 @@ async def upload_fit(file: UploadFile = File(...)):
         return RedirectResponse(f"/?{urlencode({'error': f'FIT non elaborabile: {e}'})}",
                                 status_code=303)
     logger.info("Ingested uploaded FIT -> workout %s (%s)", wid,
-                "match" if match else "new")
-    return RedirectResponse(
-        f"/workout/{wid}?{urlencode({'msg': 'FIT caricato: dati completi importati'})}",
-        status_code=303)
+                "merge-manual" if merged_manual else "match" if match else "new")
+    msg = ("FIT fuso con l'allenamento del piano: dati reali e FC uniti alla "
+           "descrizione" if merged_manual else "FIT caricato: dati completi importati")
+    return RedirectResponse(f"/workout/{wid}?{urlencode({'msg': msg})}", status_code=303)
 
 
 @app.post("/workout/{workout_id}/analyze", dependencies=[Depends(require_auth)])

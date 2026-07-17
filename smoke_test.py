@@ -247,6 +247,44 @@ with TestClient(app) as client:
     assert f'id="chatLog{sid}"' in r.text  # panel present while the session is open
     print("plan chat thread persisted + replayed OK")
 
+    # --- move a planned session to another day (Wed -> Thu) ---
+    from datetime import date as _date, time as _time
+    r = client.post(f"/plans/{pid}/session/{sid}/edit", follow_redirects=False,
+                    data={"title": "Nuoto", "sport": "Nuoto", "durata_min": "45",
+                          "date": "2026-07-16", "description": "1500m"})
+    assert r.status_code == 303
+    with Session(engine) as s:
+        moved = s.get(PlanSession, sid)
+        assert moved.date.date() == _date(2026, 7, 16) and moved.sport == "Nuoto"
+    r = client.get("/calendar?month=2026-07")
+    assert r.status_code == 200 and "Nuoto" in r.text  # shows on the new day
+    print("plan session rescheduled to another day OK")
+
+    # --- uploaded FIT merges into the same-day plan/manual workout ---
+    from app.main import _fit_merge_target
+    from app.db import Workout as _W
+    with Session(engine) as s:
+        # a plan session marked done: manual swim at Thursday noon (placeholder)
+        s.add(_W(id=555, name="Nuoto", sport="Nuoto", manual=True,
+                 notes="1500m a stile", rpe=6.0,
+                 start_date=datetime(2026, 7, 16, 12, 0)))
+        # an unrelated same-day strength session that must NOT absorb a swim FIT
+        s.add(_W(id=556, name="Forza", sport="Forza", manual=True,
+                 start_date=datetime(2026, 7, 16, 12, 0)))
+        s.commit()
+        # real swim FIT done Thursday evening: merges into the manual swim,
+        # never into the strength session at the same placeholder time
+        m = _fit_merge_target(s, datetime(2026, 7, 16, 19, 30), "lap_swimming")
+        assert m and m.id == 555, m
+        # a family-less FIT ("training") only merges into a family-less manual
+        # (the strength one), not the swim
+        m2 = _fit_merge_target(s, datetime(2026, 7, 16, 20, 0), "training")
+        assert m2 and m2.id == 556, m2
+        # a bike FIT: no same-day bike manual and no ±25min neighbour -> new activity
+        m3 = _fit_merge_target(s, datetime(2026, 7, 20, 8, 0), "cycling")
+        assert m3 is None, m3
+    print("FIT merge target: same-day manual swim, sport-guarded OK")
+
     # --- profile: drives the TRIMP scale, so a wrong range skews all of Forma ---
     from app import profile as profilemod
     r = client.post("/settings/profile", follow_redirects=False,
