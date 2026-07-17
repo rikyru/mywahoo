@@ -289,12 +289,26 @@ with TestClient(app) as client:
     from app import profile as profilemod
     r = client.post("/settings/profile", follow_redirects=False,
                     data={"height_cm": "178", "weight_kg": "74.5", "birth_year": "1992",
-                          "sex": "M", "rest_hr": "48", "max_hr": ""})
+                          "sex": "M", "rest_hr": "48", "max_hr": "",
+                          "ai_notes": "Ginocchio sx delicato, niente salti. A casa solo tappetino."})
     assert r.status_code == 303
     p = profilemod.load()
     assert p["height_cm"] == 178 and p["weight_kg"] == 74.5 and p["rest_hr"] == 48
     assert profilemod.age(p) and profilemod.bmi(p) == 23.5, profilemod.bmi(p)
     print(f"profile saved OK (BMI {profilemod.bmi(p)}, età {profilemod.age(p)})")
+
+    # the free-text memory must reach the AI context (so every prompt sees it)
+    assert "Ginocchio sx delicato" in profilemod.ai_context(p)["note_da_rispettare"]
+    r = client.get("/settings")
+    assert r.status_code == 200 and "Ginocchio sx delicato" in r.text and "Note per l'AI" in r.text
+    # a Google-Health profile sync must not wipe the note (partial save)
+    profilemod.save({"weight_kg": 75.0})
+    assert profilemod.load()["ai_notes"].startswith("Ginocchio")
+    # and the note is length-capped so it can't blow up every prompt
+    profilemod.save({"ai_notes": "x" * 5000})
+    assert len(profilemod.load()["ai_notes"]) == profilemod.AI_NOTES_MAX
+    profilemod.save({"ai_notes": "Ginocchio sx delicato, niente salti. A casa solo tappetino."})
+    print("AI memory note: saved, reaches context, survives partial save, capped OK")
 
     # empty max_hr: higher of the measured peak and Tanaka (208-0.7*age)
     rest, mx, sex = profilemod.hr_anchors(p, measured_max=171)

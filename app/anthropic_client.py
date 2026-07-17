@@ -248,6 +248,8 @@ async def assess_route(route: dict, history: dict, form: dict | None,
     payload = {"sport": sport, "percorso": route, "storico": history}
     if form:
         payload["forma_attuale"] = form
+    if (who := _profile.ai_context()):
+        payload["atleta"] = who
     return await _call_claude(
         ROUTE_SYSTEM_PROMPT,
         json.dumps(payload, ensure_ascii=False, indent=1, default=str))
@@ -299,7 +301,10 @@ Rispondi SOLO con JSON valido, senza testo attorno né code fence:
 {"title": "titolo breve del piano", "sessions": [{"date": "YYYY-MM-DD", "day": "es. Lun 14/07", "title": "titolo sessione", "sport": "UNA di: """ + SPORT_VOCAB + """", "durata_min": intero, "description": "esercizi/serie/ripetizioni o dettagli"}]}
 Assegna le date a partire dalla data di inizio ed entro il numero di giorni
 indicato. Inserisci giorni di riposo solo se sensato (sport "Riposo", durata 0).
-Adatta carico e volume a un atleta amatoriale. Nessun altro testo."""
+Adatta carico e volume a un atleta amatoriale. Se il campo dell'atleta contiene
+"note_da_rispettare" (infortuni, attrezzatura disponibile, giorni/orari, obiettivi,
+preferenze) tienine conto SEMPRE: non proporre esercizi che le violano. Nessun
+altro testo."""
 
 
 PLAN_CHAT_SYSTEM_PROMPT = """\
@@ -313,8 +318,10 @@ TRIMP, l'obiettivo del piano, il profilo dell'atleta e la sua forma attuale
 
 Quando proponi un'alternativa punta a un carico EQUIVALENTE a quello pianificato
 (entro ±15%), giocando su durata e intensità: se l'alternativa è più intensa
-accorciala, se è più blanda allungala. Rispetta i vincoli dichiarati (in casa,
-senza attrezzi, tempo disponibile) e resta coerente con l'obiettivo del piano.
+accorciala, se è più blanda allungala. Rispetta i vincoli dichiarati nel messaggio (in casa,
+senza attrezzi, tempo disponibile) E quelli permanenti in "note_da_rispettare"
+dell'atleta (infortuni, attrezzatura, disponibilità, preferenze): non proporre
+mai esercizi che li violano. Resta coerente con l'obiettivo del piano.
 Se la forma indica molto affaticamento puoi proporre meno carico, ma dillo.
 
 Rispondi SOLO con JSON valido, senza testo attorno né code fence:
@@ -350,6 +357,8 @@ async def generate_plan(goal: str, n_days: int, start_date: str) -> dict:
     import re
     user = (f"Obiettivo: {goal}\nGiorni disponibili: {n_days}\n"
             f"Data di inizio: {start_date}")
+    if (who := _profile.ai_context()):
+        user += "\nAtleta: " + json.dumps(who, ensure_ascii=False)
     raw = await _call_claude(PLAN_SYSTEM_PROMPT, user)
     m = re.search(r"\{.*\}", raw, re.S)
     if not m:

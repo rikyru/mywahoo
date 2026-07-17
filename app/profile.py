@@ -10,7 +10,9 @@ from datetime import date
 
 from .db import get_setting, set_setting
 
-FIELDS = ("height_cm", "weight_kg", "birth_year", "sex", "rest_hr", "max_hr")
+NUMERIC_FIELDS = ("height_cm", "weight_kg", "birth_year", "rest_hr", "max_hr")
+# sex + ai_notes are free text, handled apart from the numeric fields
+AI_NOTES_MAX = 1500  # cap so the note can't blow up every prompt
 
 # Banister TRIMP coefficients (the exponential weighting differs by sex)
 TRIMP_COEFF = {"F": (0.86, 1.67), "M": (0.64, 1.92)}
@@ -24,17 +26,22 @@ def _num(s: str) -> float | None:
 
 
 def load() -> dict:
-    """Profile as entered by the user (missing fields are None)."""
-    p = {k: _num(get_setting(f"profile.{k}", "")) for k in FIELDS if k != "sex"}
+    """Profile as entered by the user (missing numeric fields are None)."""
+    p = {k: _num(get_setting(f"profile.{k}", "")) for k in NUMERIC_FIELDS}
     p["sex"] = get_setting("profile.sex", "") or None
+    p["ai_notes"] = get_setting("profile.ai_notes", "")
     return p
 
 
 def save(values: dict) -> None:
-    for k in FIELDS:
+    for k in NUMERIC_FIELDS:
         if k in values:
             v = values[k]
             set_setting(f"profile.{k}", "" if v is None else str(v).strip())
+    if "sex" in values:
+        set_setting("profile.sex", (values["sex"] or "").strip())
+    if "ai_notes" in values:
+        set_setting("profile.ai_notes", (values["ai_notes"] or "").strip()[:AI_NOTES_MAX])
 
 
 def age(p: dict | None = None) -> int | None:
@@ -88,4 +95,8 @@ def ai_context(p: dict | None = None) -> dict:
         out["fc_riposo"] = round(p["rest_hr"])
     if p.get("max_hr"):
         out["fc_max"] = round(p["max_hr"])
+    # Free-text memory: injuries, equipment, availability, goals, preferences.
+    # Placed last and labelled so the AI treats it as durable context to respect.
+    if p.get("ai_notes"):
+        out["note_da_rispettare"] = p["ai_notes"]
     return out

@@ -47,10 +47,18 @@
              placeholder="{{ eff_max_hr }}{% if measured_max_hr %} (misurata){% endif %}"
              value="{{ profile.max_hr | round | int if profile.max_hr else '' }}">
     </label>
+    <label class="nw-desc nw-full">Note per l'AI (memoria permanente)
+      <textarea name="ai_notes" rows="4" maxlength="1500"
+        placeholder="Cose che l'AI deve ricordare e rispettare, scritte come vuoi. Es.: ginocchio sx delicato, evitare salti · a casa solo tappetino e 2 manubri da 8 kg · mi alleno la sera, mai il lunedì · obiettivo granfondo 120 km a settembre · odio correre, preferisco bici e nuoto.">{{ profile.ai_notes }}</textarea>
+    </label>
     <div class="edit-actions">
       <button class="btn" type="submit">Salva dati</button>
     </div>
   </form>
+
+  <p class="muted">La nota è passata a ogni analisi e chat dell'AI (allenamenti,
+    salute, forma, generazione e adattamento piani, valutazione percorsi): scrivila
+    una volta, la usa ovunque senza doverla ripetere.</p>
 
   <p class="muted">
     In uso ora: <strong>FC riposo {{ eff_rest_hr }}</strong> ·

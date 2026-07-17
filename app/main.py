@@ -1110,10 +1110,11 @@ async def settings_page(request: Request):
 @app.post("/settings/profile", dependencies=[Depends(require_auth)])
 def settings_profile(height_cm: str = Form(""), weight_kg: str = Form(""),
                      birth_year: str = Form(""), sex: str = Form(""),
-                     rest_hr: str = Form(""), max_hr: str = Form("")):
+                     rest_hr: str = Form(""), max_hr: str = Form(""),
+                     ai_notes: str = Form("")):
     profilemod.save({"height_cm": height_cm, "weight_kg": weight_kg,
                      "birth_year": birth_year, "sex": sex if sex in ("M", "F") else "",
-                     "rest_hr": rest_hr, "max_hr": max_hr})
+                     "rest_hr": rest_hr, "max_hr": max_hr, "ai_notes": ai_notes})
     return RedirectResponse(
         f"/settings?{urlencode({'msg': 'Dati personali salvati (rivedi la Forma: il carico è ricalcolato)'})}",
         status_code=303)
