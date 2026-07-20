@@ -104,6 +104,11 @@
       <div class="kpi"><span class="kpi-value">{{ mins }}m</span><span class="kpi-label">{{ name }}</span></div>
       {% endfor %}
     </section>
+    {% if data.naps %}
+    {% set nap = data.naps[-1] %}
+    <p class="muted">💤 Pisolino {{ nap.date }}: {{ (nap.asleep_min // 60) }}h {{ "%02d"|format(nap.asleep_min % 60) }}m
+      (conteggiato come recupero, separato dalla notte).</p>
+    {% endif %}
     <canvas id="sleepChart" height="90"></canvas>
   </section>
   {% endif %}

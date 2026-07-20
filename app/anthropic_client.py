@@ -91,7 +91,10 @@ recupero" **correla esplicitamente le attività con il recupero**: confronta le
 notti/giorni dopo sessioni intense o voluminose con HRV, FC a riposo e qualità
 del sonno; segnala se il corpo recupera bene dal carico o se accumula fatica
 (HRV depressa o FC a riposo elevata dopo i picchi di allenamento), e se i giorni
-di riposo/scarico portano un rimbalzo del recupero. Se sono presenti dati di
+di riposo/scarico portano un rimbalzo del recupero. Nel sonno, "per_notte" sono
+le notti; se c'è "pisolini" sono dormite diurne SEPARATE dalla notte: contale
+come recupero aggiuntivo (specie dopo sessioni intense), non come sonno notturno.
+Se sono presenti dati di
 alimentazione ("aderenza_al_piano" e/o "alimentazione_tracciata"), correlali con
 recupero e carico e aggiungi 1-2 righe nei Consigli; se assenti, NON parlarne.
 Su "alimentazione_tracciata" tratta kcal e macro come i PASTI TRACCIATI (non
@@ -484,6 +487,11 @@ def _health_payload(overview: dict, workouts: list[dict] | None,
                  "media_durata": hm(sum(asleep) / len(asleep)),
                  "per_notte": [{"data": n["date"], "durata": hm(n["asleep_min"]),
                                 "efficienza": n.get("efficiency")} for n in nights]}
+        naps = overview.get("naps") or []
+        if naps:
+            # daytime sleep, separate from the night — extra recovery, not a night
+            sleep["pisolini"] = [{"data": n["date"], "durata": hm(n["asleep_min"])}
+                                 for n in naps]
 
     out = {"indice_di_forma": overview.get("score"),
            "metriche_vitali": metrics, "composizione_corporea": body,

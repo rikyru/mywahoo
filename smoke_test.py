@@ -430,6 +430,43 @@ assert _shape({"averages": {"days_with_data": 0}, "adherence": {}}, None,
 print(f"nutrition shape OK (kcal {trk['kcal_medie']}, "
       f"proteine {trk['proteine_g_per_kg']} g/kg, aderenza {n['aderenza_al_piano']['punteggio_pct']}%)")
 
+# --- sleep: a daytime nap must not take a night's place, but must be counted ---
+from app.google_health import _parse_sleep_point, _split_sleep
+
+def _sleep_pt(start, end, asleep):
+    return {"sleep": {"interval": {"startTime": start, "endTime": end},
+                      "summary": {"minutesAsleep": asleep}, "stages": []}}
+
+# night A (bed 14th evening), afternoon nap on the 15th, night B (bed 15th evening)
+night_a = _sleep_pt("2026-07-14T23:00:00+02:00", "2026-07-15T07:00:00+02:00", 460)
+nap_15  = _sleep_pt("2026-07-15T15:00:00+02:00", "2026-07-15T16:40:00+02:00", 95)
+night_b = _sleep_pt("2026-07-15T23:30:00+02:00", "2026-07-16T07:00:00+02:00", 445)
+fragment = _sleep_pt("2026-07-16T03:00:00+02:00", "2026-07-16T03:40:00+02:00", 38)  # <90 at night
+micro_nap = _sleep_pt("2026-07-16T14:00:00+02:00", "2026-07-16T14:10:00+02:00", 9)   # <20 daytime
+
+assert _parse_sleep_point(night_a)["kind"] == "night"
+assert _parse_sleep_point(nap_15)["kind"] == "nap"          # long siesta is still a nap
+assert _parse_sleep_point(fragment) is None                  # night fragment dropped
+assert _parse_sleep_point(micro_nap) is None                 # daytime noise dropped
+print("sleep classification (night / nap / noise) OK")
+
+episodes = [_parse_sleep_point(p) for p in (night_a, nap_15, night_b)]
+nights, naps = _split_sleep([e for e in episodes if e], days=7)
+# the nap shares the 15th with night B but must NOT replace it
+assert [n["date"] for n in nights] == ["2026-07-14", "2026-07-15"]
+assert nights[-1]["asleep_min"] == 445  # last night is night B, not the 95' nap
+assert "kind" not in nights[-1]         # internal tag stripped
+assert [n["date"] for n in naps] == ["2026-07-15"] and naps[0]["asleep_min"] == 95
+print("sleep split: nap kept for recovery, night preserved OK")
+
+# a night split into two records on the same date collapses to one (the longest)
+frag_nights, _ = _split_sleep([
+    _parse_sleep_point(_sleep_pt("2026-07-14T21:30:00+02:00", "2026-07-14T23:00:00+02:00", 85)),
+    _parse_sleep_point(_sleep_pt("2026-07-14T23:30:00+02:00", "2026-07-15T06:30:00+02:00", 400)),
+], days=7)
+assert len(frag_nights) == 1 and frag_nights[0]["asleep_min"] == 400
+print("sleep dedupe: one night per date OK")
+
 # --- FIT helpers with synthetic data (no FIT file needed) ---
 from app.fit import ai_stats, compute_normalized_power, downsample
 

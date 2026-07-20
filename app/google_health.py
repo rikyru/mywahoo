@@ -598,15 +598,106 @@ _SLEEP_STAGE_LABELS = {
 }
 
 
-async def _sleep_nights(days: int, max_pages: int = 4) -> list[dict]:
-    """Per-night sleep: total/asleep minutes, efficiency, minutes per stage.
+# A sleep whose LOCAL start hour is in [NAP_START_FROM, NAP_START_TO) is a daytime
+# nap, not a night — even a long siesta. Real nights start in the evening or after
+# midnight, well outside this window; the range is wide enough to survive a couple
+# of hours of UTC/local offset without misclassifying either.
+NAP_START_FROM, NAP_START_TO = 9, 19
+NIGHT_MIN_MINUTES = 90  # a night-window episode shorter than this is a fragment
+NAP_MIN_MINUTES = 20    # a daytime episode shorter than this is noise
 
-    Paginates because the API caps sleep at 25 points/page. Short episodes
-    (<90 min, i.e. naps) are skipped so the recovery analysis sees real nights.
+
+def _parse_sleep_point(p: dict) -> dict | None:
+    """One sleep dataPoint -> episode dict tagged with "kind" ("night"|"nap"), or
+    None if it's noise (missing interval, a night-window fragment, or a micro-nap).
+
+    A night starts in the evening/night and lasts >= 90 min; a daytime episode
+    (start 09:00-19:00) is a nap — kept for recovery, but never a night — as long
+    as it's >= 20 min. This keeps a siesta from taking a night's place while still
+    counting it toward daily rest.
     """
     from datetime import datetime as dt
 
-    nights: list[dict] = []
+    s = p.get("sleep") or {}
+    interval = s.get("interval") or {}
+    start, end = interval.get("startTime"), interval.get("endTime")
+    if not start or not end:
+        return None
+    try:
+        a = dt.fromisoformat(start.replace("Z", "+00:00"))
+        b = dt.fromisoformat(end.replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    total_min = round((b - a).total_seconds() / 60)
+    if NAP_START_FROM <= a.hour < NAP_START_TO:
+        if total_min < NAP_MIN_MINUTES:
+            return None  # micro daytime episode, noise
+        kind = "nap"
+    else:
+        if total_min < NIGHT_MIN_MINUTES:
+            return None  # night-window fragment, not a night
+        kind = "night"
+
+    stages_min: dict[str, float] = {}
+    for st in s.get("stages") or []:
+        try:
+            sa = dt.fromisoformat(st["startTime"].replace("Z", "+00:00"))
+            sb = dt.fromisoformat(st["endTime"].replace("Z", "+00:00"))
+        except (KeyError, TypeError, ValueError):
+            continue
+        stages_min[st.get("type", "")] = stages_min.get(st.get("type", ""), 0) \
+            + (sb - sa).total_seconds() / 60
+
+    summary = s.get("summary") or {}
+    asleep = summary.get("minutesAsleep")
+    if asleep is None:
+        asleep = sum(stages_min.get(k, 0) for k in ("LIGHT", "REM", "DEEP", "ASLEEP"))
+    asleep = round(float(asleep))
+    return {
+        "kind": kind,
+        "date": a.strftime("%Y-%m-%d"),
+        "bedtime": a.strftime("%H:%M"),
+        "wake": b.strftime("%H:%M"),
+        "total_min": total_min,
+        "asleep_min": asleep,
+        "efficiency": round(asleep / total_min * 100) if total_min else None,
+        "stages": {_SLEEP_STAGE_LABELS.get(k, k.lower()): round(v)
+                   for k, v in stages_min.items() if v},
+    }
+
+
+def _split_sleep(episodes: list[dict], days: int) -> tuple[list[dict], list[dict]]:
+    """Split raw episodes into (nights, naps). At most one night per date — the
+    longest — so a fragmented night can't double-count. Naps are summed per date
+    (a day can have several) and kept for the recovery analysis."""
+    by_date: dict[str, dict] = {}
+    naps_by_date: dict[str, dict] = {}
+    for e in episodes:
+        if e["kind"] == "night":
+            prev = by_date.get(e["date"])
+            if prev is None or e["asleep_min"] > prev["asleep_min"]:
+                by_date[e["date"]] = e
+        else:
+            nap = naps_by_date.setdefault(e["date"], {"date": e["date"], "asleep_min": 0,
+                                                      "episodi": 0})
+            nap["asleep_min"] += e["asleep_min"]
+            nap["episodi"] += 1
+    nights = sorted(by_date.values(), key=lambda n: n["date"])[-days:]
+    kept = {n["date"] for n in nights}
+    # only surface naps for the days whose night we actually kept, so the window
+    # of naps matches the window of nights
+    naps = sorted((n for d, n in naps_by_date.items() if d in kept),
+                  key=lambda n: n["date"])
+    for n in nights:  # drop the internal tag before returning
+        n.pop("kind", None)
+    return nights, naps
+
+
+async def _sleep_episodes(days: int, max_pages: int = 4) -> tuple[list[dict], list[dict]]:
+    """(nights, naps) over the window. Paginates because the API caps sleep at 25
+    points/page — see _parse_sleep_point / _split_sleep."""
+    episodes: list[dict] = []
+    n_nights = 0
     page_token = None
     for _ in range(max_pages):
         params: dict = {"pageSize": 25}
@@ -615,50 +706,13 @@ async def _sleep_nights(days: int, max_pages: int = 4) -> list[dict]:
         data = await api_get("/users/me/dataTypes/sleep/dataPoints", params)
         points = data.get("dataPoints", [])
         for p in points:
-            s = p.get("sleep") or {}
-            interval = s.get("interval") or {}
-            start, end = interval.get("startTime"), interval.get("endTime")
-            if not start or not end:
-                continue
-            try:
-                a = dt.fromisoformat(start.replace("Z", "+00:00"))
-                b = dt.fromisoformat(end.replace("Z", "+00:00"))
-            except (TypeError, ValueError):
-                continue
-            total_min = round((b - a).total_seconds() / 60)
-
-            stages_min: dict[str, float] = {}
-            for st in s.get("stages") or []:
-                try:
-                    sa = dt.fromisoformat(st["startTime"].replace("Z", "+00:00"))
-                    sb = dt.fromisoformat(st["endTime"].replace("Z", "+00:00"))
-                except (KeyError, TypeError, ValueError):
-                    continue
-                stages_min[st.get("type", "")] = stages_min.get(st.get("type", ""), 0) \
-                    + (sb - sa).total_seconds() / 60
-
-            summary = s.get("summary") or {}
-            asleep = summary.get("minutesAsleep")
-            if asleep is None:
-                asleep = sum(stages_min.get(k, 0) for k in ("LIGHT", "REM", "DEEP", "ASLEEP"))
-            asleep = round(float(asleep))
-            if total_min < 90:
-                continue  # nap / fragment, not a night
-            nights.append({
-                "date": a.strftime("%Y-%m-%d"),
-                "bedtime": a.strftime("%H:%M"),
-                "wake": b.strftime("%H:%M"),
-                "total_min": total_min,
-                "asleep_min": asleep,
-                "efficiency": round(asleep / total_min * 100) if total_min else None,
-                "stages": {_SLEEP_STAGE_LABELS.get(k, k.lower()): round(v)
-                           for k, v in stages_min.items() if v},
-            })
+            if (e := _parse_sleep_point(p)) is not None:
+                episodes.append(e)
+                n_nights += e["kind"] == "night"
         page_token = data.get("nextPageToken")
-        if not page_token or not points or len(nights) >= days:
+        if not page_token or not points or n_nights >= days:
             break
-    nights.sort(key=lambda n: n["date"])
-    return nights[-days:]
+    return _split_sleep(episodes, days)
 
 
 # Direction that counts as "better" per metric (None = neutral, no good/bad colour)
@@ -739,7 +793,8 @@ async def fetch_health_overview(start_date=None, end_date=None) -> dict:
     def in_window(d):
         return start_iso <= d <= end_iso
 
-    out: dict = {"metrics": {}, "body": {}, "sleep": [], "missing": [], "score": None}
+    out: dict = {"metrics": {}, "body": {}, "sleep": [], "naps": [],
+                 "missing": [], "score": None}
 
     for key, (dtype, wrapper, vkey, label, unit, dec) in DAILY_METRICS.items():
         try:
@@ -767,8 +822,9 @@ async def fetch_health_overview(start_date=None, end_date=None) -> dict:
                                 "latest": series[-1]["value"], "series": series}
 
     try:
-        nights = await _sleep_nights(span)
+        nights, naps = await _sleep_episodes(span)
         out["sleep"] = [n for n in nights if in_window(n["date"])]
+        out["naps"] = [n for n in naps if in_window(n["date"])]
     except GoogleScopeMissingError:
         out["missing"].append("Sonno")
 
