@@ -51,6 +51,7 @@ class TrainingPlan(SQLModel, table=True):
     title: str = ""
     goal: str = ""
     created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+    conversation_id: Optional[int] = None   # AI thread for editing the whole plan
 
 
 class PlanSession(SQLModel, table=True):
@@ -204,6 +205,7 @@ _MIGRATIONS = {
     "workout": [("manual", "INTEGER DEFAULT 0"), ("notes", "TEXT DEFAULT ''"),
                 ("rpe", "REAL")],
     "plansession": [("conversation_id", "INTEGER")],
+    "trainingplan": [("conversation_id", "INTEGER")],
 }
 
 

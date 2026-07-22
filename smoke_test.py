@@ -247,6 +247,62 @@ with TestClient(app) as client:
     assert f'id="chatLog{sid}"' in r.text  # panel present while the session is open
     print("plan chat thread persisted + replayed OK")
 
+    # --- edit the whole plan by chat ("mi aggiungi giovedì un corpo libero?") ---
+    captured_plan = {}
+    async def _fake_plan_chat(ctx, history):
+        captured_plan["ctx"] = ctx
+        return {"risposta": "Ok, aggiungo un corpo libero giovedì.",
+                "azioni": [{"tipo": "aggiungi", "date": "2026-07-23", "day": "Gio 23/07",
+                            "title": "Corpo libero", "sport": "Corpo libero",
+                            "durata_min": 40, "description": "circuito full body"},
+                           {"tipo": "modifica", "session_id": sid, "durata_min": 55},
+                           {"tipo": "rimuovi", "session_id": 999999}]}  # bad id -> dropped
+    ac.chat_plan, real_plan_chat = _fake_plan_chat, ac.chat_plan
+    r = client.post(f"/plans/{pid}/chat", json={"message": "mi aggiungi giovedì un corpo libero?"})
+    ac.chat_plan = real_plan_chat
+    assert r.status_code == 200, r.text
+    d = r.json()
+    # the AI must see what's done, what's ahead, today, and the athlete
+    assert captured_plan["ctx"]["oggi"] and captured_plan["ctx"]["sessioni"]
+    assert any("stato" in row for row in captured_plan["ctx"]["sessioni"])
+    # invalid action (unknown session id) is filtered out; two valid remain
+    tipi = sorted(a["tipo"] for a in d["actions"])
+    assert tipi == ["aggiungi", "modifica"], d["actions"]
+    assert d["actions"][0]["carico_trimp"] > 0  # proposed session load quantified
+    sessions_before = None
+    with Session(engine) as s:
+        sessions_before = len(s.exec(select(PlanSession).where(PlanSession.plan_id == pid)).all())
+
+    # apply the confirmed actions
+    import json as _json
+    r = client.post(f"/plans/{pid}/apply", follow_redirects=False,
+                    data={"actions": _json.dumps(d["actions"])})
+    assert r.status_code == 303
+    added_sid = None
+    with Session(engine) as s:
+        after = s.exec(select(PlanSession).where(PlanSession.plan_id == pid)).all()
+        assert len(after) == sessions_before + 1  # one session added
+        added = [x for x in after if x.title == "Corpo libero" and x.sport == "Corpo libero"]
+        assert added and added[0].date.date() == _date(2026, 7, 23) and added[0].duration_min == 40
+        assert s.get(PlanSession, sid).duration_min == 55  # the modify applied
+        added_sid = added[0].id
+    r = client.get(f"/plans/{pid}")
+    assert r.status_code == 200 and "Modifica il piano con l'AI" in r.text
+    print("plan-level AI edit: add + modify applied on confirm, bad action dropped OK")
+
+    # a done session must never be edited/removed by the apply route
+    with Session(engine) as s:
+        ps = s.get(PlanSession, added_sid)
+        ps.done = True
+        s.add(ps); s.commit()
+    r = client.post(f"/plans/{pid}/apply", follow_redirects=False,
+                    data={"actions": _json.dumps([{"tipo": "rimuovi", "session_id": added_sid}])})
+    with Session(engine) as s:
+        assert s.get(PlanSession, added_sid) is not None  # done session untouched
+        s.get(PlanSession, added_sid).done = False        # restore for later tests
+        s.add(s.get(PlanSession, added_sid)); s.commit()
+    print("plan-level edit guards done sessions OK")
+
     # --- move a planned session to another day (Wed -> Thu) ---
     from datetime import date as _date, time as _time
     r = client.post(f"/plans/{pid}/session/{sid}/edit", follow_redirects=False,

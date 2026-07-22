@@ -284,6 +284,7 @@ a.chip:hover { background: var(--card-hover); text-decoration: none; }
   border-radius: var(--radius-sm); background: var(--bg-elev); }
 .chat-prop-head { font-weight: 600; margin-bottom: .2rem; }
 .chat-prop-desc { white-space: pre-wrap; margin: .5rem 0 .7rem; font-size: .93rem; }
+.plan-action-list { margin: .4rem 0 .7rem 1.1rem; display: flex; flex-direction: column; gap: .3rem; }
 
 .plan-done { margin-top: .6rem; }
 .plan-done > summary { display: inline-block; list-style: none; cursor: pointer; }

@@ -19,6 +19,21 @@
   </div>
 </section>
 
+<section class="card">
+  <details class="plan-chat" id="planChat" {% if plan_chat_json != '[]' %}open{% endif %}>
+    <summary class="muted">💬 Modifica il piano con l'AI</summary>
+    <p class="muted">Es. «mi aggiungi giovedì un corpo libero?», «sposta la corsa a
+      sabato», «togli la sessione di venerdì». Valuta cosa hai già fatto e cosa
+      resta, poi propone le modifiche da confermare.</p>
+    <div class="chat-log" id="planChatLog"></div>
+    <div id="planActions"></div>
+    <form class="chat-input chat-form" id="planChatForm">
+      <input type="text" placeholder="Scrivi qui…" autocomplete="off">
+      <button class="btn" type="submit">Invia</button>
+    </form>
+  </details>
+</section>
+
 {% for s in sessions %}
 <section class="card plan-session {% if s.done %}plan-session-done{% endif %}">
   <div class="plan-session-head">
@@ -106,6 +121,7 @@
 <script>
 const PLAN_ID = {{ plan.id }};
 const CHATS = {{ chats_json | safe }};
+const PLAN_CHAT = {{ plan_chat_json | safe }};
 
 function bubble(log, role, text) {
   const d = document.createElement("div");
@@ -115,6 +131,69 @@ function bubble(log, role, text) {
   log.scrollTop = log.scrollHeight;
   return d;
 }
+
+// ---- plan-level chat (add/move/remove sessions, with confirmation) ----
+const planLog = document.getElementById("planChatLog");
+PLAN_CHAT.forEach(m => bubble(planLog, m.role, m.content));
+
+function renderPlanActions(actions) {
+  const host = document.getElementById("planActions");
+  host.innerHTML = "";
+  if (!actions || !actions.length) return;
+  const box = document.createElement("div");
+  box.className = "chat-proposal";
+  const h = document.createElement("div");
+  h.className = "chat-prop-head";
+  h.textContent = "Modifiche proposte";
+  box.appendChild(h);
+  const ul = document.createElement("ul");
+  ul.className = "plan-action-list";
+  actions.forEach(a => {
+    const li = document.createElement("li");
+    if (a.tipo === "aggiungi")
+      li.textContent = `➕ ${a.date || ""} — ${a.title} (${a.sport}, ${a.durata_min} min`
+        + (a.carico_trimp ? `, carico ~${a.carico_trimp}` : "") + ")";
+    else if (a.tipo === "rimuovi") li.textContent = `➖ rimuovi una sessione`;
+    else li.textContent = `✏️ modifica una sessione` + (a.durata_min ? ` (${a.durata_min} min)` : "");
+    ul.appendChild(li);
+  });
+  box.appendChild(ul);
+  const form = document.createElement("form");
+  form.method = "post";
+  form.action = `/plans/${PLAN_ID}/apply`;
+  const inp = document.createElement("input");
+  inp.type = "hidden"; inp.name = "actions"; inp.value = JSON.stringify(actions);
+  const btn = document.createElement("button");
+  btn.className = "btn"; btn.type = "submit"; btn.textContent = "Applica al piano";
+  form.append(inp, btn);
+  box.appendChild(form);
+  host.appendChild(box);
+}
+
+document.getElementById("planChatForm").addEventListener("submit", async e => {
+  e.preventDefault();
+  const input = e.target.querySelector("input");
+  const text = input.value.trim();
+  if (!text) return;
+  bubble(planLog, "user", text);
+  input.value = "";
+  document.getElementById("planActions").innerHTML = "";
+  const btn = e.target.querySelector("button");
+  btn.disabled = true;
+  const thinking = bubble(planLog, "assistant", "…");
+  try {
+    const r = await fetch(`/plans/${PLAN_ID}/chat`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message: text }),
+    });
+    const d = await r.json();
+    if (d.error) { thinking.textContent = "⚠️ " + d.error; return; }
+    thinking.textContent = d.reply || "(nessuna risposta)";
+    renderPlanActions(d.actions);
+  } catch (ex) {
+    thinking.textContent = "⚠️ errore di rete";
+  } finally { btn.disabled = false; input.focus(); }
+});
 
 // Replay the persisted thread so reopening the page keeps the conversation
 for (const [sid, msgs] of Object.entries(CHATS)) {

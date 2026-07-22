@@ -359,6 +359,57 @@ async def chat_plan_session(ctx: dict, history: list[dict]) -> dict:
             "proposta": d.get("proposta") or None}
 
 
+PLAN_EDIT_SYSTEM_PROMPT = """\
+Sei l'allenatore di questo atleta e potete MODIFICARE un piano già in corso.
+L'atleta può chiederti di aggiungere una sessione ("mi metti giovedì un corpo
+libero?"), spostarne/cambiarne una, o toglierne una; oppure farti domande.
+
+Ti vengono forniti: obiettivo del piano, DATA DI OGGI, l'elenco completo delle
+sessioni con id, data, sport, durata, CARICO stimato (scala TRIMP) e stato
+"fatta"/"da fare" — per le fatte, "svolto" descrive cosa è stato realmente fatto.
+Inoltre profilo dell'atleta, "note_da_rispettare" e forma attuale (CTL fitness,
+ATL affaticamento, TSB freschezza).
+
+Valuta l'insieme: quanto carico è già stato accumulato dalle sessioni FATTE e
+cosa c'è DOPO, così da inserire/modificare in modo equilibrato (evita di
+addensare troppo carico ravvicinato, rispetta recuperi e obiettivo). Non toccare
+mai una sessione già fatta. Rispetta SEMPRE "note_da_rispettare" (infortuni,
+attrezzatura, disponibilità): niente esercizi che le violano. Risolvi i giorni
+della settimana rispetto alla DATA DI OGGI (es. "giovedì" = il prossimo giovedì).
+
+Rispondi SOLO con JSON valido, senza testo attorno né code fence:
+{"risposta": "risposta conversazionale in italiano, Markdown, concisa",
+ "azioni": [
+   {"tipo": "aggiungi", "date": "YYYY-MM-DD", "day": "es. Gio 23/07", "title": "titolo", "sport": "UNA di: """ + SPORT_VOCAB + """", "durata_min": intero, "description": "esercizi/serie/ripetizioni"},
+   {"tipo": "modifica", "session_id": intero, "date": "YYYY-MM-DD", "title": "...", "sport": "...", "durata_min": intero, "description": "..."},
+   {"tipo": "rimuovi", "session_id": intero}
+ ]}
+In "modifica" includi solo i campi che cambiano, oltre a session_id. Metti in
+"azioni" SOLO modifiche concrete che stai proponendo; se stai solo rispondendo a
+una domanda usa []. Non modificare/rimuovere sessioni già fatte. Nessun altro testo."""
+
+
+async def chat_plan(ctx: dict, history: list[dict]) -> dict:
+    """Conversation to edit a whole plan in progress.
+
+    Returns {"risposta": str, "azioni": [ ... ]} — the actions are add/modify/
+    remove proposals the UI shows for confirmation before applying.
+    """
+    import re
+    system = (PLAN_EDIT_SYSTEM_PROMPT + "\n\nCONTESTO (JSON):\n"
+              + json.dumps(ctx, ensure_ascii=False, default=str))
+    raw = await _call_messages(system, history)
+    m = re.search(r"\{.*\}", raw, re.S)
+    if not m:
+        return {"risposta": raw.strip(), "azioni": []}
+    try:
+        d = json.loads(m.group(0))
+    except json.JSONDecodeError:
+        return {"risposta": raw.strip(), "azioni": []}
+    azioni = d.get("azioni") if isinstance(d.get("azioni"), list) else []
+    return {"risposta": str(d.get("risposta") or "").strip(), "azioni": azioni}
+
+
 async def generate_plan(goal: str, n_days: int, start_date: str) -> dict:
     """Generate a structured training plan (JSON of dated sessions)."""
     import re

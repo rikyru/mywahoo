@@ -893,6 +893,10 @@ def plan_detail(request: Request, plan_id: int):
                             .where(ChatMessage.conversation_id == s.conversation_id)
                             .order_by(ChatMessage.created_at))]
                  for s in sessions if s.conversation_id}
+        plan_chat = [{"role": m.role, "content": m.content}
+                     for m in session.exec(select(ChatMessage)
+                         .where(ChatMessage.conversation_id == plan.conversation_id)
+                         .order_by(ChatMessage.created_at))] if plan.conversation_id else []
         # done sessions whose manual workout could still absorb a real recording
         mergeable = set()
         for s in sessions:
@@ -905,6 +909,7 @@ def plan_detail(request: Request, plan_id: int):
     return templates.TemplateResponse(request, "plan.html", {
         "plan": plan, "sessions": sessions, "done": done, "total": len(sessions),
         "loads": loads, "chats_json": json.dumps(chats), "mergeable": mergeable,
+        "plan_chat_json": json.dumps(plan_chat),
         "now": datetime.utcnow(), "message": request.query_params.get("msg")})
 
 
@@ -984,6 +989,172 @@ def _session_load(sport: str, minutes: float, rpe: float | None = None) -> float
     """Estimated TRIMP load of a planned/proposed session (no HR by definition)."""
     rest_hr, max_hr, sex = _hr_anchors()
     return formmod.activity_load(None, minutes, sport, rpe, rest_hr, max_hr, sex)
+
+
+def _plan_edit_context(session, plan, sessions) -> dict:
+    """What the AI needs to edit a plan in progress: goal, today, every session
+    with its state/load and (for done ones) what was actually done, plus form and
+    athlete profile."""
+    rows = []
+    for s in sessions:
+        row = {"session_id": s.id, "titolo": s.title, "sport": s.sport,
+               "durata_min": s.duration_min,
+               "data": s.date.date().isoformat() if s.date else None,
+               "carico_trimp": round(_session_load(s.sport, s.duration_min)),
+               "stato": "fatta" if s.done else "da fare"}
+        if s.done and s.workout_id:
+            w = session.get(Workout, s.workout_id)
+            if w:
+                row["svolto"] = {"cosa": (w.notes or "")[:400] or None,
+                                 "fc_media": round(w.avg_hr) if w.avg_hr else None,
+                                 "durata_min": round((w.moving_s or 0) / 60)}
+        rows.append(row)
+    _, form_summary = _fitness_series()
+    return {"obiettivo_del_piano": plan.goal, "titolo_del_piano": plan.title,
+            "oggi": date.today().isoformat(), "sessioni": rows,
+            "atleta": profilemod.ai_context(), "forma_attuale": form_summary}
+
+
+@app.post("/plans/{plan_id}/chat", dependencies=[Depends(require_auth)])
+async def plan_chat(plan_id: int, request: Request):
+    """Edit a plan in progress by chat ("mi metti giovedì un corpo libero?"). The
+    AI weighs what's been done and what's coming; it returns a reply plus proposed
+    actions (add/modify/remove) the UI applies only on confirmation."""
+    try:
+        body = await request.json()
+    except json.JSONDecodeError:
+        return JSONResponse({"error": "richiesta non valida"}, status_code=400)
+    msg = str(body.get("message", "")).strip()[:2000]
+    if not msg:
+        return JSONResponse({"error": "nessuna domanda"}, status_code=400)
+
+    with Session(engine) as session:
+        plan = session.get(TrainingPlan, plan_id)
+        if not plan:
+            return JSONResponse({"error": "piano non trovato"}, status_code=404)
+        conv = session.get(Conversation, plan.conversation_id) if plan.conversation_id else None
+        if conv is None:
+            conv = Conversation(title=f"Piano · {plan.title}"[:60])
+            session.add(conv)
+            session.commit()
+            session.refresh(conv)
+            plan.conversation_id = conv.id
+            session.add(plan)
+            session.commit()
+        conv_id = conv.id
+        sessions = session.exec(select(PlanSession).where(
+            PlanSession.plan_id == plan_id).order_by(PlanSession.order)).all()
+        ctx = _plan_edit_context(session, plan, sessions)
+        prior = list(session.exec(select(ChatMessage)
+                                  .where(ChatMessage.conversation_id == conv_id)
+                                  .order_by(ChatMessage.created_at)))
+    history = ([{"role": m.role, "content": m.content} for m in prior]
+               + [{"role": "user", "content": msg}])[-12:]
+    try:
+        out = await anthropic_client.chat_plan(ctx, history)
+    except anthropic_client.AnthropicError as e:
+        return JSONResponse({"error": str(e)}, status_code=502)
+
+    reply = out.get("risposta") or ""
+    actions = _valid_plan_actions(out.get("azioni") or [], {s.id for s in sessions},
+                                  {s.id for s in sessions if s.done})
+    # quantify each proposed session so the confirm card can show its load
+    for a in actions:
+        if a["tipo"] in ("aggiungi", "modifica") and a.get("durata_min"):
+            a["carico_trimp"] = round(_session_load(a.get("sport", ""), a["durata_min"]))
+
+    stored = reply
+    if actions:
+        stored += "\n\n[Proposte] " + "; ".join(_action_label(a) for a in actions)
+    with Session(engine) as session:
+        session.add(ChatMessage(conversation_id=conv_id, role="user", content=msg))
+        session.add(ChatMessage(conversation_id=conv_id, role="assistant", content=stored))
+        c = session.get(Conversation, conv_id)
+        c.updated_at = datetime.utcnow()
+        session.add(c)
+        session.commit()
+    return JSONResponse({"reply": reply, "actions": actions})
+
+
+def _valid_plan_actions(actions: list, ids: set, done_ids: set) -> list:
+    """Keep only well-formed actions that don't touch a done session."""
+    out = []
+    for a in actions if isinstance(actions, list) else []:
+        if not isinstance(a, dict):
+            continue
+        tipo = a.get("tipo")
+        if tipo == "aggiungi":
+            if a.get("title") and a.get("durata_min"):
+                out.append(a)
+        elif tipo in ("modifica", "rimuovi"):
+            sid = a.get("session_id")
+            if sid in ids and sid not in done_ids:
+                out.append(a)
+    return out
+
+
+def _action_label(a: dict) -> str:
+    if a["tipo"] == "aggiungi":
+        return f"aggiungi «{a.get('title')}» ({a.get('sport')}, {a.get('durata_min')}min) il {a.get('date')}"
+    if a["tipo"] == "rimuovi":
+        return f"rimuovi sessione {a.get('session_id')}"
+    return f"modifica sessione {a.get('session_id')}"
+
+
+@app.post("/plans/{plan_id}/apply", dependencies=[Depends(require_auth)])
+def plan_apply(plan_id: int, actions: str = Form(...)):
+    """Apply confirmed plan edits (add/modify/remove sessions)."""
+    try:
+        parsed = json.loads(actions)
+    except json.JSONDecodeError:
+        return RedirectResponse(f"/plans/{plan_id}?{urlencode({'msg': 'Nessuna modifica'})}",
+                                status_code=303)
+    with Session(engine) as session:
+        plan = session.get(TrainingPlan, plan_id)
+        if not plan:
+            return RedirectResponse("/plans", status_code=303)
+        sess = session.exec(select(PlanSession).where(
+            PlanSession.plan_id == plan_id)).all()
+        by_id = {s.id: s for s in sess}
+        done_ids = {s.id for s in sess if s.done}
+        next_order = max((s.order for s in sess), default=-1) + 1
+        n = 0
+        for a in _valid_plan_actions(parsed, set(by_id), done_ids):
+            if a["tipo"] == "aggiungi":
+                d = _parse_date(str(a.get("date", "")))
+                session.add(PlanSession(
+                    plan_id=plan_id, order=next_order, day_label=str(a.get("day", ""))[:40],
+                    date=datetime.combine(d, time(12, 0)) if d else None,
+                    title=str(a.get("title", ""))[:200], sport=str(a.get("sport", ""))[:60],
+                    duration_min=int(a.get("durata_min") or 0),
+                    description=str(a.get("description", ""))))
+                next_order += 1
+                n += 1
+            elif a["tipo"] == "rimuovi":
+                session.delete(by_id[a["session_id"]])
+                n += 1
+            elif a["tipo"] == "modifica":
+                ps = by_id[a["session_id"]]
+                if "title" in a:
+                    ps.title = str(a["title"])[:200]
+                if "sport" in a:
+                    ps.sport = str(a["sport"])[:60]
+                if "durata_min" in a:
+                    try:
+                        ps.duration_min = max(0, int(a["durata_min"]))
+                    except (TypeError, ValueError):
+                        pass
+                if "description" in a:
+                    ps.description = str(a["description"])
+                if "date" in a:
+                    d = _parse_date(str(a["date"]))
+                    ps.date = datetime.combine(d, time(12, 0)) if d else ps.date
+                session.add(ps)
+                n += 1
+        session.commit()
+    return RedirectResponse(
+        f"/plans/{plan_id}?{urlencode({'msg': f'{n} modifica/e applicata/e al piano'})}",
+        status_code=303)
 
 
 @app.post("/plans/{plan_id}/session/{sid}/chat", dependencies=[Depends(require_auth)])
