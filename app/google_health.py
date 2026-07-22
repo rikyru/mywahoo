@@ -200,6 +200,15 @@ def _matches_sport(wahoo_label: str, ex_type: str) -> bool:
     return fe is not None and _sport_family(wahoo_label) == fe
 
 
+def _sameday_sport_ok(w_sport: str, ex_type: str) -> bool:
+    """Guard for merging a same-day (not same-time) manual workout with a Google
+    exercise: if the exercise has a known family it must match; if it's family-less
+    (bodyweight/strength → None) the manual must be family-less too. Stops a walk
+    or ride from being absorbed by that day's home session."""
+    fe = _sport_family(ex_type)
+    return _sport_family(w_sport) == fe if fe else _sport_family(w_sport) is None
+
+
 def _overlap_s(w_start, w_dur_s: int, e_start, e_end) -> float:
     """Seconds of overlap between a workout [start, start+dur] and an exercise
     interval [e_start, e_end]. A zero-duration workout overlaps if its start

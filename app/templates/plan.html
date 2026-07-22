@@ -41,7 +41,10 @@
 
   {% if s.description %}<p class="plan-session-desc">{{ s.description }}</p>{% endif %}
   {% if s.done and s.workout_id %}
-  <p class="muted"><a href="/workout/{{ s.workout_id }}">→ Vedi allenamento registrato</a></p>
+  <p class="muted"><a href="/workout/{{ s.workout_id }}">→ Vedi allenamento registrato</a>
+    {% if s.id in mergeable %}
+    · <a href="/workout/{{ s.workout_id }}">🔗 unisci ai dati reali dal watch</a>
+    {% endif %}</p>
   {% endif %}
 
   {% if not s.done %}

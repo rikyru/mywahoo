@@ -285,6 +285,48 @@ with TestClient(app) as client:
         assert m3 is None, m3
     print("FIT merge target: same-day manual swim, sport-guarded OK")
 
+    # --- confirmed merge of a real recording into a manual/plan workout ---
+    from app.main import _merge_candidate, _can_merge
+    from app.db import pack_streams as _pack
+    noon = datetime(2026, 6, 25, 12, 0)  # unique date, no other seeded workout here
+    with Session(engine) as s:
+        # a plan-done bodyweight workout: description, no HR, placeholder noon time
+        s.add(_W(id=901, name="Circuito casa", sport="Corpo libero", manual=True,
+                 notes="3x12 squat, 3x10 push up", rpe=6.5, start_date=noon,
+                 moving_s=40 * 60, duration_s=40 * 60))
+        # the real recording from the watch (Google Health), same day, evening
+        s.add(_W(id=902, name="Strength", sport="Strength Training", manual=False,
+                 start_date=datetime(2026, 6, 25, 19, 10), avg_hr=131, max_hr=158,
+                 calories=280, moving_s=44 * 60, duration_s=46 * 60,
+                 raw_summary='{"source": "google_health"}'))
+        s.add(WorkoutStream(workout_id=902, data=_pack({"t": [0, 1], "hr": [120, 130]}),
+                            n_records=2))
+        # a same-day walk that must NOT be offered for a bodyweight manual
+        s.add(_W(id=903, name="Passeggiata", sport="Walking", manual=False,
+                 start_date=datetime(2026, 6, 25, 18, 0), avg_hr=95, distance_m=2000))
+        s.commit()
+        keep = s.get(_W, 901)
+        cand = _merge_candidate(s, keep)
+        assert cand and cand.id == 902, cand              # the strength rec, not the walk
+        assert not _can_merge(keep, s.get(_W, 903))       # walk guarded out by sport
+
+    r = client.post("/workout/901/merge", data={"absorb_id": "902"}, follow_redirects=False)
+    assert r.status_code == 303
+    with Session(engine) as s:
+        keep = s.get(_W, 901)
+        assert keep.avg_hr == 131 and keep.calories == 280       # real data adopted
+        assert keep.start_date.hour == 19                        # real time, not noon
+        assert keep.notes.startswith("3x12") and keep.rpe == 6.5 # description kept
+        assert keep.sport == "Corpo libero" and keep.manual      # user's label kept
+        assert s.get(_W, 902) is None                            # duplicate removed
+        assert s.get(WorkoutStream, 901) and s.get(WorkoutStream, 902) is None  # stream moved
+        assert _merge_candidate(s, keep) is None                 # nothing left to merge
+
+    # a stale/invalid pair is rejected (keep now has data; 903 is a walk anyway)
+    r = client.post("/workout/901/merge", data={"absorb_id": "903"}, follow_redirects=False)
+    assert r.status_code == 303 and "error" in r.headers["location"]
+    print("confirmed merge: real recording fused, description kept, guarded OK")
+
     # --- profile: drives the TRIMP scale, so a wrong range skews all of Forma ---
     from app import profile as profilemod
     r = client.post("/settings/profile", follow_redirects=False,
@@ -466,6 +508,15 @@ frag_nights, _ = _split_sleep([
 ], days=7)
 assert len(frag_nights) == 1 and frag_nights[0]["asleep_min"] == 400
 print("sleep dedupe: one night per date OK")
+
+# --- same-day sport guard for merging a manual workout with a Google exercise ---
+from app.google_health import _sameday_sport_ok
+assert _sameday_sport_ok("Corpo libero", "strength_training")   # both family-less -> ok
+assert _sameday_sport_ok("Forza", "calisthenics")
+assert _sameday_sport_ok("Corsa", "running")                    # same known family
+assert not _sameday_sport_ok("Corpo libero", "walking")         # walk known, manual family-less
+assert not _sameday_sport_ok("Nuoto", "biking")                 # different known families
+print("Google same-day sport guard OK")
 
 # --- FIT helpers with synthetic data (no FIT file needed) ---
 from app.fit import ai_stats, compute_normalized_power, downsample

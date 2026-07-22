@@ -25,6 +25,27 @@
 {% if message %}<div class="alert ok">{{ message }}</div>{% endif %}
 {% if error %}<div class="alert error">{{ error }}</div>{% endif %}
 
+{% if merge %}
+<section class="card merge-suggest">
+  <h3>🔗 Trovato un allenamento registrato di questo giorno</h3>
+  <p><strong>{{ merge.name or merge.sport }}</strong>
+    — {{ merge.start_date.strftime("%d/%m %H:%M") }}
+    {%- if merge.avg_hr %} · {{ "%.0f"|format(merge.avg_hr) }} bpm medi{% endif %}
+    {%- if merge.calories %} · {{ "%.0f"|format(merge.calories) }} kcal{% endif %}
+    {%- if merge.moving_s %} · {{ merge.moving_s | duration }}{% endif %}.</p>
+  <p class="muted">Sembra la registrazione reale di «{{ w.name }}». Unendola, i dati
+    veri (FC, durata, grafici) si fondono con la tua descrizione e l'attività
+    doppia viene rimossa. Vuoi unirla?</p>
+  <div class="merge-actions">
+    <form method="post" action="/workout/{{ w.id }}/merge">
+      <input type="hidden" name="absorb_id" value="{{ merge.id }}">
+      <button class="btn" type="submit">Unisci i due allenamenti</button>
+    </form>
+    <a class="btn btn-secondary" href="/workout/{{ merge.id }}">Vedi l'altro</a>
+  </div>
+</section>
+{% endif %}
+
 <section class="kpi-row">
   <div class="kpi"><span class="kpi-value">{{ "%.2f"|format(w.distance_m / 1000) }}</span><span class="kpi-label">km</span></div>
   <div class="kpi"><span class="kpi-value">{{ w.moving_s | duration }}</span><span class="kpi-label">in movimento</span></div>

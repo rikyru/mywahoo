@@ -893,11 +893,18 @@ def plan_detail(request: Request, plan_id: int):
                             .where(ChatMessage.conversation_id == s.conversation_id)
                             .order_by(ChatMessage.created_at))]
                  for s in sessions if s.conversation_id}
+        # done sessions whose manual workout could still absorb a real recording
+        mergeable = set()
+        for s in sessions:
+            if s.done and s.workout_id:
+                kw = session.get(Workout, s.workout_id)
+                if kw and _merge_candidate(session, kw):
+                    mergeable.add(s.id)
     done = sum(1 for s in sessions if s.done)
     loads = {s.id: round(_session_load(s.sport, s.duration_min)) for s in sessions}
     return templates.TemplateResponse(request, "plan.html", {
         "plan": plan, "sessions": sessions, "done": done, "total": len(sessions),
-        "loads": loads, "chats_json": json.dumps(chats),
+        "loads": loads, "chats_json": json.dumps(chats), "mergeable": mergeable,
         "now": datetime.utcnow(), "message": request.query_params.get("msg")})
 
 
@@ -1482,6 +1489,7 @@ def workout_detail(request: Request, workout_id: int):
         if not w:
             raise HTTPException(404, "Attività non trovata")
         analysis = session.get(AiAnalysis, workout_id)
+        merge = _merge_candidate(session, w)  # a real recording to fuse in (on confirm)
 
     streams_json = "null"
     streams = fitmod.load_streams(workout_id)
@@ -1491,6 +1499,7 @@ def workout_detail(request: Request, workout_id: int):
     return templates.TemplateResponse(request, "workout.html", {
         "w": w,
         "streams_json": streams_json,
+        "merge": merge,
         "analysis_html": md.markdown(analysis.content, extensions=["tables"]) if analysis else None,
         "analysis_date": analysis.created_at if analysis else None,
         "message": request.query_params.get("msg"),
@@ -1566,6 +1575,83 @@ def _fit_merge_target(session, start: datetime, fit_sport: str) -> Workout | Non
         not google_health._matches_sport(w.sport, fit_sport),
         abs((w.start_date - start).total_seconds())))
     return candidates[0]
+
+
+# Measured fields moved from the real recording into the manual/plan workout on a
+# merge; everything else (name, sport, notes, rpe, manual flag, id) is kept.
+_MEASURED_FIELDS = ("start_date", "duration_s", "moving_s", "distance_m", "ascent_m",
+                    "avg_speed_ms", "max_speed_ms", "avg_hr", "max_hr", "avg_power",
+                    "max_power", "np_power", "avg_cadence", "calories", "tss",
+                    "intensity_factor")
+
+
+def _can_merge(keep: Workout, absorb: Workout) -> bool:
+    """True if `absorb` (a real recording) can fuse into `keep` (a data-less
+    manual/plan workout) on the same day with a compatible sport."""
+    return bool(
+        keep and absorb and keep.id != absorb.id
+        and keep.manual and not keep.has_fit and not keep.avg_hr and not keep.distance_m
+        and not absorb.manual and (absorb.avg_hr or absorb.distance_m)
+        and absorb.start_date.date() == keep.start_date.date()
+        and google_health._sameday_sport_ok(keep.sport, absorb.sport))
+
+
+def _merge_candidate(session, keep: Workout) -> Workout | None:
+    """The real recording (e.g. a Pixel-Watch session via Google Health) that
+    could be `keep`'s actual data — same day, compatible sport, data-rich."""
+    if not (keep.manual and not keep.has_fit and not keep.avg_hr and not keep.distance_m):
+        return None
+    day_lo = datetime.combine(keep.start_date.date(), time.min)
+    day_hi = datetime.combine(keep.start_date.date(), time.max)
+    cands = [x for x in session.exec(select(Workout).where(
+        Workout.start_date >= day_lo, Workout.start_date <= day_hi))
+        if _can_merge(keep, x)]
+    # prefer one with HR, then the richest (most calories)
+    cands.sort(key=lambda x: (x.avg_hr is None, -(x.calories or 0)))
+    return cands[0] if cands else None
+
+
+def _merge_workouts(session, keep: Workout, absorb: Workout) -> None:
+    """Move `absorb`'s measured data + streams into `keep`, then delete `absorb`.
+    `keep` keeps its id, so a PlanSession link and the description survive."""
+    for f in _MEASURED_FIELDS:
+        if (v := getattr(absorb, f)):
+            setattr(keep, f, v)
+    if absorb.has_fit:
+        keep.has_fit, keep.fit_path = True, absorb.fit_path
+    keep.updated_at = datetime.utcnow()
+
+    stream = session.get(WorkoutStream, absorb.id)
+    old = session.get(WorkoutStream, keep.id)
+    if old:
+        session.delete(old)
+    if stream:
+        blob, n = stream.data, stream.n_records
+        session.delete(stream)
+        session.flush()  # free the PK before re-inserting under keep.id
+        session.add(WorkoutStream(workout_id=keep.id, data=blob, n_records=n))
+    for wid in (keep.id, absorb.id):  # analyses are stale after the merge
+        if (a := session.get(AiAnalysis, wid)):
+            session.delete(a)
+    session.delete(absorb)
+    session.add(keep)
+    session.commit()
+
+
+@app.post("/workout/{keep_id}/merge", dependencies=[Depends(require_auth)])
+def workout_merge(keep_id: int, absorb_id: int = Form(...)):
+    """Confirmed fuse of a real recording into a manual/plan workout."""
+    with Session(engine) as session:
+        keep = session.get(Workout, keep_id)
+        absorb = session.get(Workout, absorb_id)
+        if not _can_merge(keep, absorb):  # a stale button must not merge the wrong pair
+            return RedirectResponse(
+                f"/workout/{keep_id}?{urlencode({'error': 'Fusione non più valida'})}",
+                status_code=303)
+        _merge_workouts(session, keep, absorb)
+    return RedirectResponse(
+        f"/workout/{keep_id}?{urlencode({'msg': 'Allenamento fuso: dati reali e FC uniti alla descrizione'})}",
+        status_code=303)
 
 
 @app.post("/upload/fit", dependencies=[Depends(require_auth)])
