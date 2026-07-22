@@ -312,6 +312,7 @@ with TestClient(app) as client:
 
     r = client.post("/workout/901/merge", data={"absorb_id": "902"}, follow_redirects=False)
     assert r.status_code == 303
+    from app.db import IgnoredImport as _Ign
     with Session(engine) as s:
         keep = s.get(_W, 901)
         assert keep.avg_hr == 131 and keep.calories == 280       # real data adopted
@@ -321,11 +322,30 @@ with TestClient(app) as client:
         assert s.get(_W, 902) is None                            # duplicate removed
         assert s.get(WorkoutStream, 901) and s.get(WorkoutStream, 902) is None  # stream moved
         assert _merge_candidate(s, keep) is None                 # nothing left to merge
+        # the absorbed Google import is blacklisted so a sync can't re-create it
+        assert s.get(_Ign, 902) is not None
 
     # a stale/invalid pair is rejected (keep now has data; 903 is a walk anyway)
     r = client.post("/workout/901/merge", data={"absorb_id": "903"}, follow_redirects=False)
     assert r.status_code == 303 and "error" in r.headers["location"]
-    print("confirmed merge: real recording fused, description kept, guarded OK")
+    print("confirmed merge: fused, description kept, guarded, no re-import OK")
+
+    # "keep separate": dismiss must stop the suggestion for that pair, permanently
+    with Session(engine) as s:
+        s.add(_W(id=911, name="Yoga casa", sport="Yoga", manual=True, notes="mobilità",
+                 start_date=datetime(2026, 6, 26, 12, 0), moving_s=1800, duration_s=1800))
+        s.add(_W(id=912, name="Sessione", sport="Yoga", manual=False, avg_hr=88,
+                 start_date=datetime(2026, 6, 26, 20, 0), moving_s=1800, duration_s=1800,
+                 raw_summary='{"source": "google_health"}'))
+        s.commit()
+        assert _merge_candidate(s, s.get(_W, 911)).id == 912
+    r = client.post("/workout/911/merge/dismiss", data={"absorb_id": "912"},
+                    follow_redirects=False)
+    assert r.status_code == 303
+    with Session(engine) as s:
+        assert _merge_candidate(s, s.get(_W, 911)) is None       # no longer suggested
+        assert s.get(_W, 912) is not None                        # both kept, untouched
+    print("merge dismiss: pair kept separate, not re-proposed OK")
 
     # --- profile: drives the TRIMP scale, so a wrong range skews all of Forma ---
     from app import profile as profilemod

@@ -1596,16 +1596,21 @@ def _can_merge(keep: Workout, absorb: Workout) -> bool:
         and google_health._sameday_sport_ok(keep.sport, absorb.sport))
 
 
+def _nomerge_key(keep_id: int, absorb_id: int) -> str:
+    return f"nomerge:{keep_id}:{absorb_id}"
+
+
 def _merge_candidate(session, keep: Workout) -> Workout | None:
     """The real recording (e.g. a Pixel-Watch session via Google Health) that
-    could be `keep`'s actual data — same day, compatible sport, data-rich."""
+    could be `keep`'s actual data — same day, compatible sport, data-rich.
+    Pairs the user chose to keep separate are skipped so a sync can't re-nag."""
     if not (keep.manual and not keep.has_fit and not keep.avg_hr and not keep.distance_m):
         return None
     day_lo = datetime.combine(keep.start_date.date(), time.min)
     day_hi = datetime.combine(keep.start_date.date(), time.max)
     cands = [x for x in session.exec(select(Workout).where(
         Workout.start_date >= day_lo, Workout.start_date <= day_hi))
-        if _can_merge(keep, x)]
+        if _can_merge(keep, x) and not get_setting(_nomerge_key(keep.id, x.id))]
     # prefer one with HR, then the richest (most calories)
     cands.sort(key=lambda x: (x.avg_hr is None, -(x.calories or 0)))
     return cands[0] if cands else None
@@ -1633,6 +1638,10 @@ def _merge_workouts(session, keep: Workout, absorb: Workout) -> None:
     for wid in (keep.id, absorb.id):  # analyses are stale after the merge
         if (a := session.get(AiAnalysis, wid)):
             session.delete(a)
+    # absorb's data now lives on keep; a Google import would otherwise re-appear at
+    # the next sync (its uid = absorb.id), so blacklist it — same as manual delete
+    if _is_google_import(absorb) and not session.get(IgnoredImport, absorb.id):
+        session.add(IgnoredImport(id=absorb.id))
     session.delete(absorb)
     session.add(keep)
     session.commit()
@@ -1652,6 +1661,13 @@ def workout_merge(keep_id: int, absorb_id: int = Form(...)):
     return RedirectResponse(
         f"/workout/{keep_id}?{urlencode({'msg': 'Allenamento fuso: dati reali e FC uniti alla descrizione'})}",
         status_code=303)
+
+
+@app.post("/workout/{keep_id}/merge/dismiss", dependencies=[Depends(require_auth)])
+def workout_merge_dismiss(keep_id: int, absorb_id: int = Form(...)):
+    """Keep the two workouts separate: never suggest merging this pair again."""
+    set_setting(_nomerge_key(keep_id, absorb_id), "1")
+    return RedirectResponse(f"/workout/{keep_id}", status_code=303)
 
 
 @app.post("/upload/fit", dependencies=[Depends(require_auth)])

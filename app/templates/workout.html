@@ -42,6 +42,11 @@
       <button class="btn" type="submit">Unisci i due allenamenti</button>
     </form>
     <a class="btn btn-secondary" href="/workout/{{ merge.id }}">Vedi l'altro</a>
+    <form method="post" action="/workout/{{ w.id }}/merge/dismiss"
+          title="Non proporre più questa fusione">
+      <input type="hidden" name="absorb_id" value="{{ merge.id }}">
+      <button class="btn btn-secondary" type="submit">Tieni separati</button>
+    </form>
   </div>
 </section>
 {% endif %}
