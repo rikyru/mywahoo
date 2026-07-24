@@ -1459,7 +1459,8 @@ async def api_health_summary():
     nights = data.get("sleep") or []
     payload = {
         "score": data.get("score"),
-        "metrics": [m for m in (latest("resting_hr"), latest("hrv"), latest("spo2")) if m],
+        "metrics": [m for m in (latest("steps"), latest("resting_hr"), latest("hrv"),
+                                latest("calories_burned")) if m],
         "sleep_h": (round(sum(n["asleep_min"] for n in nights) / len(nights) / 60, 1)
                     if nights else None),
         "nights": len(nights),

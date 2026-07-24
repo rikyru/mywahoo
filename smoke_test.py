@@ -580,6 +580,36 @@ assert _shape({"averages": {"days_with_data": 0}, "adherence": {}}, None,
 print(f"nutrition shape OK (kcal {trk['kcal_medie']}, "
       f"proteine {trk['proteine_g_per_kg']} g/kg, aderenza {n['aderenza_al_piano']['punteggio_pct']}%)")
 
+# --- Google steps / calories daily rollup parsing (dailyRollUp POST) ---
+import asyncio as _aio3
+import app.google_health as _gh
+async def _fake_post(path, body):
+    assert "dailyRollUp" in path and body["range"]["start"]["date"]["year"]
+    return {"rollupDataPoints": [
+        {"civilStartTime": {"date": {"year": 2026, "month": 7, "day": 15}}, "steps": {"countSum": "4340"}},
+        {"civilStartTime": {"date": {"year": 2026, "month": 7, "day": 16}}, "steps": {"countSum": "6301"}},
+    ]}
+_gh.api_post, _rp = _fake_post, _gh.api_post
+_steps = _aio3.run(_gh._daily_rollup("steps", "steps", "countSum", 7, max_span=90, cast=int))
+_gh.api_post = _rp
+assert [p["value"] for p in _steps] == [4340, 6301] and _steps[0]["date"] == "2026-07-15"
+print("Google steps rollup parsing OK")
+
+# --- energy balance: intake (tracked meals) vs total expenditure ---
+from app.anthropic_client import _health_payload
+_ov = {"metrics": {"calories_burned": {"label": "Calorie bruciate", "unit": "kcal",
+        "latest": 2288, "series": [{"date": "2026-07-15", "value": 2019},
+                                   {"date": "2026-07-16", "value": 2288}]}},
+       "body": {}, "sleep": [], "score": None}
+_nut = {"alimentazione_tracciata": {"per_giorno": [
+        {"data": "2026-07-15", "kcal": 1026}, {"data": "2026-07-16", "kcal": 840}]}}
+_bal = _health_payload(_ov, [], _nut)["bilancio_energetico"]
+assert len(_bal["per_giorno"]) == 2
+assert _bal["per_giorno"][0]["saldo_kcal"] == 1026 - 2019      # prudent estimate
+assert _bal["per_giorno"][0]["bruciate_kcal"] == 2019
+assert "prudente" in _bal["nota"].lower()                      # honest caveat present
+print("energy balance (ingerite vs bruciate) shaping OK")
+
 # --- sleep: a daytime nap must not take a night's place, but must be counted ---
 from app.google_health import _parse_sleep_point, _split_sleep
 

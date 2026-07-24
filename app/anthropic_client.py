@@ -102,7 +102,12 @@ l'intero introito: non dedurne un deficit calorico) e valuta la QUALITÀ dai dat
 reali — proteine_g_per_kg (per uno sportivo circa 1.6-2.2 g/kg è adeguato),
 equilibrio tra carboidrati/proteine/grassi, e costanza (molti pasti_liberi o
 bassa aderenza = qualità/regolarità inferiore); collega i carboidrati al supporto
-del carico di allenamento. NON dare diagnosi mediche: se qualcosa appare anomalo, suggerisci
+del carico di allenamento. Se ci sono "Passi" e "Calorie bruciate" (dispendio
+totale reale) usali per il livello di attività quotidiana. Se c'è
+"bilancio_energetico", commenta il rapporto ingerite-vs-bruciate MA ricorda che
+le ingerite sono solo i pasti tracciati: il saldo negativo è quasi certamente
+sovrastimato, quindi non allarmare sul deficit — semmai invita a tracciare tutti
+i pasti per un quadro reale. NON dare diagnosi mediche: se qualcosa appare anomalo, suggerisci
 cautela o un controllo medico. Se un dato manca, dillo invece di inventare. Sii
 quantitativo. Esprimi SEMPRE le durate del sonno in ore e minuti (es. "6h30"),
 mai in minuti."""
@@ -551,6 +556,24 @@ def _health_payload(overview: dict, workouts: list[dict] | None,
         out["atleta"] = who
     if nutrition:
         out["alimentazione"] = nutrition
+
+    # Energy balance: intake (tracked meals) vs total expenditure (Google). Only
+    # where both exist for a day. Framed as a PRUDENT estimate — intake is usually
+    # undercounted, expenditure is complete — never a true deficit.
+    burned = (overview.get("metrics", {}).get("calories_burned") or {}).get("series") or []
+    intake = ((nutrition or {}).get("alimentazione_tracciata") or {}).get("per_giorno") or []
+    if burned and intake:
+        burned_by = {p["date"]: p["value"] for p in burned}
+        rows = [{"data": d["data"], "ingerite_tracciate_kcal": d["kcal"],
+                 "bruciate_kcal": round(b), "saldo_kcal": round(d["kcal"] - b)}
+                for d in intake
+                if d.get("kcal") is not None and (b := burned_by.get(d.get("data")))]
+        if rows:
+            out["bilancio_energetico"] = {
+                "nota": "«ingerite» = solo PASTI TRACCIATI (di norma sottostima "
+                        "l'introito reale); «bruciate» = dispendio totale (metabolismo "
+                        "+ attività). Il saldo è una stima PRUDENTE, non un vero deficit.",
+                "per_giorno": rows}
     return out
 
 
@@ -567,9 +590,10 @@ async def summarize_health(overview: dict, workouts: list[dict] | None = None,
 CHAT_SYSTEM_PROMPT = """\
 Sei l'assistente di salute e allenamento di questo atleta. Rispondi in italiano,
 in modo conciso e concreto, USANDO i dati del periodo forniti qui sotto
-(indice di forma, metriche vitali con trend, sonno in ore, attività con carico,
-ed eventuale alimentazione: aderenza al piano, e kcal/macro dei PASTI TRACCIATI
-con proteine_g_per_kg). Tratta le kcal come pasti tracciati, non introito totale
+(indice di forma, metriche vitali con trend, sonno in ore, passi e calorie
+bruciate giornaliere, attività con carico, ed eventuale alimentazione: aderenza
+al piano, e kcal/macro dei PASTI TRACCIATI con proteine_g_per_kg, ed eventuale
+bilancio_energetico ingerite-vs-bruciate). Tratta le kcal come pasti tracciati, non introito totale
 (non dedurne un deficit); giudica la qualità dei pasti dai macro reali (proteine
 ~1.6-2.2 g/kg per uno sportivo, equilibrio dei macro, costanza).
 Correla salute, allenamento e alimentazione quando utile. Se la domanda esce dai dati

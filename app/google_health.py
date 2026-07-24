@@ -143,6 +143,56 @@ async def api_get(path: str, params: dict | None = None) -> dict:
     return resp.json()
 
 
+async def api_post(path: str, body: dict) -> dict:
+    token = await get_valid_access_token()
+    async with httpx.AsyncClient(timeout=60) as client:
+        resp = await client.post(f"{BASE_URL}{path}", json=body,
+                                 headers={"Authorization": f"Bearer {token}"})
+    if resp.status_code == 401:
+        raise GoogleNotAuthenticatedError("Google ha rifiutato il token — ricollega")
+    if resp.status_code == 403:
+        raise GoogleScopeMissingError(f"Scope mancante: {resp.text[:200]}")
+    if resp.status_code >= 400:
+        raise GoogleHealthError(f"Google Health HTTP {resp.status_code}: {resp.text[:200]}")
+    return resp.json()
+
+
+def _civil(d) -> dict:
+    return {"date": {"year": d.year, "month": d.month, "day": d.day}}
+
+
+async def _daily_rollup(dtype: str, wrapper: str, value_key: str, days: int,
+                        max_span: int = 90, cast=float, decimals: int = 0) -> list[dict]:
+    """Daily totals for a rollup-only data type (steps, total-calories) via the
+    dailyRollUp action. Split into <=max_span-day chunks — total-calories and
+    active-minutes cap the range at 14 days, other types at 90."""
+    from datetime import date as _date, timedelta as _td
+
+    end = _date.today() + _td(days=1)          # exclusive end = tomorrow (today incl.)
+    start = end - _td(days=days)
+    series: list[dict] = []
+    chunk_start = start
+    while chunk_start < end:
+        chunk_end = min(chunk_start + _td(days=max_span), end)
+        data = await api_post(
+            f"/users/me/dataTypes/{dtype}/dataPoints:dailyRollUp",
+            {"range": {"start": _civil(chunk_start), "end": _civil(chunk_end)},
+             "windowSizeDays": 1})
+        for p in data.get("rollupDataPoints", []):
+            dd = (p.get("civilStartTime") or {}).get("date") or {}
+            val = (p.get(wrapper) or {}).get(value_key)
+            if not dd or val is None:
+                continue
+            iso = f"{dd['year']:04d}-{dd['month']:02d}-{dd['day']:02d}"
+            try:
+                series.append({"date": iso, "value": round(cast(val), decimals)})
+            except (TypeError, ValueError):
+                continue
+        chunk_start = chunk_end
+    series.sort(key=lambda x: x["date"])
+    return series
+
+
 async def list_exercises(page_size: int = 25, page_token: str | None = None,
                          filter_: str | None = None) -> dict:
     """List exercise data points (pageSize max 25 for this data type)."""
@@ -768,7 +818,8 @@ async def _sleep_episodes(days: int, max_pages: int = 4) -> tuple[list[dict], li
 # Direction that counts as "better" per metric (None = neutral, no good/bad colour)
 _HIGHER_BETTER = {"resting_hr": False, "hrv": True, "spo2": True,
                   "respiratory": None, "skin_temp": None,
-                  "weight": None, "body_fat": False}
+                  "weight": None, "body_fat": False,
+                  "steps": True, "calories_burned": None}
 
 
 def _annotate_trend(metric: dict, key: str) -> None:
@@ -877,6 +928,27 @@ async def fetch_health_overview(start_date=None, end_date=None) -> dict:
         out["naps"] = [n for n in naps if in_window(n["date"])]
     except GoogleScopeMissingError:
         out["missing"].append("Sonno")
+
+    # Daily activity totals (rollup-only data types). Steps allow a 90-day range;
+    # total calories cap at 14 days, so the helper chunks it. Best-effort each.
+    for key, (dtype, wrapper, vkey, label, unit, mx, cast) in {
+        "steps": ("steps", "steps", "countSum", "Passi", "passi", 90, int),
+        "calories_burned": ("total-calories", "totalCalories", "kcalSum",
+                            "Calorie bruciate", "kcal", 14, float),
+    }.items():
+        try:
+            series = await _daily_rollup(dtype, wrapper, vkey, min(span, 60),
+                                         max_span=mx, cast=cast)
+        except GoogleScopeMissingError:
+            out["missing"].append(label)
+            continue
+        except GoogleHealthError as e:
+            logger.warning("Google rollup %s failed: %s", dtype, e)
+            continue
+        series = [p for p in series if in_window(p["date"])]
+        if series:
+            out["metrics"][key] = {"label": label, "unit": unit,
+                                   "latest": series[-1]["value"], "series": series}
 
     for key, metric in out["metrics"].items():
         _annotate_trend(metric, key)
