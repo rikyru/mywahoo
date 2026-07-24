@@ -1586,7 +1586,6 @@ def workout_delete(workout_id: int):
         w = session.get(Workout, workout_id)
         if not w:
             raise HTTPException(404, "Attività non trovata")
-        google_import = _is_google_import(w)
         # Drop stream + cached analysis, then the workout itself
         stream = session.get(WorkoutStream, workout_id)
         if stream:
@@ -1594,8 +1593,10 @@ def workout_delete(workout_id: int):
         analysis = session.get(AiAnalysis, workout_id)
         if analysis:
             session.delete(analysis)
-        # A Google-only import would re-appear at the next sync: blacklist its uid
-        if google_import and not session.get(IgnoredImport, workout_id):
+        # Blacklist the id so a delete stays deleted: both Google imports and
+        # Wahoo rows re-appear at the next sync otherwise. A full resync bypasses
+        # the blacklist if the user really wants everything back.
+        if not session.get(IgnoredImport, workout_id):
             session.add(IgnoredImport(id=workout_id))
         session.delete(w)
         session.commit()

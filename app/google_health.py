@@ -209,6 +209,39 @@ def _sameday_sport_ok(w_sport: str, ex_type: str) -> bool:
     return _sport_family(w_sport) == fe if fe else _sport_family(w_sport) is None
 
 
+# Two sources of the same activity can log start times minutes apart — swims most
+# of all (pool app vs watch/open-water can differ ~35 min), and Google returns
+# several exercise dataPoints per swim with UNSTABLE ids. So dedup by TIME (window
+# + overlap) and sport family, never by the id: a wider swim window collapses the
+# twin instead of importing it, and it can't come back with a fresh id next sync.
+DEDUP_WINDOW_S = {"swim": 50 * 60}  # per family; others use MATCH_TOLERANCE_S
+
+
+def _dup_window_s(a: str, b: str) -> int:
+    fam = _sport_family(a) or _sport_family(b)
+    return DEDUP_WINDOW_S.get(fam, MATCH_TOLERANCE_S)
+
+
+def _near_dup(a_start, b_start, a_sport: str, b_sport: str) -> bool:
+    return abs((a_start - b_start).total_seconds()) <= _dup_window_s(a_sport, b_sport)
+
+
+def _wk_end(w) -> "datetime":
+    from datetime import timedelta
+    dur = max(w.duration_s or 0, w.moving_s or 0) or 30 * 60
+    return w.start_date + timedelta(seconds=dur)
+
+
+def _same_activity(a_start, a_end, a_sport, b_start, b_end, b_sport) -> bool:
+    """Two records look like the same activity: same sport family AND (start times
+    within the family window OR intervals overlap)."""
+    if not _same_sport(a_sport, b_sport):
+        return False
+    if _near_dup(a_start, b_start, a_sport, b_sport):
+        return True
+    return bool(a_end and b_end and a_start < b_end and b_start < a_end)
+
+
 def _overlap_s(w_start, w_dur_s: int, e_start, e_end) -> float:
     """Seconds of overlap between a workout [start, start+dur] and an exercise
     interval [e_start, e_end]. A zero-duration workout overlaps if its start
@@ -436,8 +469,8 @@ async def enrich_workouts(max_pages: int = 8) -> int:
     for imp in imported:
         twin = next((w for w in all_workouts
                      if w.id != imp.id and not _is_imported(w)
-                     and near(w.start_date, imp.start_date)
-                     and _same_sport(imp.sport, w.sport)), None)
+                     and _same_activity(imp.start_date, _wk_end(imp), imp.sport,
+                                        w.start_date, _wk_end(w), w.sport)), None)
         if twin:
             merge_fields = ("distance_m", "ascent_m", "avg_hr", "max_hr", "avg_power",
                             "calories", "avg_speed_ms")
@@ -453,6 +486,10 @@ async def enrich_workouts(max_pages: int = 8) -> int:
                     keep.updated_at = dt.utcnow()
                     session.add(keep)
                 if row:
+                    # blacklist the uid: harmless if it never recurs, and blocks
+                    # the odd stable-id case from re-importing after this delete
+                    if not session.get(IgnoredImport, imp.id):
+                        session.add(IgnoredImport(id=imp.id))
                     session.delete(row)
                 session.commit()
             all_workouts = [w for w in all_workouts if w.id != imp.id]
@@ -463,7 +500,8 @@ async def enrich_workouts(max_pages: int = 8) -> int:
     for w in candidates:
         match = next(
             (e for e in exercises
-             if _matches_sport(w.sport, e["type"]) and near(e["start"], w.start_date)),
+             if _matches_sport(w.sport, e["type"])
+             and _near_dup(e["start"], w.start_date, e["type"], w.sport)),
             None)
         if match is None:
             continue
@@ -505,9 +543,12 @@ async def enrich_workouts(max_pages: int = 8) -> int:
         if _sport_family(e["type"]) == "walk":
             continue  # camminate/escursioni: solo arricchimento, mai import
         sport = _sport_label(e["type"])
-        # Same start time AND same sport -> already seen by both sources, skip.
-        # Different sport at a close time (e.g. walk then ride) is kept.
-        if any(near(e["start"], w.start_date) and _same_sport(sport, w.sport)
+        # Already logged by another source (Wahoo/FIT/earlier import) -> skip, so
+        # the same swim's several Google dataPoints don't each become a workout.
+        # Same-sport overlap or window (wide for swims); a different sport nearby
+        # (e.g. walk then ride) is still kept.
+        if any(_same_activity(e["start"], e["end"], sport,
+                              w.start_date, _wk_end(w), w.sport)
                for w in all_workouts):
             continue
         new = Workout(

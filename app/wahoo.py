@@ -369,6 +369,10 @@ async def sync_workouts(full: bool = False) -> int:
     rows without FIT to retry a FIT that may have appeared, but never re-download
     parsed FITs.
     """
+    from .db import IgnoredImport
+    with Session(engine) as session:
+        ignored = {r.id for r in session.exec(select(IgnoredImport))} if not full else set()
+
     count = 0
     page = 1
     while True:
@@ -377,6 +381,9 @@ async def sync_workouts(full: bool = False) -> int:
             break
         known = 0
         for w in batch:
+            if w["id"] in ignored:
+                known += 1  # deleted by the user; don't re-create it (incremental)
+                continue
             with Session(engine) as session:
                 existing = session.get(Workout, w["id"])
             if existing:

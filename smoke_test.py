@@ -403,6 +403,38 @@ with TestClient(app) as client:
         assert s.get(_W, 912) is not None                        # both kept, untouched
     print("merge dismiss: pair kept separate, not re-proposed OK")
 
+    # --- a deleted workout stays deleted (any source), and Wahoo won't re-add it ---
+    from app.db import IgnoredImport as _Ign2
+    import app.wahoo as wahoo
+    with Session(engine) as s:
+        s.add(_W(id=44100, name="Nuotata serale", sport="Swimming",
+                 start_date=datetime(2026, 6, 27, 18, 25), avg_hr=120))  # Wahoo-style row
+        s.commit()
+    r = client.post("/workout/44100/delete", follow_redirects=False)
+    assert r.status_code == 303
+    with Session(engine) as s:
+        assert s.get(_W, 44100) is None
+        assert s.get(_Ign2, 44100) is not None  # blacklisted, not only Google imports
+
+    # Wahoo incremental sync must skip a blacklisted id instead of re-ingesting it
+    ingested = []
+    async def _fake_list(page=1, per_page=50):
+        return [{"id": 44100, "name": "Nuotata serale"}] if page == 1 else []
+    async def _fake_ingest(w, summary=None):
+        ingested.append(w["id"])
+    real_list, real_ingest = wahoo.list_workouts, wahoo.ingest_workout
+    wahoo.list_workouts, wahoo.ingest_workout = _fake_list, _fake_ingest
+    try:
+        import asyncio as _aio
+        n = _aio.run(wahoo.sync_workouts(full=False))
+        assert n == 0 and 44100 not in ingested  # blacklisted -> not re-created
+        # a FULL resync bypasses the blacklist (escape hatch)
+        n2 = _aio.run(wahoo.sync_workouts(full=True))
+        assert 44100 in ingested
+    finally:
+        wahoo.list_workouts, wahoo.ingest_workout = real_list, real_ingest
+    print("deleted workout stays deleted; full resync can restore OK")
+
     # --- profile: drives the TRIMP scale, so a wrong range skews all of Forma ---
     from app import profile as profilemod
     r = client.post("/settings/profile", follow_redirects=False,
@@ -593,6 +625,28 @@ assert _sameday_sport_ok("Corsa", "running")                    # same known fam
 assert not _sameday_sport_ok("Corpo libero", "walking")         # walk known, manual family-less
 assert not _sameday_sport_ok("Nuoto", "biking")                 # different known families
 print("Google same-day sport guard OK")
+
+# --- duplicate matching: swims from two sources start ~35 min apart ---
+from datetime import datetime as _dt, timedelta as _td
+from app.google_health import _same_activity, _dup_window_s
+assert _dup_window_s("Swimming", "Nuoto") == 50 * 60      # wide for swims
+assert _dup_window_s("Cycling", "Cycling") == 25 * 60      # normal otherwise
+def _act(sport, start, dur_min):
+    s = _dt(2026, 2, 5, *start)
+    return (s, s + _td(minutes=dur_min), sport)
+# Wahoo swim 18:20 (40') vs Google swim 18:55 (35') — same swim, 35 min apart
+a = _act("Swimming (open water)", (18, 20), 40)
+b = _act("Nuoto", (18, 55), 35)
+assert _same_activity(*a, *b)                              # matched despite the gap
+# two bikes 35 min apart are NOT the same activity (narrow window, no overlap)
+c = _act("Cycling", (18, 20), 20)
+d = _act("Cycling", (18, 55), 20)
+assert not _same_activity(*c, *d)
+# a swim and a bike near in time are never merged
+assert not _same_activity(*a, *_act("Cycling", (18, 30), 30))
+# far-apart swims (2h) are separate
+assert not _same_activity(*a, *_act("Nuoto", (20, 40), 30))
+print("duplicate matching: swim wide-window + sport-guarded OK")
 
 # --- FIT helpers with synthetic data (no FIT file needed) ---
 from app.fit import ai_stats, compute_normalized_power, downsample
