@@ -588,10 +588,17 @@ async def enrich_workouts(max_pages: int = 8) -> int:
     # 3. Import exercises Wahoo never delivered (any sport, e.g. watch-only rides)
     grace_cutoff = dt.utcnow() - timedelta(seconds=IMPORT_GRACE_S)
     for e in exercises:
-        if e["uid"] is None or e["uid"] in ignored or e["start"] > grace_cutoff:
+        fam = _sport_family(e["type"])
+        if e["uid"] is None or e["uid"] in ignored:
             continue
-        if _sport_family(e["type"]) == "walk":
+        if fam == "walk":
             continue  # camminate/escursioni: solo arricchimento, mai import
+        # The grace period waits for a late Wahoo version to win — but only bike/
+        # run/swim ever come from Wahoo. Watch-only activities (bodyweight, forza,
+        # yoga, HIIT: family None) have no Wahoo counterpart, so import them at once
+        # instead of hiding today's session for 12 hours.
+        if fam in ("bike", "run", "swim") and e["start"] > grace_cutoff:
+            continue
         sport = _sport_label(e["type"])
         # Already logged by another source (Wahoo/FIT/earlier import) -> skip, so
         # the same swim's several Google dataPoints don't each become a workout.

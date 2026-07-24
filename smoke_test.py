@@ -610,6 +610,37 @@ assert _bal["per_giorno"][0]["bruciate_kcal"] == 2019
 assert "prudente" in _bal["nota"].lower()                      # honest caveat present
 print("energy balance (ingerite vs bruciate) shaping OK")
 
+# --- import grace: watch-only activities (no Wahoo twin) shouldn't wait 12h ---
+from datetime import datetime as _dtg, timedelta as _tdg
+from sqlmodel import Session as _Sess
+from app.db import engine as _eng, Workout as _Wk
+def _ex_point(uid, etype, start, dur_s, hr=None):
+    end = start + _tdg(seconds=dur_s)
+    ms = {"averageHeartRateBeatsPerMinute": hr} if hr else {}
+    return {"name": f"users/me/dataTypes/exercise/dataPoints/{uid}",
+            "exercise": {"exerciseType": etype, "displayName": etype.title(),
+                         "activeDuration": f"{dur_s}s",
+                         "interval": {"startTime": start.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                                      "endTime": end.strftime("%Y-%m-%dT%H:%M:%SZ")},
+                         "metricsSummary": ms}}
+_recent = _dtg.utcnow() - _tdg(hours=1)
+_pts = [_ex_point(9001, "CIRCUIT_TRAINING", _recent, 1800, hr=115),  # watch-only
+        _ex_point(9002, "CYCLING", _recent, 1800, hr=140)]           # Wahoo may deliver
+async def _fake_list_ex(page_size=25, page_token=None, filter_=None):
+    return {"dataPoints": [] if page_token else _pts}
+async def _noop_hr(*a, **k):
+    return False
+_gh.list_exercises, _rl = _fake_list_ex, _gh.list_exercises
+_gh._attach_hr_stream, _ra = _noop_hr, _gh._attach_hr_stream
+try:
+    _aio3.run(_gh.enrich_workouts())
+finally:
+    _gh.list_exercises, _gh._attach_hr_stream = _rl, _ra
+with _Sess(_eng) as _s:
+    assert _s.get(_Wk, 9001) is not None      # bodyweight imported at once
+    assert _s.get(_Wk, 9002) is None          # recent bike held for a late Wahoo version
+print("import grace: watch-only imported now, recent bike waits OK")
+
 # --- sleep: a daytime nap must not take a night's place, but must be counted ---
 from app.google_health import _parse_sleep_point, _split_sleep
 
