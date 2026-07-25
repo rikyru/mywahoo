@@ -332,9 +332,9 @@ with TestClient(app) as client:
         # never into the strength session at the same placeholder time
         m = _fit_merge_target(s, datetime(2026, 7, 16, 19, 30), "lap_swimming")
         assert m and m.id == 555, m
-        # a family-less FIT ("training") only merges into a family-less manual
-        # (the strength one), not the swim
-        m2 = _fit_merge_target(s, datetime(2026, 7, 16, 20, 0), "training")
+        # a circuit-training FIT is the same family as "Forza"/"Corpo libero",
+        # so it merges into the strength manual, not the swim
+        m2 = _fit_merge_target(s, datetime(2026, 7, 16, 20, 0), "circuit_training")
         assert m2 and m2.id == 556, m2
         # a bike FIT: no same-day bike manual and no ±25min neighbour -> new activity
         m3 = _fit_merge_target(s, datetime(2026, 7, 20, 8, 0), "cycling")
@@ -679,13 +679,19 @@ assert len(frag_nights) == 1 and frag_nights[0]["asleep_min"] == 400
 print("sleep dedupe: one night per date OK")
 
 # --- same-day sport guard for merging a manual workout with a Google exercise ---
-from app.google_health import _sameday_sport_ok
-assert _sameday_sport_ok("Corpo libero", "strength_training")   # both family-less -> ok
+from app.google_health import _sameday_sport_ok, _sport_family, _sport_label
+from app.main import sport_icon
+# Circuit Training and Corpo libero are the SAME thing (strength family)
+assert _sport_family("Circuit Training") == "strength" == _sport_family("Corpo libero")
+assert _sport_family("Forza") == _sport_family("HIIT") == "strength"
+assert _sport_label("CIRCUIT_TRAINING") == "Corpo libero"       # imported under one label
+assert sport_icon("Circuit Training") == sport_icon("Corpo libero") == "🏋️"
+assert _sameday_sport_ok("Corpo libero", "circuit_training")    # positive strength match
 assert _sameday_sport_ok("Forza", "calisthenics")
 assert _sameday_sport_ok("Corsa", "running")                    # same known family
-assert not _sameday_sport_ok("Corpo libero", "walking")         # walk known, manual family-less
+assert not _sameday_sport_ok("Corpo libero", "walking")         # different families
 assert not _sameday_sport_ok("Nuoto", "biking")                 # different known families
-print("Google same-day sport guard OK")
+print("Circuit Training = Corpo libero (strength family) OK")
 
 # --- duplicate matching: swims from two sources start ~35 min apart ---
 from datetime import datetime as _dt, timedelta as _td

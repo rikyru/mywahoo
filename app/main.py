@@ -108,7 +108,9 @@ def sport_icon(sport: str) -> str:
         return "🏃"
     if any(k in s for k in ("walk", "hik", "cammin", "escurs", "trek")):
         return "🥾"
-    if any(k in s for k in ("forza", "strength", "corpo", "pesi", "hiit", "gym", "palestra", "wod")):
+    if any(k in s for k in ("forza", "strength", "corpo", "pesi", "hiit", "gym",
+                            "palestra", "wod", "circuit", "calisthen", "functional",
+                            "bodyweight", "bootcamp", "weightlift")):
         return "🏋️"
     if any(k in s for k in ("yoga", "stretch", "mobilit", "pilates")):
         return "🧘"

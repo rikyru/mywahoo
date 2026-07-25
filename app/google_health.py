@@ -210,8 +210,11 @@ async def list_exercises(page_size: int = 25, page_token: str | None = None,
 # can drift ~20 min, so match generously (the sport-family guard prevents merging
 # genuinely different sports that happen to be close in time).
 MATCH_TOLERANCE_S = 25 * 60
-# Import label per sport family (workouts Google has but Wahoo never delivered)
-FAMILY_LABEL = {"swim": "Swimming", "bike": "Cycling", "run": "Running", "walk": "Walking"}
+# Import label per sport family (workouts Google has but Wahoo never delivered).
+# "strength" groups bodyweight/circuit/functional work — all one thing for the
+# athlete ("Corpo libero"), so Circuit Training and Corpo libero merge & dedup.
+FAMILY_LABEL = {"swim": "Swimming", "bike": "Cycling", "run": "Running",
+                "walk": "Walking", "strength": "Corpo libero"}
 
 
 def _sport_family(label: str) -> str | None:
@@ -226,6 +229,11 @@ def _sport_family(label: str) -> str | None:
         return "run"
     if any(k in s for k in ("walk", "hik", "cammin", "escurs", "trek")):
         return "walk"
+    # bodyweight / strength / functional — the same thing for a home athlete
+    if any(k in s for k in ("corpo libero", "circuit", "strength", "forza", "pesi",
+                            "calisthen", "bodyweight", "functional", "hiit",
+                            "bootcamp", "weightlift", "wod")):
+        return "strength"
     return None
 
 
