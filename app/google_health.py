@@ -313,6 +313,7 @@ def _overlap_s(w_start, w_dur_s: int, e_start, e_end) -> float:
 # Don't import a Google exercise younger than this: the Strava->Wahoo sync can
 # lag hours, and the Wahoo version (when it comes) is the preferred base row.
 IMPORT_GRACE_S = 12 * 3600
+WALK_MIN_IMPORT_M = 2000  # below this a "walk" is background noise, not an activity
 
 
 def _exercise_fields(point: dict) -> dict | None:
@@ -599,8 +600,11 @@ async def enrich_workouts(max_pages: int = 8) -> int:
         fam = _sport_family(e["type"])
         if e["uid"] is None or e["uid"] in ignored:
             continue
-        if fam == "walk":
-            continue  # camminate/escursioni: solo arricchimento, mai import
+        # Walks: Google auto-detects dozens of trivial ones (pacing around at
+        # ~1 km/h). Import only the intentional ones (>= 2 km); shorter walks stay
+        # enrichment-only so the list isn't flooded.
+        if fam == "walk" and (e["distance_m"] or 0) < WALK_MIN_IMPORT_M:
+            continue
         # The grace period waits for a late Wahoo version to win — but only bike/
         # run/swim ever come from Wahoo. Watch-only activities (bodyweight, forza,
         # yoga, HIIT: family None) have no Wahoo counterpart, so import them at once
