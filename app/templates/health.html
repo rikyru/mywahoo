@@ -127,6 +127,18 @@
   </section>
   {% endif %}
 
+  {# ---- energy balance: intake vs expenditure ---- #}
+  {% if energy_json and energy_json != '[]' %}
+  <section class="card">
+    <h3>Bilancio energetico <small class="muted">· ingerite vs bruciate</small></h3>
+    <canvas id="energyChart" height="110"></canvas>
+    <p class="muted" id="energyLegend"></p>
+    <p class="muted">Le <strong>bruciate</strong> sono il dispendio totale reale (metabolismo + attività).
+      Le <strong>ingerite</strong> sono i soli pasti tracciati su planmydinner: nei giorni non tracciati
+      mancano, e il deficit è quasi sempre sovrastimato. Traccia tutti i pasti per un quadro reale.</p>
+  </section>
+  {% endif %}
+
   {# ---- AI commentary ---- #}
   <section class="card">
     <div class="card-head">
@@ -296,6 +308,40 @@ if (sleepCanvas && SLEEP.length) {
                          y: { stacked: true, title: { display: true, text: "minuti" } } },
                animation: false, responsive: true },
   });
+}
+
+// Energy balance: burned (line) vs intake tracked meals (bars), deficit shaded
+const ENERGY = {{ energy_json | safe }};
+const energyCanvas = document.getElementById("energyChart");
+if (energyCanvas && ENERGY.length) {
+  const labels = ENERGY.map(p => p.date.slice(5));
+  new Chart(energyCanvas, {
+    data: {
+      labels,
+      datasets: [
+        { type: "bar", label: "Ingerite (pasti tracciati)",
+          data: ENERGY.map(p => p.intake),
+          backgroundColor: ENERGY.map(p => p.intake != null && p.intake < p.burned
+            ? "rgba(214,40,40,.55)" : "rgba(42,157,143,.6)"),
+          borderRadius: 3, maxBarThickness: 26 },
+        { type: "line", label: "Bruciate (dispendio totale)",
+          data: ENERGY.map(p => p.burned), borderColor: "#e08a1e",
+          backgroundColor: "#e08a1e22", pointRadius: 2, borderWidth: 1.8, tension: .25 },
+      ],
+    },
+    options: { plugins: { legend: { position: "bottom" } },
+               scales: { x: { ticks: { maxTicksLimit: 10 } },
+                         y: { beginAtZero: true, title: { display: true, text: "kcal" } } },
+               animation: false, responsive: true },
+  });
+  // average deficit/surplus over days that have both numbers
+  const both = ENERGY.filter(p => p.intake != null);
+  if (both.length) {
+    const avg = Math.round(both.reduce((s, p) => s + (p.intake - p.burned), 0) / both.length);
+    document.getElementById("energyLegend").textContent =
+      `Media su ${both.length} giorni tracciati: ${avg >= 0 ? "+" : ""}${avg} kcal/die `
+      + `(barre rosse = giorno in deficit sui pasti tracciati).`;
+  }
 }
 </script>
 {% endif %}

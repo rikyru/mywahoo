@@ -326,6 +326,16 @@ def _window_qs(window: dict) -> str:
     return f"win={window['win']}"
 
 
+def _energy_series(data: dict | None, nutri: dict | None) -> list[dict]:
+    """Per-day {date, burned, intake} for the energy-balance chart. Burned is the
+    complete Google total; intake is tracked-meals only (may be None on a day)."""
+    burned = ((data or {}).get("metrics", {}).get("calories_burned") or {}).get("series") or []
+    days = ((nutri or {}).get("alimentazione_tracciata") or {}).get("per_giorno") or []
+    intake_by = {d["data"]: d["kcal"] for d in days if d.get("kcal") is not None}
+    return [{"date": p["date"], "burned": p["value"], "intake": intake_by.get(p["date"])}
+            for p in burned]
+
+
 @app.get("/health", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
 async def health_page(request: Request, win: str = "30", end: str = ""):
     window = resolve_window(win, end, request.query_params.get("from", ""),
@@ -350,6 +360,7 @@ async def health_page(request: Request, win: str = "30", end: str = ""):
     return templates.TemplateResponse(request, "health.html", {
         "connected": True, "data": data, "window": window, "windows": WINDOWS,
         "nutrition": nutri,
+        "energy_json": json.dumps(_energy_series(data, nutri)),
         "insight_html": md.markdown(insight.content, extensions=["tables"]) if insight else None,
         "insight_date": insight.created_at if insight else None,
         "error": request.query_params.get("error"),

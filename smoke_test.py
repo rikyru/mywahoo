@@ -610,6 +610,16 @@ assert _bal["per_giorno"][0]["bruciate_kcal"] == 2019
 assert "prudente" in _bal["nota"].lower()                      # honest caveat present
 print("energy balance (ingerite vs bruciate) shaping OK")
 
+# the chart series pairs burned (every day) with intake (only tracked days)
+from app.main import _energy_series
+_es = _energy_series(_ov, _nut)
+assert [r["date"] for r in _es] == ["2026-07-15", "2026-07-16"]
+assert _es[0]["burned"] == 2019 and _es[0]["intake"] == 1026
+# a day with expenditure but no logged meals shows intake=None (gap in the bar)
+_ov2 = {"metrics": {"calories_burned": {"series": [{"date": "2026-07-17", "value": 2200}]}}}
+assert _energy_series(_ov2, _nut)[0]["intake"] is None
+print("energy-balance chart series OK")
+
 # --- import grace: watch-only activities (no Wahoo twin) shouldn't wait 12h ---
 from datetime import datetime as _dtg, timedelta as _tdg
 from sqlmodel import Session as _Sess
