@@ -101,6 +101,52 @@
   </table>
 </section>
 
+{% if est_power %}
+<section class="card">
+  <div class="card-head">
+    <h3>Potenza stimata <small class="muted">· da GPS, senza sensore</small></h3>
+    {% if ftp and ftp.ftp %}<span class="tag" title="Miglior 20 min stimato × 0.95, ultimi 4 mesi ({{ ftp.n_rides }} giri)">FTP stimato ~{{ ftp.ftp }} W</span>{% endif %}
+  </div>
+  <section class="kpi-row">
+    <div class="kpi"><span class="kpi-value">{{ est_power.avg }}</span><span class="kpi-label">W medi (in moto)</span></div>
+    {% if est_power.np %}<div class="kpi"><span class="kpi-value">{{ est_power.np }}</span><span class="kpi-label">NP stimata</span></div>{% endif %}
+    {% if est_power.best_20min %}<div class="kpi"><span class="kpi-value">{{ est_power.best_20min }}</span><span class="kpi-label">miglior 20′</span></div>{% endif %}
+    {% if est_power.best_5min %}<div class="kpi"><span class="kpi-value">{{ est_power.best_5min }}</span><span class="kpi-label">miglior 5′</span></div>{% endif %}
+    {% if est_power.best_1min %}<div class="kpi"><span class="kpi-value">{{ est_power.best_1min }}</span><span class="kpi-label">miglior 1′</span></div>{% endif %}
+  </section>
+  <p class="muted">Stima fisica (peso + pendenza + velocità): attendibile in salita,
+    ruvida in pianura e con vento/scia. Non sostituisce un misuratore di potenza.</p>
+</section>
+{% endif %}
+
+{% if climbs %}
+<section class="card">
+  <h3>Salite <small class="muted">· {{ climbs|length }} rilevate</small></h3>
+  <div class="table-scroll">
+  <table class="activities">
+    <thead><tr><th>Da km</th><th>Lungh.</th><th>Dislivello</th><th>Pendenza</th>
+      <th>Tempo</th><th>Vel.</th><th>VAM</th><th>FC</th></tr></thead>
+    <tbody>
+      {% for c in climbs %}
+      <tr>
+        <td>{{ c.start_km }}</td>
+        <td>{{ (c.length_m / 1000) | round(2) }} km</td>
+        <td>{{ c.gain_m }} m</td>
+        <td>{{ c.avg_grade }}%{% if c.max_grade > c.avg_grade %} <span class="muted">(max {{ c.max_grade }}%)</span>{% endif %}</td>
+        <td>{{ c.time_s | duration }}</td>
+        <td>{{ c.speed_kmh }} km/h</td>
+        <td>{{ c.vam }}</td>
+        <td>{{ c.avg_hr or "-" }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  <p class="muted">VAM = metri di dislivello scalati all'ora. Prima versione: qui vedi
+    le salite di questo giro; il confronto della stessa salita tra giri arriverà dopo.</p>
+</section>
+{% endif %}
+
 <div id="mapCard" class="card" style="display:none">
   <h3>Percorso</h3>
   <div id="map" style="height: 360px; border-radius: 6px;"></div>

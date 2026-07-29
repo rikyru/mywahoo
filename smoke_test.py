@@ -620,6 +620,36 @@ _ov2 = {"metrics": {"calories_burned": {"series": [{"date": "2026-07-17", "value
 assert _energy_series(_ov2, _nut)[0]["intake"] is None
 print("energy-balance chart series OK")
 
+# --- estimated cycling power + climb detection (no power meter) ---
+from app import cycling
+# synthetic ride: 2 km climb at 5% (5 m/s), then flat
+_t = list(range(0, 1400))
+_speed = [5.0] * 1400
+_alt = [min(0.25 * i, 100.0) for i in range(1400)]  # +0.25 m/sample on the climb
+_streams = {"t": _t, "speed": _speed, "alt": _alt, "latlng": [], "hr": [140] * 1400}
+_pw = cycling.estimate_power_series(_streams, cycling.rider_mass(75))
+assert all(p >= 0 for p in _pw)
+assert _pw[200] > _pw[900] * 2      # climbing costs far more than the flat
+_stats = cycling.ride_power_stats(_streams, cycling.rider_mass(75))
+assert _stats["avg"] > 0 and _stats["best_5min"] > _stats["avg"]  # best 5' on the climb
+print(f"estimated power OK (climb ~{_pw[200]:.0f} W, flat ~{_pw[900]:.0f} W, "
+      f"best 5' {_stats['best_5min']} W)")
+
+_climbs = cycling.detect_climbs(_streams)
+assert len(_climbs) == 1, _climbs
+_c = _climbs[0]
+assert 90 <= _c["gain_m"] <= 110 and 4.0 <= _c["avg_grade"] <= 6.0, _c
+assert _c["vam"] > 0 and _c["avg_hr"] == 140
+# a flat ride has no climbs
+assert cycling.detect_climbs({"t": _t, "speed": _speed, "alt": [50.0] * 1400,
+                              "latlng": [], "hr": []}) == []
+print(f"climb detection OK ({_c['gain_m']} m @ {_c['avg_grade']}%, VAM {_c['vam']})")
+
+assert cycling.estimate_ftp([250, 200, 260]) == round(260 * 0.95)   # best 20' × 0.95
+assert cycling.estimate_ftp([]) is None
+assert cycling.best_rolling_avg([0, 1, 2, 3], [10, 20, 30, 40], 2) == 30  # best 2s window
+print("FTP proxy + rolling best OK")
+
 # --- import grace: watch-only activities (no Wahoo twin) shouldn't wait 12h ---
 from datetime import datetime as _dtg, timedelta as _tdg
 from sqlmodel import Session as _Sess

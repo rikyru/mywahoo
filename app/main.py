@@ -19,8 +19,8 @@ from sqlalchemy import func
 from sqlmodel import Session, select
 from starlette.middleware.sessions import SessionMiddleware
 
-from . import (anthropic_client, fit as fitmod, form as formmod, google_health,
-               gpx as gpxmod, nutrition, profile as profilemod, wahoo)
+from . import (anthropic_client, cycling as cyclingmod, fit as fitmod, form as formmod,
+               google_health, gpx as gpxmod, nutrition, profile as profilemod, wahoo)
 from .config import settings, setup_logging
 from .db import (AiAnalysis, ChatMessage, Conversation, IgnoredImport, PeriodSummary,
                  PlanSession, RouteAssessment, TrainingPlan, Workout, WorkoutStream,
@@ -1682,15 +1682,54 @@ def workout_detail(request: Request, workout_id: int):
     if streams:
         streams_json = json.dumps(fitmod.downsample(streams))
 
+    # Estimated power + climbs for bike rides without a power meter (GPS physics)
+    est_power, climbs, ftp = None, [], None
+    if streams and google_health._sport_family(w.sport) == "bike" and not w.avg_power:
+        mass = cyclingmod.rider_mass(profilemod.load().get("weight_kg"))
+        est_power = cyclingmod.ride_power_stats(streams, mass)
+        climbs = cyclingmod.detect_climbs(streams)
+        ftp = _estimated_ftp()
+
     return templates.TemplateResponse(request, "workout.html", {
         "w": w,
         "streams_json": streams_json,
         "merge": merge,
+        "est_power": est_power, "climbs": climbs, "ftp": ftp,
         "analysis_html": md.markdown(analysis.content, extensions=["tables"]) if analysis else None,
         "analysis_date": analysis.created_at if analysis else None,
         "message": request.query_params.get("msg"),
         "error": request.query_params.get("error"),
     })
+
+
+# FTP proxy: best 20-min estimated power over recent rides × 0.95. Computing the
+# power series for every bike ride is heavy, so cache the result for a while.
+_FTP_CACHE: dict = {}
+_FTP_TTL = timedelta(hours=6)
+
+
+def _estimated_ftp() -> dict | None:
+    hit = _FTP_CACHE.get("v")
+    if hit and datetime.utcnow() - hit["at"] < _FTP_TTL:
+        return hit["val"]
+    cutoff = datetime.utcnow() - timedelta(days=120)
+    mass = cyclingmod.rider_mass(profilemod.load().get("weight_kg"))
+    with Session(engine) as session:
+        rides = session.exec(select(Workout).where(Workout.start_date >= cutoff)).all()
+    best20 = []
+    for r in rides:
+        if google_health._sport_family(r.sport) != "bike" or r.avg_power:
+            continue
+        s = fitmod.load_streams(r.id)
+        if not s:
+            continue
+        b = cyclingmod.best_rolling_avg(s["t"], cyclingmod.estimate_power_series(s, mass), 1200)
+        if b:
+            best20.append(round(b))
+    ftp = cyclingmod.estimate_ftp(best20)
+    val = {"ftp": ftp, "n_rides": len(best20)} if ftp else None
+    _FTP_CACHE["v"] = {"at": datetime.utcnow(), "val": val}
+    return val
 
 
 # ---------------------------------------------------------------- actions
