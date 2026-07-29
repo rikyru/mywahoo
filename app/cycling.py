@@ -142,56 +142,92 @@ def estimate_ftp(best_20min_watts: list[float]) -> int | None:
 
 # --------------------------------------------------------------- climb detection
 
-def detect_climbs(streams: dict, min_gain: float = 30.0, min_grade: float = 0.025,
-                  drop_tol: float = 12.0) -> list[dict]:
-    """Significant climbs in a ride: sustained ascents of >= min_gain metres at
-    >= min_grade average, tolerating small dips (drop_tol) within a climb.
+def _resample(dist: list[float], alt: list[float], step: float = 25.0) -> tuple[list, list]:
+    """Elevation resampled to a fixed distance grid (linear interpolation), so
+    gradient is measured over distance, not over time (speed varies a lot)."""
+    rd, ra = [dist[0]], [alt[0]]
+    target, i = dist[0] + step, 1
+    while i < len(dist):
+        if dist[i] >= target:
+            d0, d1 = dist[i - 1], dist[i]
+            f = (target - d0) / (d1 - d0) if d1 > d0 else 0.0
+            rd.append(target)
+            ra.append(alt[i - 1] + f * (alt[i] - alt[i - 1]))
+            target += step
+        else:
+            i += 1
+    return rd, ra
 
-    Returns per climb: distance, elevation gain, avg/max gradient, time, speed,
-    VAM (vertical metres climbed per hour), avg HR.
+
+def _nearest_idx(dist: list[float], target: float) -> int:
+    """Index of the original sample closest to a cumulative distance (bisect)."""
+    import bisect
+    j = bisect.bisect_left(dist, target)
+    if j <= 0:
+        return 0
+    if j >= len(dist):
+        return len(dist) - 1
+    return j if (dist[j] - target) < (target - dist[j - 1]) else j - 1
+
+
+def detect_climbs(streams: dict, min_gain: float = 25.0, min_grade: float = 0.015,
+                  merge_gap: float = 300.0, step: float = 25.0) -> list[dict]:
+    """Significant climbs in a ride, by GRADIENT over distance. A climb is a run
+    where the smoothed grade stays >= min_grade (brief sub-threshold dips up to
+    merge_gap metres are bridged), with total gain >= min_gain. Gentle rolling
+    terrain (this rider's) has long shallow climbs, so the grade floor is low.
+
+    Per climb: distance, gain, avg/max gradient, time, speed, VAM, avg HR.
     """
     t = streams.get("t") or []
-    alt = _smooth(_fill(streams.get("alt") or []), 7)
+    alt_s = _smooth(_fill(streams.get("alt") or []), 9)
     hr = streams.get("hr") or []
     n = len(t)
-    if n < 10 or len(alt) < n:
+    if n < 10 or len(alt_s) < n:
         return []
     dist = _cumulative_distance(streams.get("latlng") or [], _fill(streams.get("speed") or []), t)
+    rd, ra = _resample(dist, alt_s, step)
+    m = len(rd)
+    if m < 3:
+        return []
+    grade = [0.0] + [(ra[k] - ra[k - 1]) / (rd[k] - rd[k - 1] or step) for k in range(1, m)]
+    grade = _smooth(grade, 7)
+
     climbs: list[dict] = []
-    i = 0
-    while i < n - 1:
-        peak, peak_k = alt[i], i
-        k = i + 1
-        while k < n:
-            if alt[k] > peak:          # strictly higher: a plateau won't extend the top
-                peak, peak_k = alt[k], k
-            elif peak - alt[k] > drop_tol:
-                break                  # a real descent closes the climb at the peak
+    k = 1
+    while k < m:
+        if grade[k] < min_grade:
             k += 1
-        gain = alt[peak_k] - alt[i]
-        length = dist[peak_k] - dist[i]
-        if gain >= min_gain and length > 0 and (gain / length) >= min_grade:
-            secs = (t[peak_k] - t[i]) or 1
-            seg_hr = [h for h in hr[i:peak_k + 1] if h]
-            # max gradient over ~50 m sub-segments
-            max_grade = 0.0
-            a = i
-            for b in range(i + 1, peak_k + 1):
-                if dist[b] - dist[a] >= 50:
-                    max_grade = max(max_grade, (alt[b] - alt[a]) / (dist[b] - dist[a]))
-                    a = b
+            continue
+        j, gap = k, 0.0
+        while j < m:
+            if grade[j] >= min_grade:
+                gap = 0.0
+            else:
+                gap += rd[j] - rd[j - 1]
+                if gap > merge_gap:
+                    break
+            j += 1
+        end = j - 1
+        while end > k and grade[end] < min_grade:   # trim trailing false-flat
+            end -= 1
+        gain = ra[end] - ra[k - 1]
+        length = rd[end] - rd[k - 1]
+        if gain >= min_gain and length > 0:
+            i0, i1 = _nearest_idx(dist, rd[k - 1]), _nearest_idx(dist, rd[end])
+            secs = (t[i1] - t[i0]) or 1
+            seg_hr = [h for h in hr[i0:i1 + 1] if h]
+            max_grade = max(grade[k:end + 1], default=gain / length)
             climbs.append({
-                "start_km": round(dist[i] / 1000, 1),
+                "start_km": round(rd[k - 1] / 1000, 1),
                 "length_m": round(length),
                 "gain_m": round(gain),
                 "avg_grade": round(gain / length * 100, 1),
-                "max_grade": round(max(max_grade, gain / length) * 100, 1),
+                "max_grade": round(max_grade * 100, 1),
                 "time_s": int(secs),
                 "speed_kmh": round(length / secs * 3.6, 1),
                 "vam": round(gain / secs * 3600),   # vertical ascent metres/hour
                 "avg_hr": round(sum(seg_hr) / len(seg_hr)) if seg_hr else None,
             })
-            i = peak_k
-        else:
-            i = peak_k if peak_k > i else i + 1
+        k = j + 1
     return climbs

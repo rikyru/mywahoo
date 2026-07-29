@@ -643,7 +643,15 @@ assert _c["vam"] > 0 and _c["avg_hr"] == 140
 # a flat ride has no climbs
 assert cycling.detect_climbs({"t": _t, "speed": _speed, "alt": [50.0] * 1400,
                               "latlng": [], "hr": []}) == []
-print(f"climb detection OK ({_c['gain_m']} m @ {_c['avg_grade']}%, VAM {_c['vam']})")
+# a flat lead-in then a climb: the climb must be found (not merged with the flat
+# and skipped, the old greedy bug), and reported starting after the flat
+_t8, _sp8 = list(range(800)), [5.0] * 800
+_alt_roll = [50.0] * 400 + [50.0 + 0.30 * i for i in range(400)]  # 2 km flat, then +120 m
+_rc = cycling.detect_climbs({"t": _t8, "speed": _sp8, "alt": _alt_roll,
+                             "latlng": [], "hr": [130] * 800})
+assert len(_rc) >= 1 and _rc[0]["start_km"] >= 1.5, _rc   # not merged from km 0
+print(f"climb detection OK ({_c['gain_m']} m @ {_c['avg_grade']}%, VAM {_c['vam']}; "
+      f"flat+climb starts at km {_rc[0]['start_km']})")
 
 assert cycling.estimate_ftp([250, 200, 260]) == round(260 * 0.95)   # best 20' × 0.95
 assert cycling.estimate_ftp([]) is None
