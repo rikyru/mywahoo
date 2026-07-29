@@ -20,6 +20,24 @@ CDA = 0.32             # drag area, amateur on the hoods
 RHO = 1.225            # air density at sea level
 
 
+def _fill(xs: list) -> list[float]:
+    """Forward/backward-fill None samples (GPS/altitude gaps); leftover -> 0."""
+    out = list(xs)
+    last = None
+    for i, v in enumerate(out):
+        if v is None:
+            out[i] = last
+        else:
+            last = v
+    nxt = None
+    for i in range(len(out) - 1, -1, -1):
+        if out[i] is None:
+            out[i] = nxt
+        else:
+            nxt = out[i]
+    return [float(v) if v is not None else 0.0 for v in out]
+
+
 def _smooth(xs: list[float], win: int = 5) -> list[float]:
     n = len(xs)
     if n < win:
@@ -54,8 +72,8 @@ def estimate_power_series(streams: dict, mass_kg: float,
     """Per-sample estimated power (W), aligned with streams['t']. Coasting/braking
     and stopped samples read 0 (no pedalling)."""
     t = streams.get("t") or []
-    speed = streams.get("speed") or []
-    alt = _smooth(streams.get("alt") or [], 7)
+    speed = _fill(streams.get("speed") or [])
+    alt = _smooth(_fill(streams.get("alt") or []), 7)
     if len(t) < 10 or len(speed) < 10 or len(alt) < 10:
         return []
     dist = _cumulative_distance(streams.get("latlng") or [], speed, t)
@@ -133,12 +151,12 @@ def detect_climbs(streams: dict, min_gain: float = 30.0, min_grade: float = 0.02
     VAM (vertical metres climbed per hour), avg HR.
     """
     t = streams.get("t") or []
-    alt = _smooth(streams.get("alt") or [], 7)
+    alt = _smooth(_fill(streams.get("alt") or []), 7)
     hr = streams.get("hr") or []
     n = len(t)
     if n < 10 or len(alt) < n:
         return []
-    dist = _cumulative_distance(streams.get("latlng") or [], streams.get("speed") or [], t)
+    dist = _cumulative_distance(streams.get("latlng") or [], _fill(streams.get("speed") or []), t)
     climbs: list[dict] = []
     i = 0
     while i < n - 1:
