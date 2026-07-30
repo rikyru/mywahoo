@@ -311,6 +311,9 @@ a.chip:hover { background: var(--card-hover); text-decoration: none; }
   border: 1px solid var(--border); border-radius: var(--radius-sm); }
 .seg-del { display: inline; }
 .seg-del button { background: none; border: none; cursor: pointer; font-size: 1rem; margin-left: .5rem; }
+.seg-rename { margin: .2rem 0 .6rem; }
+.seg-rename > summary { cursor: pointer; font-size: .85rem; }
+.seg-rename .seg-create { margin-top: .5rem; }
 
 .plan-done { margin-top: .6rem; }
 .plan-done > summary { display: inline-block; list-style: none; cursor: pointer; }

@@ -828,7 +828,7 @@ def segments_page(request: Request):
         custom_segments.append({
             "id": seg.id, "name": seg.name, "length_km": round(seg.length_m / 1000, 2),
             "path": json.loads(seg.path_json or "[]"), "best_time_s": best,
-            "count": len(effs),
+            "count": len(effs), "source_workout_id": seg.source_workout_id,
             "efforts": [{"date": e.date, "time_s": e.time_s, "speed_kmh": e.speed_kmh,
                          "avg_hr": e.avg_hr, "workout_id": e.workout_id,
                          "is_pr": e.time_s == best} for e in effs],
@@ -845,9 +845,11 @@ def segments_page(request: Request):
 def segment_create(workout_id: int, name: str = Form(""),
                    start_km: str = Form(""), end_km: str = Form(""),
                    start_lat: str = Form(""), start_lng: str = Form(""),
-                   end_lat: str = Form(""), end_lng: str = Form("")):
+                   end_lat: str = Form(""), end_lng: str = Form(""),
+                   segment_id: str = Form("")):
     """Create a custom segment from a stretch of this ride — chosen by clicking
-    the map (start/end points) or by km — then time every ride through it."""
+    the map (start/end points) or by km — then time every ride through it. With a
+    segment_id, re-defines that segment's track instead of creating a new one."""
     def num(s):
         try:
             return float(s)
@@ -863,19 +865,25 @@ def segment_create(workout_id: int, name: str = Form(""),
         seg_def = cyclingmod.segment_from_km(streams, num(start_km), num(end_km))
     if not seg_def:
         return RedirectResponse(
-            f"/workout/{workout_id}?{urlencode({'error': 'Segmento non valido: controlla i km'})}",
+            f"/workout/{workout_id}?{urlencode({'error': 'Segmento non valido: seleziona il tratto sulla mappa'})}",
             status_code=303)
     with Session(engine) as session:
-        seg = CustomSegment(
-            name=name.strip() or f"Segmento {round(seg_def['length_m'] / 1000, 1)} km",
-            length_m=seg_def["length_m"], path_json=json.dumps(seg_def["path"]),
-            start_lat=seg_def["start_ll"][0], start_lng=seg_def["start_ll"][1],
-            mid_lat=seg_def["mid_ll"][0], mid_lng=seg_def["mid_ll"][1],
-            end_lat=seg_def["end_ll"][0], end_lng=seg_def["end_ll"][1])
+        editing = session.get(CustomSegment, int(segment_id)) if num(segment_id) else None
+        seg = editing or CustomSegment()
+        if name.strip() or not seg.name:
+            seg.name = name.strip() or f"Segmento {round(seg_def['length_m'] / 1000, 1)} km"
+        seg.length_m, seg.path_json = seg_def["length_m"], json.dumps(seg_def["path"])
+        seg.source_workout_id = workout_id
+        seg.start_lat, seg.start_lng = seg_def["start_ll"]
+        seg.mid_lat, seg.mid_lng = seg_def["mid_ll"]
+        seg.end_lat, seg.end_lng = seg_def["end_ll"]
         session.add(seg)
         session.commit()
         session.refresh(seg)
-        # time every bike ride that passes through it
+        if editing:  # boundaries changed -> recompute every effort
+            for e in session.exec(select(CustomEffort).where(
+                    CustomEffort.segment_id == seg.id)).all():
+                session.delete(e)
         rides = [w for w in session.exec(select(Workout).where(
             Workout.has_fit == True))  # noqa: E712
             if google_health._sport_family(w.sport) == "bike"]
@@ -884,9 +892,22 @@ def segment_create(workout_id: int, name: str = Form(""),
         session.commit()
         n = len(session.exec(select(CustomEffort).where(
             CustomEffort.segment_id == seg.id)).all())
+    verb = "aggiornato" if editing else "creato"
     return RedirectResponse(
-        f"/segments?{urlencode({'msg': f'Segmento «{seg.name}» creato: {n} passaggi trovati'})}",
+        f"/segments?{urlencode({'msg': f'Segmento «{seg.name}» {verb}: {n} passaggi trovati'})}",
         status_code=303)
+
+
+@app.post("/segments/{segment_id}/rename", dependencies=[Depends(require_auth)])
+def segment_rename(segment_id: int, name: str = Form("")):
+    with Session(engine) as session:
+        seg = session.get(CustomSegment, segment_id)
+        if seg and name.strip():
+            seg.name = name.strip()[:120]
+            session.add(seg)
+            session.commit()
+    return RedirectResponse(f"/segments?{urlencode({'msg': 'Segmento rinominato'})}",
+                            status_code=303)
 
 
 @app.post("/segments/{segment_id}/delete", dependencies=[Depends(require_auth)])
@@ -1873,10 +1894,19 @@ def workout_detail(request: Request, workout_id: int):
     can_segment = bool(streams and streams.get("latlng")
                        and any(p for p in streams["latlng"])
                        and google_health._sport_family(w.sport) == "bike")
+    # editing an existing segment on this ride's map
+    edit_seg = None
+    esid = request.query_params.get("edit_segment")
+    if can_segment and esid and esid.isdigit():
+        with Session(engine) as session:
+            s = session.get(CustomSegment, int(esid))
+        if s:
+            edit_seg = {"id": s.id, "name": s.name,
+                        "path": json.loads(s.path_json or "[]")}
     return templates.TemplateResponse(request, "workout.html", {
         "w": w,
         "streams_json": streams_json,
-        "merge": merge, "can_segment": can_segment,
+        "merge": merge, "can_segment": can_segment, "edit_seg": edit_seg,
         "est_power": est_power, "climbs": climbs, "ftp": ftp,
         "analysis_html": md.markdown(analysis.content, extensions=["tables"]) if analysis else None,
         "analysis_date": analysis.created_at if analysis else None,

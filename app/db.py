@@ -101,6 +101,7 @@ class CustomSegment(SQLModel, table=True):
     name: str = ""
     length_m: float = 0.0
     path_json: str = "[]"
+    source_workout_id: Optional[int] = None   # ride it was drawn on (to re-edit)
     start_lat: float = 0.0
     start_lng: float = 0.0
     mid_lat: float = 0.0
@@ -259,6 +260,7 @@ _MIGRATIONS = {
     "plansession": [("conversation_id", "INTEGER")],
     "trainingplan": [("conversation_id", "INTEGER")],
     "climbeffort": [("kind", "TEXT DEFAULT 'climb'"), ("path_json", "TEXT DEFAULT '[]'")],
+    "customsegment": [("source_workout_id", "INTEGER")],
 }
 
 

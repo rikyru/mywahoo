@@ -135,6 +135,36 @@ with TestClient(app) as client:
     assert r.status_code == 200 and "Segmenti ricorrenti" in r.text
     print("segments page renders OK")
 
+    # --- custom segment: create by map points, rename, edit boundaries ---
+    from app.db import CustomSegment, CustomEffort
+    r = client.post("/workout/7/segment/create", follow_redirects=False, data={
+        "name": "Test tratto", "start_lat": "45.073", "start_lng": "7.683",
+        "end_lat": "45.079", "end_lng": "7.689"})
+    assert r.status_code == 303 and "/segments" in r.headers["location"]
+    with Session(engine) as s:
+        seg = s.exec(select(CustomSegment)).first()
+        assert seg and seg.name == "Test tratto" and seg.source_workout_id == 7
+        seg_id = seg.id
+        assert s.exec(select(CustomEffort).where(  # ride 7 timed on its own segment
+            CustomEffort.segment_id == seg_id)).first()
+    r = client.get("/segments")
+    assert r.status_code == 200 and "Test tratto" in r.text
+    # rename
+    r = client.post(f"/segments/{seg_id}/rename", follow_redirects=False,
+                    data={"name": "Rinominato"})
+    assert r.status_code == 303
+    with Session(engine) as s:
+        assert s.get(CustomSegment, seg_id).name == "Rinominato"
+    # redraw boundaries: updates the SAME segment, doesn't create a new one
+    r = client.post("/workout/7/segment/create", follow_redirects=False, data={
+        "segment_id": str(seg_id), "start_lat": "45.072", "start_lng": "7.682",
+        "end_lat": "45.081", "end_lng": "7.691"})
+    assert r.status_code == 303
+    with Session(engine) as s:
+        segs = s.exec(select(CustomSegment)).all()
+        assert len(segs) == 1 and segs[0].id == seg_id and segs[0].name == "Rinominato"
+    print("custom segment: create + rename + redraw boundaries OK")
+
     # --- calendar + training plans ---
     from app.db import ChatMessage, PlanSession, TrainingPlan
     with Session(engine) as s:

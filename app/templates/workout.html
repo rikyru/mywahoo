@@ -155,7 +155,9 @@
   <div id="map" style="height: 360px; border-radius: 6px;"></div>
   {% if can_segment %}
   <form method="post" action="/workout/{{ w.id }}/segment/create"
-        class="seg-create" id="segForm" style="display:none">
+        class="seg-create" id="segForm" style="display:none"
+        {% if edit_seg %}data-editpath='{{ edit_seg.path | tojson }}'{% endif %}>
+    {% if edit_seg %}<input type="hidden" name="segment_id" value="{{ edit_seg.id }}">{% endif %}
     <input type="hidden" name="start_lat" id="segStartLat">
     <input type="hidden" name="start_lng" id="segStartLng">
     <input type="hidden" name="end_lat" id="segEndLat">
@@ -163,8 +165,9 @@
     <span class="muted" id="segHint">🟢 Clicca sulla mappa <strong>inizio</strong> e
       <strong>fine</strong> di un tratto per creare un segmento cronometrato su
       tutti i giri che ci passano.</span>
-    <label>Nome <input type="text" name="name" placeholder="es. Rettilineo del ponte"></label>
-    <button class="btn" type="submit" id="segBtn" disabled>Crea segmento</button>
+    <label>Nome <input type="text" name="name" placeholder="es. Rettilineo del ponte"
+           value="{{ edit_seg.name if edit_seg else '' }}"></label>
+    <button class="btn" type="submit" id="segBtn" disabled>{{ "Aggiorna segmento" if edit_seg else "Crea segmento" }}</button>
     <button type="button" class="btn btn-secondary" id="segReset">Azzera</button>
   </form>
   {% endif %}
@@ -273,6 +276,13 @@ function setupSegmentPicker(map, track) {
     return bi;
   };
   const setF = (id, v) => document.getElementById(id).value = v;
+
+  // editing an existing segment: show its current track for reference
+  const ep = form.dataset.editpath ? JSON.parse(form.dataset.editpath) : null;
+  if (ep && ep.length > 1) {
+    L.polyline(ep, { color: "#a78bfa", weight: 5, opacity: .5, dashArray: "6" }).addTo(map);
+    hint.innerHTML = "✎ Ridisegna: clicca <strong>inizio</strong> e <strong>fine</strong> del nuovo tratto.";
+  }
 
   map.on("click", (e) => {
     if (pts.length >= 2) return;
