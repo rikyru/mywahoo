@@ -706,6 +706,16 @@ _far = {"t": _ct, "speed": [8.0] * 1000, "alt": [100.0] * 1000,
 assert cycling.match_segment(_far, _seg["start_ll"], _seg["mid_ll"], _seg["end_ll"]) is None
 print(f"custom segments: defined km2-6, timed on 2 rides ({_m1['time_s']}s vs {_m2['time_s']}s) OK")
 
+# define the same segment by two clicked map points (snapped to the track)
+_segp = cycling.segment_from_points(_ride1, [45.22, 7.20], [45.26, 7.20])
+assert _segp and _segp["length_m"] > 0 and len(_segp["path"]) >= 2
+# clicking the points in reverse order still yields start-before-end
+_segr = cycling.segment_from_points(_ride1, [45.26, 7.20], [45.22, 7.20])
+assert _segr and abs(_segr["length_m"] - _segp["length_m"]) < 50
+# a matched ride can be timed on the map-defined segment
+assert cycling.match_segment(_ride2, _segp["start_ll"], _segp["mid_ll"], _segp["end_ll"])
+print("custom segment from map clicks (snapped, order-safe) OK")
+
 assert cycling.estimate_ftp([250, 200, 260]) == round(260 * 0.95)   # best 20' × 0.95
 assert cycling.estimate_ftp([]) is None
 assert cycling.best_rolling_avg([0, 1, 2, 3], [10, 20, 30, 40], 2) == 30  # best 2s window

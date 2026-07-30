@@ -843,19 +843,24 @@ def segments_page(request: Request):
 
 @app.post("/workout/{workout_id}/segment/create", dependencies=[Depends(require_auth)])
 def segment_create(workout_id: int, name: str = Form(""),
-                   start_km: str = Form(""), end_km: str = Form("")):
-    """Create a custom segment from a stretch of this ride, then time every ride
-    that passes through it."""
+                   start_km: str = Form(""), end_km: str = Form(""),
+                   start_lat: str = Form(""), start_lng: str = Form(""),
+                   end_lat: str = Form(""), end_lng: str = Form("")):
+    """Create a custom segment from a stretch of this ride — chosen by clicking
+    the map (start/end points) or by km — then time every ride through it."""
     def num(s):
         try:
             return float(s)
         except (TypeError, ValueError):
             return None
 
-    a, b = num(start_km), num(end_km)
     streams = fitmod.load_streams(workout_id)
-    seg_def = cyclingmod.segment_from_km(streams, a, b) if (streams and a is not None
-                                                            and b is not None) else None
+    seg_def = None
+    if streams and None not in (num(start_lat), num(start_lng), num(end_lat), num(end_lng)):
+        seg_def = cyclingmod.segment_from_points(
+            streams, [num(start_lat), num(start_lng)], [num(end_lat), num(end_lng)])
+    elif streams and None not in (num(start_km), num(end_km)):
+        seg_def = cyclingmod.segment_from_km(streams, num(start_km), num(end_km))
     if not seg_def:
         return RedirectResponse(
             f"/workout/{workout_id}?{urlencode({'error': 'Segmento non valido: controlla i km'})}",

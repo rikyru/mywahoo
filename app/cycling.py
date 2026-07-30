@@ -315,6 +315,29 @@ def segment_from_km(streams: dict, start_km: float, end_km: float) -> dict | Non
             "path": path, "length_m": round(dist[i1] - dist[i0])}
 
 
+def segment_from_points(streams: dict, start_ll: list, end_ll: list) -> dict | None:
+    """Define a custom segment from two clicked points (snapped to the nearest
+    track samples). Order is fixed so start comes before end along the ride."""
+    t = streams.get("t") or []
+    latlng = streams.get("latlng") or []
+    if len(t) < 3 or not latlng or not start_ll or not end_ll:
+        return None
+    i0, _ = _nearest_on_track(latlng, start_ll)
+    i1, _ = _nearest_on_track(latlng, end_ll)
+    if i0 < 0 or i1 < 0 or i0 == i1:
+        return None
+    if i1 < i0:
+        i0, i1 = i1, i0
+    s_ll, e_ll = _latlng_at(latlng, i0), _latlng_at(latlng, i1)
+    mid_ll = _latlng_at(latlng, (i0 + i1) // 2)
+    path = _segment_path(latlng, i0, i1, 60)
+    if not s_ll or not e_ll or not mid_ll or len(path) < 2:
+        return None
+    dist = _cumulative_distance(latlng, _fill(streams.get("speed") or []), t)
+    return {"start_ll": s_ll, "mid_ll": mid_ll, "end_ll": e_ll,
+            "path": path, "length_m": round(dist[i1] - dist[i0])}
+
+
 def _nearest_on_track(latlng: list, ll: list, lo: int = 0, hi: int | None = None):
     """(index, distance_m) of the track point closest to ll, in [lo, hi)."""
     hi = len(latlng) if hi is None else hi

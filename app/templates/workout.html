@@ -147,26 +147,27 @@
 </section>
 {% endif %}
 
-{% if can_segment %}
-<section class="card">
-  <div class="card-head">
-    <h3>Crea un segmento</h3>
-    <a class="muted" href="/segments">Segmenti →</a>
-  </div>
-  <p class="muted">Scegli un tratto di questo giro (dai km): diventa un segmento
-    cronometrato su tutti i giri che ci passano — salita, discesa o pianura, come vuoi.</p>
-  <form method="post" action="/workout/{{ w.id }}/segment/create" class="seg-create">
-    <label>Nome <input type="text" name="name" placeholder="es. Rettilineo del ponte"></label>
-    <label>Da km <input type="number" step="0.1" min="0" name="start_km" required></label>
-    <label>A km <input type="number" step="0.1" min="0" name="end_km" required></label>
-    <button class="btn" type="submit">Crea</button>
-  </form>
-</section>
-{% endif %}
-
 <div id="mapCard" class="card" style="display:none">
-  <h3>Percorso</h3>
+  <div class="card-head">
+    <h3>Percorso</h3>
+    {% if can_segment %}<a class="muted" href="/segments">Segmenti →</a>{% endif %}
+  </div>
   <div id="map" style="height: 360px; border-radius: 6px;"></div>
+  {% if can_segment %}
+  <form method="post" action="/workout/{{ w.id }}/segment/create"
+        class="seg-create" id="segForm" style="display:none">
+    <input type="hidden" name="start_lat" id="segStartLat">
+    <input type="hidden" name="start_lng" id="segStartLng">
+    <input type="hidden" name="end_lat" id="segEndLat">
+    <input type="hidden" name="end_lng" id="segEndLng">
+    <span class="muted" id="segHint">🟢 Clicca sulla mappa <strong>inizio</strong> e
+      <strong>fine</strong> di un tratto per creare un segmento cronometrato su
+      tutti i giri che ci passano.</span>
+    <label>Nome <input type="text" name="name" placeholder="es. Rettilineo del ponte"></label>
+    <button class="btn" type="submit" id="segBtn" disabled>Crea segmento</button>
+    <button type="button" class="btn btn-secondary" id="segReset">Azzera</button>
+  </form>
+  {% endif %}
 </div>
 
 <div id="streamCharts"></div>
@@ -246,9 +247,58 @@ if (streams) {
     const map = L.map("map");
     L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png",
                 { attribution: "&copy; OpenStreetMap" }).addTo(map);
-    const line = L.polyline(streams.latlng, { color: "#0a6ebd", weight: 3 }).addTo(map);
+    const track = streams.latlng;
+    const line = L.polyline(track, { color: "#0a6ebd", weight: 3 }).addTo(map);
     map.fitBounds(line.getBounds(), { padding: [20, 20] });
+    setupSegmentPicker(map, track);
   }
+}
+
+// Click the map to pick a segment's start then end (snapped to the track).
+function setupSegmentPicker(map, track) {
+  const form = document.getElementById("segForm");
+  if (!form) return;
+  form.style.display = "";
+  const btn = document.getElementById("segBtn");
+  const hint = document.getElementById("segHint");
+  let pts = [], markers = [], hi = null;
+
+  const nearest = (ll) => {           // closest track point to a click
+    let best = Infinity, bi = 0;
+    for (let i = 0; i < track.length; i++) {
+      const p = track[i]; if (!p) continue;
+      const d = (p[0] - ll.lat) ** 2 + (p[1] - ll.lng) ** 2;
+      if (d < best) { best = d; bi = i; }
+    }
+    return bi;
+  };
+  const setF = (id, v) => document.getElementById(id).value = v;
+
+  map.on("click", (e) => {
+    if (pts.length >= 2) return;
+    const i = nearest(e.latlng), p = track[i];
+    pts.push(i);
+    markers.push(L.circleMarker(p, { radius: 7, weight: 2,
+      color: pts.length === 1 ? "#34d399" : "#f87171", fillOpacity: 1 }).addTo(map));
+    if (pts.length === 1) {
+      setF("segStartLat", p[0]); setF("segStartLng", p[1]);
+      hint.innerHTML = "🔴 Ora clicca la <strong>fine</strong> del tratto.";
+    } else {
+      const [a, b] = [Math.min(pts[0], pts[1]), Math.max(pts[0], pts[1])];
+      setF("segEndLat", track[b][0]); setF("segEndLng", track[b][1]);
+      setF("segStartLat", track[a][0]); setF("segStartLng", track[a][1]);
+      hi = L.polyline(track.slice(a, b + 1), { color: "#a78bfa", weight: 6, opacity: .8 }).addTo(map);
+      hint.innerHTML = "Tratto selezionato ✓ — dai un nome e crea.";
+      btn.disabled = false;
+    }
+  });
+  document.getElementById("segReset").onclick = () => {
+    pts = []; markers.forEach(m => map.removeLayer(m)); markers = [];
+    if (hi) { map.removeLayer(hi); hi = null; }
+    ["segStartLat","segStartLng","segEndLat","segEndLng"].forEach(id => setF(id, ""));
+    btn.disabled = true;
+    hint.innerHTML = "🟢 Clicca sulla mappa <strong>inizio</strong> e <strong>fine</strong> di un tratto.";
+  };
 }
 </script>
 {% endblock %}
