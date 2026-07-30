@@ -163,7 +163,19 @@ with TestClient(app) as client:
     with Session(engine) as s:
         segs = s.exec(select(CustomSegment)).all()
         assert len(segs) == 1 and segs[0].id == seg_id and segs[0].name == "Rinominato"
-    print("custom segment: create + rename + redraw boundaries OK")
+    # the ride's map opens in edit mode (reference path + segment_id preloaded)
+    r = client.get(f"/workout/7?edit_segment={seg_id}")
+    assert r.status_code == 200 and "data-editpath" in r.text
+    assert f'name="segment_id" value="{seg_id}"' in r.text
+    # a segment created before source_workout_id existed (None) still offers
+    # "redraw", falling back to a ride that passes through it
+    with Session(engine) as s:
+        old = s.get(CustomSegment, seg_id)
+        old.source_workout_id = None
+        s.add(old); s.commit()
+    r = client.get("/segments")
+    assert "edit_segment=" in r.text and "Ridisegna" in r.text
+    print("custom segment: create + rename + redraw (map edit, source-less OK)")
 
     # --- calendar + training plans ---
     from app.db import ChatMessage, PlanSession, TrainingPlan

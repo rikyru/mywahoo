@@ -828,7 +828,9 @@ def segments_page(request: Request):
         custom_segments.append({
             "id": seg.id, "name": seg.name, "length_km": round(seg.length_m / 1000, 2),
             "path": json.loads(seg.path_json or "[]"), "best_time_s": best,
-            "count": len(effs), "source_workout_id": seg.source_workout_id,
+            "count": len(effs),
+            # ride to redraw on: the source ride, else any ride that passes through
+            "redraw_workout_id": seg.source_workout_id or (effs[0].workout_id if effs else None),
             "efforts": [{"date": e.date, "time_s": e.time_s, "speed_kmh": e.speed_kmh,
                          "avg_hr": e.avg_hr, "workout_id": e.workout_id,
                          "is_pr": e.time_s == best} for e in effs],

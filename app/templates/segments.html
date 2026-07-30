@@ -38,8 +38,8 @@
         <form method="post" action="/segments/{{ s.id }}/rename" class="seg-create">
           <label>Nome <input type="text" name="name" value="{{ s.name }}"></label>
           <button class="btn btn-secondary" type="submit">Rinomina</button>
-          {% if s.source_workout_id %}
-          <a class="btn btn-secondary" href="/workout/{{ s.source_workout_id }}?edit_segment={{ s.id }}">
+          {% if s.redraw_workout_id %}
+          <a class="btn btn-secondary" href="/workout/{{ s.redraw_workout_id }}?edit_segment={{ s.id }}">
             Ridisegna il tratto sulla mappa</a>
           {% endif %}
         </form>
