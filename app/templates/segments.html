@@ -9,15 +9,72 @@
   <h1>Segmenti ricorrenti</h1>
 </div>
 
-<p class="muted">Le stesse salite e discese riconosciute su più giri (abbinate per
-  GPS), per confrontare le prestazioni nel tempo — come i segmenti di Strava. Un
-  segmento compare quando l'hai fatto almeno due volte.</p>
+{% if message %}<div class="alert ok">{{ message }}</div>{% endif %}
+{% if error %}<div class="alert error">{{ error }}</div>{% endif %}
 
-{% if not segments %}
+<p class="muted">Salite e discese riconosciute su più giri (abbinate per GPS) per
+  confrontare le prestazioni nel tempo — come i segmenti di Strava. Puoi anche
+  <strong>crearti i tuoi</strong> (anche pianeggianti) da un giro: aprilo e usa
+  «Crea un segmento».</p>
+
+{% if custom_segments %}
+<h2 class="seg-h2">I tuoi segmenti</h2>
+{% for s in custom_segments %}
+<section class="card seg-card">
+  <div class="seg-main">
+    <div class="seg-info">
+      <div class="card-head">
+        <h3>📍 {{ s.name }} <small class="muted">· {{ s.length_km }} km · {{ s.count }} passaggi</small></h3>
+        <span class="seg-pr">
+          {% if s.best_time_s %}🏆 {{ s.best_time_s | duration }}
+          {% if s.latest_is_pr %}<span class="seg-badge">record all'ultimo giro!</span>{% endif %}{% endif %}
+          <form method="post" action="/segments/{{ s.id }}/delete" class="seg-del"
+                onsubmit="return confirm('Eliminare «{{ s.name }}»?')">
+            <button type="submit" title="Elimina">🗑</button></form>
+        </span>
+      </div>
+      {% if s.efforts %}
+      <div class="table-scroll">
+      <table class="activities seg-table">
+        <thead><tr><th>Data</th><th>Tempo</th><th>Δ vs record</th><th>Velocità</th>
+            <th>FC</th><th></th></tr></thead>
+        <tbody>
+          {% for e in s.efforts | reverse %}
+          <tr class="{% if e.is_pr %}seg-best{% endif %}">
+            <td>{{ e.date | it_day }}</td>
+            <td>{{ e.time_s | duration }}{% if e.is_pr %} 🏆{% endif %}</td>
+            <td>{% set d = e.time_s - s.best_time_s %}
+              {% if d == 0 %}<span class="gm-good">record</span>
+              {% else %}<span class="muted">+{{ d | duration }}</span>{% endif %}</td>
+            <td>{{ e.speed_kmh }} km/h</td>
+            <td>{{ e.avg_hr and (e.avg_hr | round | int) or "-" }}</td>
+            <td><a href="/workout/{{ e.workout_id }}">giro →</a></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      </div>
+      {% else %}
+      <p class="muted">Ancora nessun passaggio abbinato. Comparirà quando un giro attraversa il tratto.</p>
+      {% endif %}
+    </div>
+    {% if s.path %}
+    <div class="seg-map" id="csegmap{{ loop.index }}" data-path='{{ s.path | tojson }}'
+         data-climb="2"></div>
+    {% endif %}
+  </div>
+</section>
+{% endfor %}
+{% endif %}
+
+{% if segments %}<h2 class="seg-h2">Salite e discese rilevate</h2>{% endif %}
+
+{% if not segments and not custom_segments %}
 <section class="card">
-  <p class="muted">Nessun segmento ricorrente ancora
+  <p class="muted">Nessun segmento ancora
     {% if n_efforts %}(rilevati {{ n_efforts }} tratti, ma nessuno ripetuto){% endif %}.
-    Ripeti una salita o una discesa su un altro giro e comparirà qui.</p>
+    Ripeti una salita/discesa su un altro giro, oppure creane uno tuo da un giro
+    («Crea un segmento»).</p>
 </section>
 {% endif %}
 
@@ -76,7 +133,7 @@ document.querySelectorAll(".seg-map").forEach(el => {
   const map = L.map(el, { zoomControl: false, attributionControl: false,
                           dragging: false, scrollWheelZoom: false, doubleClickZoom: false });
   L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png").addTo(map);
-  const color = el.dataset.climb === "1" ? "#f59e0b" : "#22d3ee";
+  const color = { "1": "#f59e0b", "0": "#22d3ee", "2": "#a78bfa" }[el.dataset.climb] || "#22d3ee";
   const line = L.polyline(path, { color, weight: 4 }).addTo(map);
   map.fitBounds(line.getBounds(), { padding: [12, 12] });
   // start marker (foot of climb / top of descent)

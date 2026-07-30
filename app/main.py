@@ -22,9 +22,10 @@ from starlette.middleware.sessions import SessionMiddleware
 from . import (anthropic_client, cycling as cyclingmod, fit as fitmod, form as formmod,
                google_health, gpx as gpxmod, nutrition, profile as profilemod, wahoo)
 from .config import settings, setup_logging
-from .db import (AiAnalysis, ChatMessage, ClimbEffort, Conversation, IgnoredImport,
-                 PeriodSummary, PlanSession, RouteAssessment, TrainingPlan, Workout,
-                 WorkoutStream, engine, get_setting, init_db, set_setting)
+from .db import (AiAnalysis, ChatMessage, ClimbEffort, Conversation, CustomEffort,
+                 CustomSegment, IgnoredImport, PeriodSummary, PlanSession,
+                 RouteAssessment, TrainingPlan, Workout, WorkoutStream, engine,
+                 get_setting, init_db, set_setting)
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -679,8 +680,28 @@ def _index_climbs(session, w: Workout) -> None:
                 speed_kmh=c["speed_kmh"], vam=c["vam"], avg_hr=c["avg_hr"],
                 start_lat=c["start_ll"][0], start_lng=c["start_ll"][1],
                 top_lat=c["top_ll"][0], top_lng=c["top_ll"][1]))
+    # also time this ride on every user-defined segment
+    for seg in session.exec(select(CustomSegment)).all():
+        _match_custom(session, seg, w, streams)
     w.climbs_indexed = True
     session.add(w)
+
+
+def _match_custom(session, seg: CustomSegment, w: Workout, streams=None) -> None:
+    """(Re)compute w's timed effort on custom segment seg; store, update or drop."""
+    ex = session.exec(select(CustomEffort).where(
+        CustomEffort.segment_id == seg.id, CustomEffort.workout_id == w.id)).first()
+    streams = streams if streams is not None else fitmod.load_streams(w.id)
+    m = cyclingmod.match_segment(
+        streams, [seg.start_lat, seg.start_lng], [seg.mid_lat, seg.mid_lng],
+        [seg.end_lat, seg.end_lng]) if streams else None
+    if m:
+        eff = ex or CustomEffort(segment_id=seg.id, workout_id=w.id, date=w.start_date)
+        eff.time_s, eff.distance_m = m["time_s"], m["distance_m"]
+        eff.speed_kmh, eff.avg_hr = m["speed_kmh"], m["avg_hr"]
+        session.add(eff)
+    elif ex:
+        session.delete(ex)
 
 
 def _ensure_climbs_indexed() -> None:
@@ -766,7 +787,8 @@ def segments_page(request: Request):
     _ensure_climbs_indexed()
     with Session(engine) as session:
         efforts = session.exec(select(ClimbEffort).order_by(ClimbEffort.date)).all()
-        names = {w.id: w for w in session.exec(select(Workout))}
+        custom = session.exec(select(CustomSegment).order_by(CustomSegment.created_at)).all()
+        custom_effs = session.exec(select(CustomEffort).order_by(CustomEffort.date)).all()
     items = [{"start_ll": [e.start_lat, e.start_lng], "top_ll": [e.top_lat, e.top_lng],
               "kind": e.kind, "path": json.loads(e.path_json or "[]"),
               "date": e.date, "time_s": e.time_s, "speed_kmh": e.speed_kmh, "vam": e.vam,
@@ -794,8 +816,86 @@ def segments_page(request: Request):
     # climbs first, then by how often ridden and recency
     segments.sort(key=lambda s: (s["kind"] != "climb", -s["count"],
                                  -s["latest"]["date"].timestamp()))
+
+    # user-defined segments (shown even with one effort — they were created on purpose)
+    by_seg: dict = defaultdict(list)
+    for e in custom_effs:
+        by_seg[e.segment_id].append(e)
+    custom_segments = []
+    for seg in custom:
+        effs = sorted(by_seg.get(seg.id, []), key=lambda e: e.date)
+        best = min((e.time_s for e in effs), default=0)
+        custom_segments.append({
+            "id": seg.id, "name": seg.name, "length_km": round(seg.length_m / 1000, 2),
+            "path": json.loads(seg.path_json or "[]"), "best_time_s": best,
+            "count": len(effs),
+            "efforts": [{"date": e.date, "time_s": e.time_s, "speed_kmh": e.speed_kmh,
+                         "avg_hr": e.avg_hr, "workout_id": e.workout_id,
+                         "is_pr": e.time_s == best} for e in effs],
+            "latest_is_pr": bool(effs) and effs[-1].time_s == best,
+        })
+    custom_segments.sort(key=lambda s: (-s["count"]))
     return templates.TemplateResponse(request, "segments.html", {
-        "segments": segments, "n_efforts": len(items)})
+        "segments": segments, "custom_segments": custom_segments, "n_efforts": len(items),
+        "message": request.query_params.get("msg"),
+        "error": request.query_params.get("error")})
+
+
+@app.post("/workout/{workout_id}/segment/create", dependencies=[Depends(require_auth)])
+def segment_create(workout_id: int, name: str = Form(""),
+                   start_km: str = Form(""), end_km: str = Form("")):
+    """Create a custom segment from a stretch of this ride, then time every ride
+    that passes through it."""
+    def num(s):
+        try:
+            return float(s)
+        except (TypeError, ValueError):
+            return None
+
+    a, b = num(start_km), num(end_km)
+    streams = fitmod.load_streams(workout_id)
+    seg_def = cyclingmod.segment_from_km(streams, a, b) if (streams and a is not None
+                                                            and b is not None) else None
+    if not seg_def:
+        return RedirectResponse(
+            f"/workout/{workout_id}?{urlencode({'error': 'Segmento non valido: controlla i km'})}",
+            status_code=303)
+    with Session(engine) as session:
+        seg = CustomSegment(
+            name=name.strip() or f"Segmento {round(seg_def['length_m'] / 1000, 1)} km",
+            length_m=seg_def["length_m"], path_json=json.dumps(seg_def["path"]),
+            start_lat=seg_def["start_ll"][0], start_lng=seg_def["start_ll"][1],
+            mid_lat=seg_def["mid_ll"][0], mid_lng=seg_def["mid_ll"][1],
+            end_lat=seg_def["end_ll"][0], end_lng=seg_def["end_ll"][1])
+        session.add(seg)
+        session.commit()
+        session.refresh(seg)
+        # time every bike ride that passes through it
+        rides = [w for w in session.exec(select(Workout).where(
+            Workout.has_fit == True))  # noqa: E712
+            if google_health._sport_family(w.sport) == "bike"]
+        for w in rides:
+            _match_custom(session, seg, w)
+        session.commit()
+        n = len(session.exec(select(CustomEffort).where(
+            CustomEffort.segment_id == seg.id)).all())
+    return RedirectResponse(
+        f"/segments?{urlencode({'msg': f'Segmento «{seg.name}» creato: {n} passaggi trovati'})}",
+        status_code=303)
+
+
+@app.post("/segments/{segment_id}/delete", dependencies=[Depends(require_auth)])
+def segment_delete(segment_id: int):
+    with Session(engine) as session:
+        for e in session.exec(select(CustomEffort).where(
+                CustomEffort.segment_id == segment_id)).all():
+            session.delete(e)
+        seg = session.get(CustomSegment, segment_id)
+        if seg:
+            session.delete(seg)
+        session.commit()
+    return RedirectResponse(f"/segments?{urlencode({'msg': 'Segmento eliminato'})}",
+                            status_code=303)
 
 
 # ------------------------------------------------ calendar & manual workouts
@@ -1765,10 +1865,13 @@ def workout_detail(request: Request, workout_id: int):
         climbs = cyclingmod.detect_climbs(streams)
         ftp = _estimated_ftp()
 
+    can_segment = bool(streams and streams.get("latlng")
+                       and any(p for p in streams["latlng"])
+                       and google_health._sport_family(w.sport) == "bike")
     return templates.TemplateResponse(request, "workout.html", {
         "w": w,
         "streams_json": streams_json,
-        "merge": merge,
+        "merge": merge, "can_segment": can_segment,
         "est_power": est_power, "climbs": climbs, "ftp": ftp,
         "analysis_html": md.markdown(analysis.content, extensions=["tables"]) if analysis else None,
         "analysis_date": analysis.created_at if analysis else None,

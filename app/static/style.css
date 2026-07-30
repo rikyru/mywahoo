@@ -302,6 +302,15 @@ a.chip:hover { background: var(--card-hover); text-decoration: none; }
   .seg-main { flex-direction: column-reverse; }
   .seg-map { width: 100%; height: 200px; }
 }
+.seg-h2 { font-size: 1.05rem; margin: 1.4rem 0 .5rem; color: var(--muted);
+  text-transform: uppercase; letter-spacing: .05em; }
+.seg-create { display: flex; gap: .8rem; flex-wrap: wrap; align-items: flex-end; margin-top: .6rem; }
+.seg-create label { display: flex; flex-direction: column; gap: .3rem; font-size: .78rem;
+  text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+.seg-create input { padding: .5rem .6rem; background: var(--bg-elev); color: var(--text);
+  border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.seg-del { display: inline; }
+.seg-del button { background: none; border: none; cursor: pointer; font-size: 1rem; margin-left: .5rem; }
 
 .plan-done { margin-top: .6rem; }
 .plan-done > summary { display: inline-block; list-style: none; cursor: pointer; }

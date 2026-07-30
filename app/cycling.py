@@ -295,6 +295,66 @@ def same_segment(a: dict, b: dict) -> bool:
     return True
 
 
+def segment_from_km(streams: dict, start_km: float, end_km: float) -> dict | None:
+    """Define a custom segment from a ride's track between two distances: its
+    GPS path plus start/mid/end anchor points and length."""
+    t = streams.get("t") or []
+    latlng = streams.get("latlng") or []
+    if len(t) < 3 or not latlng:
+        return None
+    dist = _cumulative_distance(latlng, _fill(streams.get("speed") or []), t)
+    i0, i1 = _nearest_idx(dist, start_km * 1000), _nearest_idx(dist, end_km * 1000)
+    if i1 <= i0:
+        return None
+    start_ll, end_ll = _latlng_at(latlng, i0), _latlng_at(latlng, i1)
+    mid_ll = _latlng_at(latlng, (i0 + i1) // 2)
+    path = _segment_path(latlng, i0, i1, 60)
+    if not start_ll or not end_ll or not mid_ll or len(path) < 2:
+        return None
+    return {"start_ll": start_ll, "mid_ll": mid_ll, "end_ll": end_ll,
+            "path": path, "length_m": round(dist[i1] - dist[i0])}
+
+
+def _nearest_on_track(latlng: list, ll: list, lo: int = 0, hi: int | None = None):
+    """(index, distance_m) of the track point closest to ll, in [lo, hi)."""
+    hi = len(latlng) if hi is None else hi
+    best, bi = 1e18, -1
+    for i in range(max(0, lo), min(len(latlng), hi)):
+        p = latlng[i]
+        if p and p[0] is not None:
+            d = _haversine(p[0], p[1], ll[0], ll[1])
+            if d < best:
+                best, bi = d, i
+    return bi, best
+
+
+def match_segment(streams: dict, start_ll: list, mid_ll: list, end_ll: list,
+                  tol: float = 60.0) -> dict | None:
+    """Time a ride over a custom segment: find where the track passes closest to
+    the segment's start then (later) its end, within tol; a midpoint check rejects
+    a different road that merely shares endpoints. Returns the effort, or None."""
+    t = streams.get("t") or []
+    latlng = streams.get("latlng") or []
+    if len(t) < 3 or not latlng:
+        return None
+    i_s, ds = _nearest_on_track(latlng, start_ll)
+    if i_s < 0 or ds > tol:
+        return None
+    i_e, de = _nearest_on_track(latlng, end_ll, i_s + 1)
+    if i_e < 0 or de > tol:
+        return None
+    _, dm = _nearest_on_track(latlng, mid_ll, i_s, i_e + 1)
+    if dm > tol * 3:                       # went a different way between the anchors
+        return None
+    dist = _cumulative_distance(latlng, _fill(streams.get("speed") or []), t)
+    secs = (t[i_e] - t[i_s]) or 1
+    length = dist[i_e] - dist[i_s]
+    hr = [h for h in (streams.get("hr") or [])[i_s:i_e + 1] if h]
+    return {"time_s": int(secs), "distance_m": round(length),
+            "speed_kmh": round(length / secs * 3.6, 1),
+            "avg_hr": round(sum(hr) / len(hr)) if hr else None}
+
+
 def cluster_segments(efforts: list[dict]) -> list[list[dict]]:
     """Group climb efforts (each a climb dict + at least start_ll/top_ll) into
     segments of the same climb. Greedy: each effort joins the first segment whose

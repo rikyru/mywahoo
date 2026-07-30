@@ -94,6 +94,34 @@ class ClimbEffort(SQLModel, table=True):
     top_lng: float = 0.0
 
 
+class CustomSegment(SQLModel, table=True):
+    """A user-defined segment (any stretch — flat, climb, sprint): anchors + path,
+    matched and timed across every ride that passes through it."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    name: str = ""
+    length_m: float = 0.0
+    path_json: str = "[]"
+    start_lat: float = 0.0
+    start_lng: float = 0.0
+    mid_lat: float = 0.0
+    mid_lng: float = 0.0
+    end_lat: float = 0.0
+    end_lng: float = 0.0
+    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+
+
+class CustomEffort(SQLModel, table=True):
+    """One ride's timed effort over a CustomSegment."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    segment_id: int = Field(index=True, foreign_key="customsegment.id")
+    workout_id: int = Field(index=True, foreign_key="workout.id")
+    date: datetime = Field(index=True)
+    time_s: int = 0
+    distance_m: float = 0.0
+    speed_kmh: float = 0.0
+    avg_hr: Optional[float] = None
+
+
 class Conversation(SQLModel, table=True):
     """A saved AI chat thread (e.g. a training-plan request) to review later."""
     id: Optional[int] = Field(default=None, primary_key=True)

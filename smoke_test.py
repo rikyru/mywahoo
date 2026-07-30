@@ -688,6 +688,24 @@ assert len(_cl) == 2 and len(_big) == 1 and len(_big[0]) == 3, _cl
 assert cluster_segments([_eff(None, None, 100)]) == []
 print("segments: same climb clustered across rides, kind-guarded OK")
 
+# --- custom segments: define from a stretch of a ride, then time other rides ---
+_ct = list(range(1000))
+_cll = [[45.20 + i * 1e-4, 7.20] for i in range(1000)]   # a straight track north
+_ride1 = {"t": _ct, "speed": [8.0] * 1000, "alt": [100.0] * 1000, "latlng": _cll, "hr": [150] * 1000}
+_seg = cycling.segment_from_km(_ride1, 2.0, 6.0)          # define km 2..6 of ride 1
+assert _seg and _seg["length_m"] > 0 and len(_seg["path"]) >= 2
+# ride 2 covers the same road but faster (bigger dt step -> less time? use speed)
+_ride2 = {"t": [i * 0.8 for i in range(1000)], "speed": [10.0] * 1000,
+          "alt": [100.0] * 1000, "latlng": _cll, "hr": [160] * 1000}
+_m1 = cycling.match_segment(_ride1, _seg["start_ll"], _seg["mid_ll"], _seg["end_ll"])
+_m2 = cycling.match_segment(_ride2, _seg["start_ll"], _seg["mid_ll"], _seg["end_ll"])
+assert _m1 and _m2 and _m2["time_s"] < _m1["time_s"]      # ride 2 faster over the segment
+# a ride nowhere near the segment doesn't match
+_far = {"t": _ct, "speed": [8.0] * 1000, "alt": [100.0] * 1000,
+        "latlng": [[46.9, 9.9]] * 1000, "hr": []}
+assert cycling.match_segment(_far, _seg["start_ll"], _seg["mid_ll"], _seg["end_ll"]) is None
+print(f"custom segments: defined km2-6, timed on 2 rides ({_m1['time_s']}s vs {_m2['time_s']}s) OK")
+
 assert cycling.estimate_ftp([250, 200, 260]) == round(260 * 0.95)   # best 20' × 0.95
 assert cycling.estimate_ftp([]) is None
 assert cycling.best_rolling_avg([0, 1, 2, 3], [10, 20, 30, 40], 2) == 30  # best 2s window
