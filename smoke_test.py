@@ -131,6 +131,10 @@ with TestClient(app) as client:
     assert r.status_code == 200 and "Motore AI" in r.text
     print("settings page OK")
 
+    r = client.get("/segments")
+    assert r.status_code == 200 and "Salite ricorrenti" in r.text
+    print("segments page renders OK")
+
     # --- calendar + training plans ---
     from app.db import ChatMessage, PlanSession, TrainingPlan
     with Session(engine) as s:
@@ -652,6 +656,23 @@ _rc = cycling.detect_climbs({"t": _t8, "speed": _sp8, "alt": _alt_roll,
 assert len(_rc) >= 1 and _rc[0]["start_km"] >= 1.5, _rc   # not merged from km 0
 print(f"climb detection OK ({_c['gain_m']} m @ {_c['avg_grade']}%, VAM {_c['vam']}; "
       f"flat+climb starts at km {_rc[0]['start_km']})")
+
+# --- climb segments: the same climb matched across rides (Strava-style) ---
+from app.cycling import same_segment, cluster_segments
+def _eff(sll, tll, secs):
+    return {"start_ll": sll, "top_ll": tll, "time_s": secs}
+# same climb ridden 3x (GPS jittered <250 m each ride) + a different climb once
+_A = [_eff([45.100, 7.100], [45.110, 7.100], 600),
+      _eff([45.1005, 7.1002], [45.1102, 7.1001], 560),
+      _eff([45.0996, 7.0999], [45.1098, 7.1003], 585)]
+_B = [_eff([45.500, 7.500], [45.510, 7.500], 400)]
+assert same_segment(_A[0], _A[1]) and not same_segment(_A[0], _B[0])
+_cl = cluster_segments(_A + _B)
+_big = [c for c in _cl if len(c) >= 2]
+assert len(_cl) == 2 and len(_big) == 1 and len(_big[0]) == 3, _cl
+# an effort without GPS can't be matched -> dropped from clustering
+assert cluster_segments([_eff(None, None, 100)]) == []
+print("climb segments: same climb clustered across rides OK")
 
 assert cycling.estimate_ftp([250, 200, 260]) == round(260 * 0.95)   # best 20' × 0.95
 assert cycling.estimate_ftp([]) is None

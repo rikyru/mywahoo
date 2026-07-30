@@ -22,9 +22,9 @@ from starlette.middleware.sessions import SessionMiddleware
 from . import (anthropic_client, cycling as cyclingmod, fit as fitmod, form as formmod,
                google_health, gpx as gpxmod, nutrition, profile as profilemod, wahoo)
 from .config import settings, setup_logging
-from .db import (AiAnalysis, ChatMessage, Conversation, IgnoredImport, PeriodSummary,
-                 PlanSession, RouteAssessment, TrainingPlan, Workout, WorkoutStream,
-                 engine, get_setting, init_db, set_setting)
+from .db import (AiAnalysis, ChatMessage, ClimbEffort, Conversation, IgnoredImport,
+                 PeriodSummary, PlanSession, RouteAssessment, TrainingPlan, Workout,
+                 WorkoutStream, engine, get_setting, init_db, set_setting)
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -660,6 +660,40 @@ def _hr_anchors() -> tuple[float, float, str]:
     return profilemod.hr_anchors(measured_max=measured_max)
 
 
+def _index_climbs(session, w: Workout) -> None:
+    """Detect the climbs of a bike ride and store them (with GPS) as ClimbEfforts.
+    Idempotent: replaces any existing efforts for the workout."""
+    for old in session.exec(select(ClimbEffort).where(
+            ClimbEffort.workout_id == w.id)).all():
+        session.delete(old)
+    streams = fitmod.load_streams(w.id)
+    if streams:
+        for c in cyclingmod.detect_climbs(streams):
+            if not c.get("start_ll") or not c.get("top_ll"):
+                continue  # no GPS -> can't match it across rides
+            session.add(ClimbEffort(
+                workout_id=w.id, date=w.start_date, start_km=c["start_km"],
+                gain_m=c["gain_m"], length_m=c["length_m"], avg_grade=c["avg_grade"],
+                max_grade=c["max_grade"], time_s=c["time_s"], speed_kmh=c["speed_kmh"],
+                vam=c["vam"], avg_hr=c["avg_hr"],
+                start_lat=c["start_ll"][0], start_lng=c["start_ll"][1],
+                top_lat=c["top_ll"][0], top_lng=c["top_ll"][1]))
+    w.climbs_indexed = True
+    session.add(w)
+
+
+def _ensure_climbs_indexed() -> None:
+    """Lazily index climbs for any bike ride with a FIT that isn't done yet."""
+    with Session(engine) as session:
+        todo = [w for w in session.exec(select(Workout).where(
+            Workout.has_fit == True, Workout.climbs_indexed == False))  # noqa: E712
+            if google_health._sport_family(w.sport) == "bike"]
+        for w in todo:
+            _index_climbs(session, w)
+        if todo:
+            session.commit()
+
+
 def _fitness_series() -> tuple[list, dict]:
     """Full CTL/ATL/TSB series over all history + current-state summary."""
     with Session(engine) as session:
@@ -721,6 +755,40 @@ async def form_insight(regenerate: str = Form(default="")):
                                       model=anthropic_client.effective_model()))
         session.commit()
     return RedirectResponse("/form", status_code=303)
+
+
+@app.get("/segments", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
+def segments_page(request: Request):
+    """Recurring climbs (Strava-segment style): the same climb matched across
+    rides by GPS, to compare efforts over time."""
+    import statistics
+    _ensure_climbs_indexed()
+    with Session(engine) as session:
+        efforts = session.exec(select(ClimbEffort).order_by(ClimbEffort.date)).all()
+        names = {w.id: w for w in session.exec(select(Workout))}
+    items = [{"start_ll": [e.start_lat, e.start_lng], "top_ll": [e.top_lat, e.top_lng],
+              "date": e.date, "time_s": e.time_s, "speed_kmh": e.speed_kmh, "vam": e.vam,
+              "avg_hr": e.avg_hr, "gain_m": e.gain_m, "length_m": e.length_m,
+              "avg_grade": e.avg_grade, "workout_id": e.workout_id} for e in efforts]
+    segments = []
+    for cl in cyclingmod.cluster_segments(items):
+        if len(cl) < 2:
+            continue  # a segment is a climb ridden at least twice
+        cl.sort(key=lambda x: x["date"])
+        best = min(x["time_s"] for x in cl)
+        for x in cl:
+            x["is_pr"] = x["time_s"] == best
+        segments.append({
+            "efforts": cl, "count": len(cl),
+            "gain_m": round(statistics.median(x["gain_m"] for x in cl)),
+            "length_km": round(statistics.median(x["length_m"] for x in cl) / 1000, 1),
+            "grade": round(statistics.median(x["avg_grade"] for x in cl), 1),
+            "best_time_s": best, "latest": cl[-1],
+            "latest_is_pr": cl[-1]["time_s"] == best,
+        })
+    segments.sort(key=lambda s: (s["count"], s["latest"]["date"]), reverse=True)
+    return templates.TemplateResponse(request, "segments.html", {
+        "segments": segments, "n_efforts": len(items)})
 
 
 # ------------------------------------------------ calendar & manual workouts

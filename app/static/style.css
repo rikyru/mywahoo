@@ -286,6 +286,14 @@ a.chip:hover { background: var(--card-hover); text-decoration: none; }
 .chat-prop-desc { white-space: pre-wrap; margin: .5rem 0 .7rem; font-size: .93rem; }
 .plan-action-list { margin: .4rem 0 .7rem 1.1rem; display: flex; flex-direction: column; gap: .3rem; }
 
+/* ---------- climb segments ---------- */
+.seg-pr { font-family: var(--mono); font-size: 1.05rem; white-space: nowrap; }
+.seg-badge { display: inline-block; margin-left: .3rem; font-family: var(--font);
+  font-size: .72rem; background: var(--accent-soft); color: var(--accent);
+  padding: .1rem .4rem; border-radius: 6px; vertical-align: middle; }
+.seg-table td { font-variant-numeric: tabular-nums; }
+.seg-best td { background: rgba(52, 211, 153, .08); }
+
 .plan-done { margin-top: .6rem; }
 .plan-done > summary { display: inline-block; list-style: none; cursor: pointer; }
 .plan-done > summary::-webkit-details-marker { display: none; }

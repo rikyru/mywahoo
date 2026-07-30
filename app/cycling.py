@@ -218,6 +218,7 @@ def detect_climbs(streams: dict, min_gain: float = 25.0, min_grade: float = 0.01
             secs = (t[i1] - t[i0]) or 1
             seg_hr = [h for h in hr[i0:i1 + 1] if h]
             max_grade = max(grade[k:end + 1], default=gain / length)
+            latlng = streams.get("latlng") or []
             climbs.append({
                 "start_km": round(rd[k - 1] / 1000, 1),
                 "length_m": round(length),
@@ -228,6 +229,51 @@ def detect_climbs(streams: dict, min_gain: float = 25.0, min_grade: float = 0.01
                 "speed_kmh": round(length / secs * 3.6, 1),
                 "vam": round(gain / secs * 3600),   # vertical ascent metres/hour
                 "avg_hr": round(sum(seg_hr) / len(seg_hr)) if seg_hr else None,
+                "start_ll": _latlng_at(latlng, i0),   # GPS of foot / top: used to
+                "top_ll": _latlng_at(latlng, i1),     # match the same climb across rides
             })
         k = j + 1
     return climbs
+
+
+def _latlng_at(latlng: list, idx: int, span: int = 40):
+    """Nearest valid [lat, lng] around idx, or None (GPS can have gaps)."""
+    n = len(latlng)
+    if not n:
+        return None
+    for off in range(span):
+        for i in (idx + off, idx - off):
+            if 0 <= i < n and latlng[i] and latlng[i][0] is not None:
+                return [round(latlng[i][0], 6), round(latlng[i][1], 6)]
+    return None
+
+
+# Two climbs are the same segment if foot AND top are within this distance —
+# tolerant to where detection places the exact boundaries ride to ride.
+SEGMENT_TOL_M = 250.0
+
+
+def same_segment(a: dict, b: dict) -> bool:
+    """True if two climb efforts are the same real climb (matched by GPS)."""
+    for key in ("start_ll", "top_ll"):
+        pa, pb = a.get(key), b.get(key)
+        if not pa or not pb or _haversine(pa[0], pa[1], pb[0], pb[1]) > SEGMENT_TOL_M:
+            return False
+    return True
+
+
+def cluster_segments(efforts: list[dict]) -> list[list[dict]]:
+    """Group climb efforts (each a climb dict + at least start_ll/top_ll) into
+    segments of the same climb. Greedy: each effort joins the first segment whose
+    representative it matches, else starts a new one."""
+    segments: list[list[dict]] = []
+    for e in efforts:
+        if not e.get("start_ll") or not e.get("top_ll"):
+            continue
+        for seg in segments:
+            if same_segment(seg[0], e):
+                seg.append(e)
+                break
+        else:
+            segments.append([e])
+    return segments

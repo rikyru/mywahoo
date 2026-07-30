@@ -71,6 +71,27 @@ class PlanSession(SQLModel, table=True):
     conversation_id: Optional[int] = None   # AI thread about adapting this session
 
 
+class ClimbEffort(SQLModel, table=True):
+    """One detected climb within a bike ride, with GPS of foot/top so the same
+    climb can be matched across rides (Strava-segment style)."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    workout_id: int = Field(index=True, foreign_key="workout.id")
+    date: datetime = Field(index=True)
+    start_km: float = 0.0
+    gain_m: float = 0.0
+    length_m: float = 0.0
+    avg_grade: float = 0.0
+    max_grade: float = 0.0
+    time_s: int = 0
+    speed_kmh: float = 0.0
+    vam: int = 0
+    avg_hr: Optional[float] = None
+    start_lat: float = 0.0
+    start_lng: float = 0.0
+    top_lat: float = 0.0
+    top_lng: float = 0.0
+
+
 class Conversation(SQLModel, table=True):
     """A saved AI chat thread (e.g. a training-plan request) to review later."""
     id: Optional[int] = Field(default=None, primary_key=True)
@@ -142,6 +163,7 @@ class Workout(SQLModel, table=True):
     raw_summary: str = "{}"              # raw JSON from Wahoo (webhook or API)
     manual: bool = False                 # created by the user (not imported)
     notes: str = ""                      # free-text description (manual/home workouts)
+    climbs_indexed: bool = False         # climbs already detected+stored (ClimbEffort)
     rpe: Optional[float] = None          # 1-10 perceived effort: estimated by the AI
                                          # from `notes` (kept apart from avg_hr, which
                                          # must stay measured data), used for the load
@@ -203,7 +225,7 @@ _MIGRATIONS = {
     "routeassessment": [("route_json", "TEXT DEFAULT '{}'"),
                         ("sport", "TEXT DEFAULT 'Bici'")],
     "workout": [("manual", "INTEGER DEFAULT 0"), ("notes", "TEXT DEFAULT ''"),
-                ("rpe", "REAL")],
+                ("rpe", "REAL"), ("climbs_indexed", "INTEGER DEFAULT 0")],
     "plansession": [("conversation_id", "INTEGER")],
     "trainingplan": [("conversation_id", "INTEGER")],
 }
