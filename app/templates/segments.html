@@ -1,57 +1,86 @@
 {% extends "base.html" %}
-{% block title %}Salite — {{ app_name }}{% endblock %}
+{% block title %}Segmenti — {{ app_name }}{% endblock %}
+{% block head %}
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+{% endblock %}
 {% block content %}
 
 <div class="page-head">
-  <h1>Salite ricorrenti</h1>
+  <h1>Segmenti ricorrenti</h1>
 </div>
 
-<p class="muted">Le stesse salite riconosciute su più giri (abbinate per GPS), per
-  confrontare le prestazioni nel tempo — come i segmenti di Strava. Servono giri
-  in bici con traccia GPS; una salita compare quando l'hai fatta almeno due volte.</p>
+<p class="muted">Le stesse salite e discese riconosciute su più giri (abbinate per
+  GPS), per confrontare le prestazioni nel tempo — come i segmenti di Strava. Un
+  segmento compare quando l'hai fatto almeno due volte.</p>
 
 {% if not segments %}
 <section class="card">
-  <p class="muted">Nessuna salita ricorrente ancora
-    {% if n_efforts %}(rilevate {{ n_efforts }} salite, ma nessuna ripetuta){% endif %}.
-    Ripeti una salita su un altro giro e comparirà qui.</p>
+  <p class="muted">Nessun segmento ricorrente ancora
+    {% if n_efforts %}(rilevati {{ n_efforts }} tratti, ma nessuno ripetuto){% endif %}.
+    Ripeti una salita o una discesa su un altro giro e comparirà qui.</p>
 </section>
 {% endif %}
 
 {% for s in segments %}
-<section class="card">
-  <div class="card-head">
-    <h3>Salita +{{ s.gain_m }} m
-      <small class="muted">· {{ s.length_km }} km · {{ s.grade }}% · {{ s.count }} tentativi</small>
-    </h3>
-    <span class="seg-pr">🏆 {{ s.best_time_s | duration }}
-      {% if s.latest_is_pr %}<span class="seg-badge">record all'ultimo giro!</span>{% endif %}
-    </span>
-  </div>
-  <div class="table-scroll">
-  <table class="activities seg-table">
-    <thead>
-      <tr><th>Data</th><th>Tempo</th><th>Δ vs record</th><th>Velocità</th>
-          <th>VAM</th><th>FC</th><th></th></tr>
-    </thead>
-    <tbody>
-      {% for e in s.efforts | reverse %}
-      <tr class="{% if e.is_pr %}seg-best{% endif %}">
-        <td>{{ e.date | it_day }}</td>
-        <td>{{ e.time_s | duration }}{% if e.is_pr %} 🏆{% endif %}</td>
-        <td>{% set d = e.time_s - s.best_time_s %}
-          {% if d == 0 %}<span class="gm-good">record</span>
-          {% else %}<span class="muted">+{{ d | duration }}</span>{% endif %}</td>
-        <td>{{ e.speed_kmh }} km/h</td>
-        <td>{{ e.vam }}</td>
-        <td>{{ e.avg_hr and (e.avg_hr | round | int) or "-" }}</td>
-        <td><a href="/workout/{{ e.workout_id }}">giro →</a></td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
+{% set is_climb = s.kind == 'climb' %}
+<section class="card seg-card">
+  <div class="seg-main">
+    <div class="seg-info">
+      <div class="card-head">
+        <h3>{{ "⛰️ Salita" if is_climb else "🏔️ Discesa" }} {{ "+" if is_climb else "−" }}{{ s.gain_m }} m
+          <small class="muted">· {{ s.length_km }} km · {{ s.grade|abs }}% · {{ s.count }} tentativi</small>
+        </h3>
+        <span class="seg-pr">🏆 {{ s.best_time_s | duration }}
+          {% if s.latest_is_pr %}<span class="seg-badge">record all'ultimo giro!</span>{% endif %}
+        </span>
+      </div>
+      <div class="table-scroll">
+      <table class="activities seg-table">
+        <thead>
+          <tr><th>Data</th><th>Tempo</th><th>Δ vs record</th><th>Velocità</th>
+              <th>{{ "VAM" if is_climb else "m/h ↓" }}</th><th>FC</th><th></th></tr>
+        </thead>
+        <tbody>
+          {% for e in s.efforts | reverse %}
+          <tr class="{% if e.is_pr %}seg-best{% endif %}">
+            <td>{{ e.date | it_day }}</td>
+            <td>{{ e.time_s | duration }}{% if e.is_pr %} 🏆{% endif %}</td>
+            <td>{% set d = e.time_s - s.best_time_s %}
+              {% if d == 0 %}<span class="gm-good">record</span>
+              {% else %}<span class="muted">+{{ d | duration }}</span>{% endif %}</td>
+            <td>{{ e.speed_kmh }} km/h</td>
+            <td>{{ e.vam }}</td>
+            <td>{{ e.avg_hr and (e.avg_hr | round | int) or "-" }}</td>
+            <td><a href="/workout/{{ e.workout_id }}">giro →</a></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      </div>
+    </div>
+    {% if s.path %}
+    <div class="seg-map" id="segmap{{ loop.index }}" data-path='{{ s.path | tojson }}'
+         data-climb="{{ 1 if is_climb else 0 }}"></div>
+    {% endif %}
   </div>
 </section>
 {% endfor %}
 
+{% endblock %}
+{% block scripts %}
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+document.querySelectorAll(".seg-map").forEach(el => {
+  const path = JSON.parse(el.dataset.path || "[]");
+  if (path.length < 2) { el.style.display = "none"; return; }
+  const map = L.map(el, { zoomControl: false, attributionControl: false,
+                          dragging: false, scrollWheelZoom: false, doubleClickZoom: false });
+  L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png").addTo(map);
+  const color = el.dataset.climb === "1" ? "#f59e0b" : "#22d3ee";
+  const line = L.polyline(path, { color, weight: 4 }).addTo(map);
+  map.fitBounds(line.getBounds(), { padding: [12, 12] });
+  // start marker (foot of climb / top of descent)
+  L.circleMarker(path[0], { radius: 5, color: "#34d399", fillOpacity: 1 }).addTo(map);
+});
+</script>
 {% endblock %}

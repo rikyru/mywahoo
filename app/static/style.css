@@ -293,6 +293,15 @@ a.chip:hover { background: var(--card-hover); text-decoration: none; }
   padding: .1rem .4rem; border-radius: 6px; vertical-align: middle; }
 .seg-table td { font-variant-numeric: tabular-nums; }
 .seg-best td { background: rgba(52, 211, 153, .08); }
+.seg-main { display: flex; gap: 1rem; align-items: stretch; }
+.seg-info { flex: 1; min-width: 0; }
+.seg-map { width: 280px; min-height: 180px; border-radius: var(--radius-sm);
+  overflow: hidden; flex-shrink: 0; }
+.seg-map .leaflet-container { height: 100%; background: var(--bg-elev); }
+@media (max-width: 720px) {
+  .seg-main { flex-direction: column-reverse; }
+  .seg-map { width: 100%; height: 200px; }
+}
 
 .plan-done { margin-top: .6rem; }
 .plan-done > summary { display: inline-block; list-style: none; cursor: pointer; }

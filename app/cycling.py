@@ -170,14 +170,40 @@ def _nearest_idx(dist: list[float], target: float) -> int:
     return j if (dist[j] - target) < (target - dist[j - 1]) else j - 1
 
 
-def detect_climbs(streams: dict, min_gain: float = 25.0, min_grade: float = 0.015,
-                  merge_gap: float = 300.0, step: float = 25.0) -> list[dict]:
-    """Significant climbs in a ride, by GRADIENT over distance. A climb is a run
-    where the smoothed grade stays >= min_grade (brief sub-threshold dips up to
-    merge_gap metres are bridged), with total gain >= min_gain. Gentle rolling
-    terrain (this rider's) has long shallow climbs, so the grade floor is low.
+def _run_segments(grade, rd, sign, min_grade, merge_gap):
+    """(k_start, end) index runs where sign*grade stays >= min_grade, bridging
+    brief sub-threshold gaps up to merge_gap metres."""
+    m = len(rd)
+    out, k = [], 1
+    while k < m:
+        if sign * grade[k] < min_grade:
+            k += 1
+            continue
+        j, gap = k, 0.0
+        while j < m:
+            if sign * grade[j] >= min_grade:
+                gap = 0.0
+            else:
+                gap += rd[j] - rd[j - 1]
+                if gap > merge_gap:
+                    break
+            j += 1
+        end = j - 1
+        while end > k and sign * grade[end] < min_grade:   # trim trailing false-flat
+            end -= 1
+        out.append((k, end))
+        k = j + 1
+    return out
 
-    Per climb: distance, gain, avg/max gradient, time, speed, VAM, avg HR.
+
+def detect_segments(streams: dict, min_gain: float = 25.0, min_grade: float = 0.015,
+                    merge_gap: float = 300.0, step: float = 25.0,
+                    kinds: tuple = ("climb", "descent")) -> list[dict]:
+    """Significant climbs AND descents in a ride, by GRADIENT over distance. A
+    segment is a run where the smoothed grade stays past +/-min_grade (brief
+    sub-threshold gaps up to merge_gap m are bridged), with elevation change
+    >= min_gain. Gentle rolling terrain has long shallow segments, so the floor
+    is low. Each segment carries a downsampled GPS path for a map and matching.
     """
     t = streams.get("t") or []
     alt_s = _smooth(_fill(streams.get("alt") or []), 9)
@@ -186,54 +212,58 @@ def detect_climbs(streams: dict, min_gain: float = 25.0, min_grade: float = 0.01
     if n < 10 or len(alt_s) < n:
         return []
     dist = _cumulative_distance(streams.get("latlng") or [], _fill(streams.get("speed") or []), t)
+    latlng = streams.get("latlng") or []
     rd, ra = _resample(dist, alt_s, step)
-    m = len(rd)
-    if m < 3:
+    if len(rd) < 3:
         return []
-    grade = [0.0] + [(ra[k] - ra[k - 1]) / (rd[k] - rd[k - 1] or step) for k in range(1, m)]
-    grade = _smooth(grade, 7)
+    grade = _smooth([0.0] + [(ra[k] - ra[k - 1]) / (rd[k] - rd[k - 1] or step)
+                             for k in range(1, len(rd))], 7)
 
-    climbs: list[dict] = []
-    k = 1
-    while k < m:
-        if grade[k] < min_grade:
-            k += 1
-            continue
-        j, gap = k, 0.0
-        while j < m:
-            if grade[j] >= min_grade:
-                gap = 0.0
-            else:
-                gap += rd[j] - rd[j - 1]
-                if gap > merge_gap:
-                    break
-            j += 1
-        end = j - 1
-        while end > k and grade[end] < min_grade:   # trim trailing false-flat
-            end -= 1
-        gain = ra[end] - ra[k - 1]
-        length = rd[end] - rd[k - 1]
-        if gain >= min_gain and length > 0:
+    segs: list[dict] = []
+    for kind in kinds:
+        sign = 1 if kind == "climb" else -1
+        for k, end in _run_segments(grade, rd, sign, min_grade, merge_gap):
+            drop = abs(ra[end] - ra[k - 1])
+            length = rd[end] - rd[k - 1]
+            if drop < min_gain or length <= 0:
+                continue
             i0, i1 = _nearest_idx(dist, rd[k - 1]), _nearest_idx(dist, rd[end])
             secs = (t[i1] - t[i0]) or 1
             seg_hr = [h for h in hr[i0:i1 + 1] if h]
-            max_grade = max(grade[k:end + 1], default=gain / length)
-            latlng = streams.get("latlng") or []
-            climbs.append({
+            peak_grade = max((sign * grade[x] for x in range(k, end + 1)),
+                             default=drop / length)
+            segs.append({
+                "kind": kind,
                 "start_km": round(rd[k - 1] / 1000, 1),
                 "length_m": round(length),
-                "gain_m": round(gain),
-                "avg_grade": round(gain / length * 100, 1),
-                "max_grade": round(max_grade * 100, 1),
+                "gain_m": round(drop),                      # magnitude (up or down)
+                "avg_grade": round(sign * drop / length * 100, 1),
+                "max_grade": round(sign * peak_grade * 100, 1),
                 "time_s": int(secs),
                 "speed_kmh": round(length / secs * 3.6, 1),
-                "vam": round(gain / secs * 3600),   # vertical ascent metres/hour
+                "vam": round(drop / secs * 3600),           # vertical metres/hour
                 "avg_hr": round(sum(seg_hr) / len(seg_hr)) if seg_hr else None,
-                "start_ll": _latlng_at(latlng, i0),   # GPS of foot / top: used to
-                "top_ll": _latlng_at(latlng, i1),     # match the same climb across rides
+                "start_ll": _latlng_at(latlng, i0),         # endpoints: match the same
+                "top_ll": _latlng_at(latlng, i1),           # segment across rides
+                "path": _segment_path(latlng, i0, i1),      # polyline for the mini-map
             })
-        k = j + 1
-    return climbs
+    segs.sort(key=lambda s: s["start_km"])
+    return segs
+
+
+def detect_climbs(streams: dict, **kw) -> list[dict]:
+    """Climbs only (kept for callers that don't want descents)."""
+    return detect_segments(streams, kinds=("climb",), **kw)
+
+
+def _segment_path(latlng: list, i0: int, i1: int, max_pts: int = 40) -> list:
+    """Downsampled [[lat,lng],...] between two sample indices, for a small map."""
+    pts = [p for p in latlng[i0:i1 + 1] if p and p[0] is not None]
+    if len(pts) <= max_pts:
+        return [[round(p[0], 5), round(p[1], 5)] for p in pts]
+    stepn = len(pts) / max_pts
+    return [[round(pts[int(i * stepn)][0], 5), round(pts[int(i * stepn)][1], 5)]
+            for i in range(max_pts)]
 
 
 def _latlng_at(latlng: list, idx: int, span: int = 40):
@@ -254,7 +284,10 @@ SEGMENT_TOL_M = 250.0
 
 
 def same_segment(a: dict, b: dict) -> bool:
-    """True if two climb efforts are the same real climb (matched by GPS)."""
+    """True if two efforts are the same real segment: same kind, and both
+    endpoints within SEGMENT_TOL_M (matched by GPS)."""
+    if a.get("kind", "climb") != b.get("kind", "climb"):
+        return False
     for key in ("start_ll", "top_ll"):
         pa, pb = a.get(key), b.get(key)
         if not pa or not pb or _haversine(pa[0], pa[1], pb[0], pb[1]) > SEGMENT_TOL_M:

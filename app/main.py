@@ -668,14 +668,15 @@ def _index_climbs(session, w: Workout) -> None:
         session.delete(old)
     streams = fitmod.load_streams(w.id)
     if streams:
-        for c in cyclingmod.detect_climbs(streams):
+        for c in cyclingmod.detect_segments(streams):
             if not c.get("start_ll") or not c.get("top_ll"):
                 continue  # no GPS -> can't match it across rides
             session.add(ClimbEffort(
-                workout_id=w.id, date=w.start_date, start_km=c["start_km"],
-                gain_m=c["gain_m"], length_m=c["length_m"], avg_grade=c["avg_grade"],
-                max_grade=c["max_grade"], time_s=c["time_s"], speed_kmh=c["speed_kmh"],
-                vam=c["vam"], avg_hr=c["avg_hr"],
+                workout_id=w.id, date=w.start_date, kind=c["kind"],
+                path_json=json.dumps(c.get("path") or []),
+                start_km=c["start_km"], gain_m=c["gain_m"], length_m=c["length_m"],
+                avg_grade=c["avg_grade"], max_grade=c["max_grade"], time_s=c["time_s"],
+                speed_kmh=c["speed_kmh"], vam=c["vam"], avg_hr=c["avg_hr"],
                 start_lat=c["start_ll"][0], start_lng=c["start_ll"][1],
                 top_lat=c["top_ll"][0], top_lng=c["top_ll"][1]))
     w.climbs_indexed = True
@@ -767,26 +768,32 @@ def segments_page(request: Request):
         efforts = session.exec(select(ClimbEffort).order_by(ClimbEffort.date)).all()
         names = {w.id: w for w in session.exec(select(Workout))}
     items = [{"start_ll": [e.start_lat, e.start_lng], "top_ll": [e.top_lat, e.top_lng],
+              "kind": e.kind, "path": json.loads(e.path_json or "[]"),
               "date": e.date, "time_s": e.time_s, "speed_kmh": e.speed_kmh, "vam": e.vam,
               "avg_hr": e.avg_hr, "gain_m": e.gain_m, "length_m": e.length_m,
               "avg_grade": e.avg_grade, "workout_id": e.workout_id} for e in efforts]
     segments = []
     for cl in cyclingmod.cluster_segments(items):
         if len(cl) < 2:
-            continue  # a segment is a climb ridden at least twice
+            continue  # a segment is a climb/descent ridden at least twice
         cl.sort(key=lambda x: x["date"])
         best = min(x["time_s"] for x in cl)
         for x in cl:
             x["is_pr"] = x["time_s"] == best
+        latest = cl[-1]
         segments.append({
-            "efforts": cl, "count": len(cl),
+            "efforts": cl, "count": len(cl), "kind": latest["kind"],
             "gain_m": round(statistics.median(x["gain_m"] for x in cl)),
             "length_km": round(statistics.median(x["length_m"] for x in cl) / 1000, 1),
             "grade": round(statistics.median(x["avg_grade"] for x in cl), 1),
-            "best_time_s": best, "latest": cl[-1],
-            "latest_is_pr": cl[-1]["time_s"] == best,
+            "best_time_s": best, "latest": latest,
+            "latest_is_pr": latest["time_s"] == best,
+            # path of the latest effort (or any with GPS) for the mini-map
+            "path": next((x["path"] for x in reversed(cl) if x.get("path")), []),
         })
-    segments.sort(key=lambda s: (s["count"], s["latest"]["date"]), reverse=True)
+    # climbs first, then by how often ridden and recency
+    segments.sort(key=lambda s: (s["kind"] != "climb", -s["count"],
+                                 -s["latest"]["date"].timestamp()))
     return templates.TemplateResponse(request, "segments.html", {
         "segments": segments, "n_efforts": len(items)})
 

@@ -77,6 +77,8 @@ class ClimbEffort(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     workout_id: int = Field(index=True, foreign_key="workout.id")
     date: datetime = Field(index=True)
+    kind: str = "climb"          # "climb" | "descent"
+    path_json: str = "[]"        # downsampled [[lat,lng],...] for the mini-map
     start_km: float = 0.0
     gain_m: float = 0.0
     length_m: float = 0.0
@@ -228,6 +230,7 @@ _MIGRATIONS = {
                 ("rpe", "REAL"), ("climbs_indexed", "INTEGER DEFAULT 0")],
     "plansession": [("conversation_id", "INTEGER")],
     "trainingplan": [("conversation_id", "INTEGER")],
+    "climbeffort": [("kind", "TEXT DEFAULT 'climb'"), ("path_json", "TEXT DEFAULT '[]'")],
 }
 
 
