@@ -876,6 +876,21 @@ assert not _same_activity(*a, *_act("Cycling", (18, 30), 30))
 assert not _same_activity(*a, *_act("Nuoto", (20, 40), 30))
 print("duplicate matching: swim wide-window + sport-guarded OK")
 
+# --- app-password login: the session cookie must be honored over plain HTTP ---
+from app.db import set_setting as _set_setting
+_set_setting("app_password", "ghimallone")
+with TestClient(app) as _lc:
+    assert _lc.get("/", follow_redirects=False).status_code == 307        # gated
+    r = _lc.post("/login", data={"password": "wrong"}, follow_redirects=False)
+    assert r.status_code == 303 and "error=bad_password" in r.headers["location"]
+    r = _lc.post("/login", data={"password": "ghimallone"}, follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == "/"
+    # the cookie set at login must be accepted on the next request (Secure flag
+    # would drop it over http -> the reported "correct password, no access" bug)
+    assert _lc.get("/", follow_redirects=False).status_code == 200, "login cookie dropped over http"
+_set_setting("app_password", "")
+print("app-password login over http: cookie honored OK")
+
 # --- FIT helpers with synthetic data (no FIT file needed) ---
 from app.fit import ai_stats, compute_normalized_power, downsample
 

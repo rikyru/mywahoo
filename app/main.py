@@ -33,13 +33,14 @@ logger = logging.getLogger(__name__)
 app = FastAPI(title=settings.app_name, docs_url=None, redoc_url=None)
 
 # Signed session cookie. HttpOnly is always set by the middleware;
-# Secure only when the public URL is HTTPS (so local HTTP testing still works).
+# The cookie is not Secure-only by default, so login works over plain HTTP on the
+# LAN as well as through the HTTPS tunnel (SESSION_HTTPS_ONLY=true to require HTTPS).
 app.add_middleware(
     SessionMiddleware,
     secret_key=settings.app_secret_key or "dev-only-insecure",
     session_cookie="ofit_session",
     same_site="lax",
-    https_only=settings.app_base_url.startswith("https://"),
+    https_only=settings.session_https_only,
     max_age=60 * 60 * 24 * 30,
 )
 

@@ -20,6 +20,11 @@ class Settings:
         self.app_password: str = os.environ.get("APP_PASSWORD", "")
         self.app_secret_key: str = os.environ.get("APP_SECRET_KEY", "")
         self.app_base_url: str = os.environ.get("APP_BASE_URL", "http://localhost:8080")
+        # Session cookie "Secure" flag. Off by default so login works over plain
+        # HTTP on the LAN (the HTTPS tunnel sends the cookie regardless). Set
+        # SESSION_HTTPS_ONLY=true to require HTTPS for the cookie.
+        self.session_https_only: bool = \
+            os.environ.get("SESSION_HTTPS_ONLY", "").strip().lower() in ("1", "true", "yes")
         self.log_level: str = os.environ.get("LOG_LEVEL", "INFO").upper()
         self.db_path: str = os.environ.get("DB_PATH", "/data/wahoo.db")
         self.fit_dir: str = os.environ.get("FIT_DIR", "/data/fits")
