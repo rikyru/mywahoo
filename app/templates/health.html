@@ -62,17 +62,24 @@
   {# ---- wellness score ---- #}
   {% if data.score %}
   {% set tone = 'good' if data.score.score >= 67 else ('avg' if data.score.score >= 40 else 'bad') %}
-  <section class="card score-card">
-    <div class="score-ring {{ tone }}" style="--v: {{ data.score.score }}">
-      <span class="score-num">{{ data.score.score }}</span>
+  <section class="card">
+    <div class="score-card">
+      <div class="score-ring {{ tone }}" style="--v: {{ data.score.score }}">
+        <span class="score-num">{{ data.score.score }}</span>
+      </div>
+      <div>
+        <h3>Indice di forma <small class="muted">· oggi</small></h3>
+        <p class="score-verdict {{ tone }}">{{ data.score.label }}
+          {% if data.score_avg %}<span class="muted"> · media periodo {{ data.score_avg }}</span>{% endif %}
+        </p>
+        <p class="muted" style="margin:.2rem 0 0">Calcolato da HRV, FC a riposo,
+          sonno e SpO₂ rispetto alla tua media recente — non è il punteggio
+          proprietario di Fitbit (non esposto dall'API).</p>
+      </div>
     </div>
-    <div>
-      <h3>Indice di forma <small class="muted">· stima</small></h3>
-      <p class="score-verdict {{ tone }}">{{ data.score.label }}</p>
-      <p class="muted" style="margin:.2rem 0 0">Calcolato da HRV, FC a riposo,
-        sonno e SpO₂ rispetto alla tua media recente — non è il punteggio
-        proprietario di Fitbit (non esposto dall'API).</p>
-    </div>
+    {% if data.score_series and data.score_series|length > 2 %}
+    <canvas id="scoreChart" height="90" style="margin-top:.8rem"></canvas>
+    {% endif %}
   </section>
   {% endif %}
 
@@ -95,7 +102,12 @@
   {% if data.sleep %}
   {% set last = data.sleep[-1] %}
   <section class="card">
-    <h3>Sonno — ultima notte ({{ last.date }})</h3>
+    <div class="card-head">
+      <h3>Sonno — ultima notte ({{ last.date }})</h3>
+      {% if data.sleep_avg_min %}<span class="muted">media periodo:
+        <strong>{{ (data.sleep_avg_min // 60) }}h {{ "%02d"|format(data.sleep_avg_min % 60) }}m</strong>
+        · {{ data.sleep|length }} notti</span>{% endif %}
+    </div>
     <section class="kpi-row">
       <div class="kpi"><span class="kpi-value">{{ (last.asleep_min // 60) }}h {{ "%02d"|format(last.asleep_min % 60) }}m</span><span class="kpi-label">dormito</span></div>
       <div class="kpi"><span class="kpi-value">{{ last.bedtime }} → {{ last.wake }}</span><span class="kpi-label">a letto</span></div>
@@ -290,6 +302,22 @@ document.querySelectorAll("canvas[data-series]").forEach(c => {
   const m = k.startsWith("body_") ? BODY[k.slice(5)] : METRICS[k];
   if (m && m.series.length) lineChart(c, m.series, COLORS[k] || "#0a6ebd");
 });
+
+// wellness score history (0-100)
+const SCORE_SERIES = {{ data.score_series | default([]) | tojson }};
+const scoreCanvas = document.getElementById("scoreChart");
+if (scoreCanvas && SCORE_SERIES.length > 2) {
+  new Chart(scoreCanvas, {
+    type: "line",
+    data: { labels: SCORE_SERIES.map(p => p.date.slice(5)),
+            datasets: [{ label: "Indice di forma", data: SCORE_SERIES.map(p => p.value),
+                         borderColor: "#4c8dff", backgroundColor: "#4c8dff22",
+                         pointRadius: 2, borderWidth: 1.8, tension: .3, fill: true }] },
+    options: { plugins: { legend: { display: false } },
+               scales: { x: { ticks: { maxTicksLimit: 8 } }, y: { min: 0, max: 100 } },
+               animation: false, responsive: true },
+  });
+}
 
 // Stacked sleep stages per night
 const sleepCanvas = document.getElementById("sleepChart");

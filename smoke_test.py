@@ -839,6 +839,22 @@ frag_nights, _ = _split_sleep([
 assert len(frag_nights) == 1 and frag_nights[0]["asleep_min"] == 400
 print("sleep dedupe: one night per date OK")
 
+# --- timezone: Google returns UTC ("Z"), shown/classified in local time ---
+_utc = _parse_sleep_point(_sleep_pt("2026-07-15T21:14:00Z", "2026-07-16T05:04:00Z", 430))
+assert _utc and _utc["bedtime"] == "23:14" and _utc["wake"] == "07:04", _utc  # Rome +2
+assert _utc["date"] == "2026-07-15"
+print("timezone: UTC sleep shown in local time OK")
+
+# --- wellness score history + average over the window ---
+from app.google_health import _wellness_series
+def _score_ser(vals, d0=10):
+    return [{"date": f"2026-07-{d0 + i:02d}", "value": v} for i, v in enumerate(vals)]
+_ws = _wellness_series({"hrv": {"series": _score_ser([60, 62, 58, 65, 70, 68, 72])},
+                        "resting_hr": {"series": _score_ser([50, 49, 51, 48, 47, 50, 46])}}, [])
+assert len(_ws) >= 3 and all(0 <= p["value"] <= 100 for p in _ws), _ws
+assert _ws[-1]["date"] == "2026-07-16"
+print(f"wellness score history OK ({len(_ws)} giorni, ultimo {_ws[-1]['value']})")
+
 # --- same-day sport guard for merging a manual workout with a Google exercise ---
 from app.google_health import _sameday_sport_ok, _sport_family, _sport_label
 from app.main import sport_icon

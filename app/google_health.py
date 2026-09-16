@@ -18,6 +18,20 @@ from .db import GoogleToken, engine
 
 logger = logging.getLogger(__name__)
 
+
+def _local_tz():
+    """The configured local timezone (Google returns UTC). Falls back to a fixed
+    +1h offset if the tz database isn't available, so display never crashes."""
+    from datetime import timedelta, timezone
+    try:
+        from zoneinfo import ZoneInfo
+        return ZoneInfo(settings.timezone)
+    except Exception:  # noqa: BLE001 - missing tzdata / bad name
+        return timezone(timedelta(hours=1))
+
+
+LOCAL_TZ = _local_tz()
+
 AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
 BASE_URL = "https://health.googleapis.com/v4"
@@ -703,7 +717,7 @@ async def _body_series(dtype: str, wrapper: str, value_key: str,
         if val is None or not ts:
             continue
         try:
-            date = dt.fromisoformat(ts.replace("Z", "+00:00")).strftime("%Y-%m-%d")
+            date = dt.fromisoformat(ts.replace("Z", "+00:00")).astimezone(LOCAL_TZ).strftime("%Y-%m-%d")
             series.append({"date": date, "value": round(float(val) * scale, decimals)})
         except (TypeError, ValueError):
             continue
@@ -743,8 +757,9 @@ def _parse_sleep_point(p: dict) -> dict | None:
     if not start or not end:
         return None
     try:
-        a = dt.fromisoformat(start.replace("Z", "+00:00"))
-        b = dt.fromisoformat(end.replace("Z", "+00:00"))
+        # Google returns UTC ("…Z"); show and classify in local time
+        a = dt.fromisoformat(start.replace("Z", "+00:00")).astimezone(LOCAL_TZ)
+        b = dt.fromisoformat(end.replace("Z", "+00:00")).astimezone(LOCAL_TZ)
     except (TypeError, ValueError):
         return None
     total_min = round((b - a).total_seconds() / 60)
@@ -898,6 +913,31 @@ def _wellness(metrics: dict, sleep: list) -> dict | None:
     return {"score": score, "label": label, "n_inputs": len(scored)}
 
 
+def _wellness_series(metrics: dict, nights: list) -> list[dict]:
+    """Daily wellness score over the window (same blend as _wellness, but scored
+    at each day vs the values up to that day) — for the history chart + average."""
+    sources = []
+    if "hrv" in metrics:
+        sources.append((metrics["hrv"]["series"], True, 0.35))
+    if "resting_hr" in metrics:
+        sources.append((metrics["resting_hr"]["series"], False, 0.30))
+    if nights and len(nights) >= 5:
+        sources.append(([{"date": n["date"], "value": n["asleep_min"]} for n in nights], True, 0.25))
+    if "spo2" in metrics:
+        sources.append((metrics["spo2"]["series"], True, 0.10))
+    if not sources:
+        return []
+    dates = sorted({p["date"] for series, _, _ in sources for p in series})
+    out = []
+    for d in dates:
+        parts = [(sc, w) for series, hib, w in sources
+                 if (sc := _score_one([p for p in series if p["date"] <= d], hib)) is not None]
+        if parts:
+            tw = sum(w for _, w in parts)
+            out.append({"date": d, "value": round(sum(sc * w for sc, w in parts) / tw)})
+    return out
+
+
 async def fetch_health_overview(start_date=None, end_date=None) -> dict:
     """Aggregate the daily health metrics, body composition and sleep for the
     window [start_date, end_date] (dates; default last 30 days). Missing
@@ -974,5 +1014,14 @@ async def fetch_health_overview(start_date=None, end_date=None) -> dict:
     for key, metric in out["body"].items():
         _annotate_trend(metric, key)
     out["score"] = _wellness(out["metrics"], out["sleep"])
+    # score history + average over the window
+    out["score_series"] = _wellness_series(out["metrics"], out["sleep"])
+    if out["score_series"]:
+        out["score_avg"] = round(sum(p["value"] for p in out["score_series"])
+                                 / len(out["score_series"]))
+    # average sleep over the window's nights
+    if out["sleep"]:
+        out["sleep_avg_min"] = round(sum(n["asleep_min"] for n in out["sleep"])
+                                     / len(out["sleep"]))
 
     return out
