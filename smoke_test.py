@@ -824,26 +824,34 @@ print("sleep classification (night / nap / noise) OK")
 
 episodes = [_parse_sleep_point(p) for p in (night_a, nap_15, night_b)]
 nights, naps = _split_sleep([e for e in episodes if e], days=7)
-# the nap shares the 15th with night B but must NOT replace it
-assert [n["date"] for n in nights] == ["2026-07-14", "2026-07-15"]
-assert nights[-1]["asleep_min"] == 445  # last night is night B, not the 95' nap
+# nights are dated by WAKE day: A wakes 15th, B wakes 16th (no collision)
+assert [n["date"] for n in nights] == ["2026-07-15", "2026-07-16"]
+assert nights[-1]["asleep_min"] == 445  # last night is night B
 assert "kind" not in nights[-1]         # internal tag stripped
 assert [n["date"] for n in naps] == ["2026-07-15"] and naps[0]["asleep_min"] == 95
 print("sleep split: nap kept for recovery, night preserved OK")
 
-# a night split into two records on the same date collapses to one (the longest)
+# two records waking the SAME day (a fragmented night) collapse to one (longest)
 frag_nights, _ = _split_sleep([
-    _parse_sleep_point(_sleep_pt("2026-07-14T21:30:00+02:00", "2026-07-14T23:00:00+02:00", 85)),
-    _parse_sleep_point(_sleep_pt("2026-07-14T23:30:00+02:00", "2026-07-15T06:30:00+02:00", 400)),
+    _parse_sleep_point(_sleep_pt("2026-07-15T00:30:00+02:00", "2026-07-15T03:00:00+02:00", 150)),
+    _parse_sleep_point(_sleep_pt("2026-07-15T03:30:00+02:00", "2026-07-15T07:00:00+02:00", 205)),
 ], days=7)
-assert len(frag_nights) == 1 and frag_nights[0]["asleep_min"] == 400
+assert len(frag_nights) == 1 and frag_nights[0]["asleep_min"] == 205
 print("sleep dedupe: one night per date OK")
 
 # --- timezone: Google returns UTC ("Z"), shown/classified in local time ---
 _utc = _parse_sleep_point(_sleep_pt("2026-07-15T21:14:00Z", "2026-07-16T05:04:00Z", 430))
 assert _utc and _utc["bedtime"] == "23:14" and _utc["wake"] == "07:04", _utc  # Rome +2
-assert _utc["date"] == "2026-07-15"
+assert _utc["date"] == "2026-07-16"     # dated by wake day
 print("timezone: UTC sleep shown in local time OK")
+
+# --- no gaps: a night before midnight and one after keep separate dates ---
+# (bed 27th 00:11 wakes 27th; bed 27th 23:57 wakes 28th) -> two distinct nights
+_g1 = _parse_sleep_point(_sleep_pt("2026-07-27T00:11:00+02:00", "2026-07-27T05:40:00+02:00", 320))
+_g2 = _parse_sleep_point(_sleep_pt("2026-07-27T23:57:00+02:00", "2026-07-28T07:11:00+02:00", 430))
+_gn, _ = _split_sleep([_g1, _g2], days=7)
+assert [n["date"] for n in _gn] == ["2026-07-27", "2026-07-28"], _gn  # both kept, no drop
+print("sleep dating by wake day: consecutive nights not merged OK")
 
 # --- wellness score history + average over the window ---
 from app.google_health import _wellness_series

@@ -787,9 +787,13 @@ def _parse_sleep_point(p: dict) -> dict | None:
     if asleep is None:
         asleep = sum(stages_min.get(k, 0) for k in ("LIGHT", "REM", "DEEP", "ASLEEP"))
     asleep = round(float(asleep))
+    # A night belongs to the day you WAKE (end time), like Fitbit/Google: bedtime
+    # drifts across midnight, so dating by start collides two real nights on one
+    # day (dropping one) and leaves gaps. Naps stay on their own (start) day.
+    day = (b if kind == "night" else a).strftime("%Y-%m-%d")
     return {
         "kind": kind,
-        "date": a.strftime("%Y-%m-%d"),
+        "date": day,
         "bedtime": a.strftime("%H:%M"),
         "wake": b.strftime("%H:%M"),
         "total_min": total_min,
