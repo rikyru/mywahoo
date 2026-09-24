@@ -698,16 +698,21 @@ def _index_climbs(session, w: Workout) -> None:
 
 def _ftp_series(window_days: int = 42) -> list[dict]:
     """Estimated FTP over time: per ride 0.95×best-20min power, plus a rolling
-    6-week best (the "current eFTP" — rises only when you beat your recent best)."""
+    6-week eFTP. Robust: drop rides whose 20-min estimate is physiologically
+    implausible (> ceiling W/kg) and reject a lone spike in the rolling best."""
     with Session(engine) as session:
         rides = session.exec(select(Workout).where(Workout.best20_w != None)  # noqa: E711
                              .order_by(Workout.start_date)).all()
-    pts = [(w.start_date.date(), w.best20_w) for w in rides if w.best20_w]
+    ceiling = (profilemod.load().get("weight_kg") or cyclingmod.DEFAULT_RIDER_KG) \
+        * cyclingmod.FTP_WKG_CEILING
+    pts = [(w.start_date.date(), w.best20_w) for w in rides
+           if w.best20_w and w.best20_w <= ceiling]
     out = []
     for d, b in pts:
         lo = d - timedelta(days=window_days)
-        best = max(b2 for d2, b2 in pts if lo <= d2 <= d)
-        out.append({"date": d.isoformat(), "ride": round(b * 0.95), "ftp": round(best * 0.95)})
+        best = cyclingmod.robust_best([b2 for d2, b2 in pts if lo <= d2 <= d])
+        out.append({"date": d.isoformat(), "ride": round(b * 0.95),
+                    "ftp": round(best * 0.95)})
     return out
 
 

@@ -776,7 +776,17 @@ print("custom segment from map clicks (snapped, order-safe) OK")
 assert cycling.estimate_ftp([250, 200, 260]) == round(260 * 0.95)   # best 20' × 0.95
 assert cycling.estimate_ftp([]) is None
 assert cycling.best_rolling_avg([0, 1, 2, 3], [10, 20, 30, 40], 2) == 30  # best 2s window
-print("FTP proxy + rolling best OK")
+# robust_best: drop a lone spike (>30% above the 2nd) when there are >=4 rides
+assert cycling.robust_best([300, 200, 195, 190]) == 200   # 300 is an artifact -> take 200
+assert cycling.robust_best([210, 208, 205, 200]) == 210   # top not an outlier -> keep it
+assert cycling.robust_best([260, 250, 240]) == 260        # <4 rides -> keep max
+assert cycling.robust_best([]) is None
+# estimated power is capped per sample (no GPS-artifact spikes)
+_spike = cycling.estimate_power_series(
+    {"t": list(range(60)), "speed": [3.0] * 30 + [80.0] * 30,  # absurd 80 m/s burst
+     "alt": [100.0] * 60, "latlng": []}, 84.0)
+assert _spike and max(_spike) <= cycling.POWER_CAP_W
+print("FTP robustness: capped power + outlier-rejecting eFTP OK")
 
 # --- import grace: watch-only activities (no Wahoo twin) shouldn't wait 12h ---
 from datetime import datetime as _dtg, timedelta as _tdg

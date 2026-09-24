@@ -18,6 +18,8 @@ DEFAULT_RIDER_KG = 75.0
 CRR = 0.005            # rolling resistance, road tyre on asphalt
 CDA = 0.32             # drag area, amateur on the hoods
 RHO = 1.225            # air density at sea level
+POWER_CAP_W = 1500.0   # per-sample ceiling: above this it's a GPS artifact, not pedalling
+FTP_WKG_CEILING = 6.0  # 20-min power above ~6 W/kg without a meter isn't credible
 
 
 def _fill(xs: list) -> list[float]:
@@ -72,7 +74,8 @@ def estimate_power_series(streams: dict, mass_kg: float,
     """Per-sample estimated power (W), aligned with streams['t']. Coasting/braking
     and stopped samples read 0 (no pedalling)."""
     t = streams.get("t") or []
-    speed = _fill(streams.get("speed") or [])
+    # smooth speed too: raw GPS jitter is cubed in the aero term and would spike power
+    speed = _smooth(_fill(streams.get("speed") or []), 5)
     alt = _smooth(_fill(streams.get("alt") or []), 7)
     if len(t) < 10 or len(speed) < 10 or len(alt) < 10:
         return []
@@ -89,8 +92,19 @@ def estimate_power_series(streams: dict, mass_kg: float,
         p = (mass_kg * G * math.sin(theta) * v          # gravity
              + mass_kg * G * crr * math.cos(theta) * v  # rolling
              + 0.5 * rho * cda * v ** 3)                # aero
-        out[i] = max(0.0, p)
+        out[i] = min(POWER_CAP_W, max(0.0, p))          # cap kills residual artifacts
     return out
+
+
+def robust_best(values: list) -> float | None:
+    """Best value, but drop a lone spike far above the rest (an artifact): with
+    >=4 samples, if the top is >30% above the second, take the second."""
+    vals = sorted((v for v in values if v), reverse=True)
+    if not vals:
+        return None
+    if len(vals) >= 4 and vals[0] > vals[1] * 1.3:
+        return vals[1]
+    return vals[0]
 
 
 def best_rolling_avg(t: list, values: list, window_s: float) -> float | None:
