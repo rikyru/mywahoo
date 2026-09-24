@@ -195,6 +195,8 @@ class Workout(SQLModel, table=True):
     manual: bool = False                 # created by the user (not imported)
     notes: str = ""                      # free-text description (manual/home workouts)
     climbs_indexed: bool = False         # climbs already detected+stored (ClimbEffort)
+    best20_w: Optional[float] = None     # best 20-min power (real or estimated) for the
+                                         # FTP-over-time trend; computed when indexing
     rpe: Optional[float] = None          # 1-10 perceived effort: estimated by the AI
                                          # from `notes` (kept apart from avg_hr, which
                                          # must stay measured data), used for the load
@@ -256,7 +258,8 @@ _MIGRATIONS = {
     "routeassessment": [("route_json", "TEXT DEFAULT '{}'"),
                         ("sport", "TEXT DEFAULT 'Bici'")],
     "workout": [("manual", "INTEGER DEFAULT 0"), ("notes", "TEXT DEFAULT ''"),
-                ("rpe", "REAL"), ("climbs_indexed", "INTEGER DEFAULT 0")],
+                ("rpe", "REAL"), ("climbs_indexed", "INTEGER DEFAULT 0"),
+                ("best20_w", "REAL")],
     "plansession": [("conversation_id", "INTEGER")],
     "trainingplan": [("conversation_id", "INTEGER")],
     "climbeffort": [("kind", "TEXT DEFAULT 'climb'"), ("path_json", "TEXT DEFAULT '[]'")],

@@ -177,6 +177,21 @@ with TestClient(app) as client:
     assert "edit_segment=" in r.text and "Ridisegna" in r.text
     print("custom segment: create + rename + redraw (map edit, source-less OK)")
 
+    # --- FTP over time: per-ride estimate + rolling 6-week eFTP ---
+    with Session(engine) as s:
+        s.add(Workout(id=8001, sport="Cycling", start_date=datetime(2025, 3, 1),
+                      best20_w=200, has_fit=True))
+        s.add(Workout(id=8002, sport="Cycling", start_date=datetime(2025, 3, 25),
+                      best20_w=260, has_fit=True))   # new best
+        s.add(Workout(id=8003, sport="Cycling", start_date=datetime(2025, 3, 30),
+                      best20_w=210, has_fit=True))
+        s.commit()
+    from app.main import _ftp_series
+    fs = [p for p in _ftp_series() if p["date"].startswith("2025-03")]
+    assert [p["ftp"] for p in fs] == [190, 247, 247], fs   # eFTP = 0.95×rolling max
+    assert [p["ride"] for p in fs] == [190, 247, 200], fs  # per-ride 0.95×best20
+    print("FTP trend: per-ride estimate + rolling eFTP OK")
+
     # --- calendar + training plans ---
     from app.db import ChatMessage, PlanSession, TrainingPlan
     with Session(engine) as s:

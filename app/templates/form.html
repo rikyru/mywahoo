@@ -44,6 +44,20 @@
     (positivo = scarico/fresco, molto negativo = affaticato). Carico stimato dalla FC.</p>
 </section>
 
+{% if ftp_series_json != '[]' %}
+<section class="card">
+  <div class="card-head">
+    <h3>FTP stimata nel tempo</h3>
+    {% if ftp_now %}<span class="seg-pr">~{{ ftp_now }} W</span>{% endif %}
+  </div>
+  <canvas id="ftpChart" height="120"></canvas>
+  <p class="muted">La linea è l'<strong>eFTP</strong> (miglior 20′ stimato dal GPS ×0.95 sulle
+    ultime 6 settimane): sale solo quando batti il tuo massimo recente, così vedi se
+    migliori. I puntini sono la stima della <strong>singola uscita</strong> — bassi se quel
+    giorno non hai spinto forte. Senza misuratore di potenza è una stima, non una misura.</p>
+</section>
+{% endif %}
+
 <section class="card">
   <div class="card-head">
     <h3>Commento AI</h3>
@@ -91,6 +105,25 @@ new Chart(document.getElementById("formChart"), {
     scales: { x: { ticks: { maxTicksLimit: 10, callback: function(v,i){ const d=S[i]?S[i].date:''; return d.slice(0,7);} } } },
     animation: false, responsive: true },
 });
+
+const FTP = {{ ftp_series_json | safe }};
+const ftpCanvas = document.getElementById("ftpChart");
+if (ftpCanvas && FTP.length) {
+  new Chart(ftpCanvas, {
+    data: { labels: FTP.map(p => p.date.slice(0, 7)),
+      datasets: [
+        { type: "line", label: "eFTP (6 settimane)", data: FTP.map(p => p.ftp),
+          borderColor: "#4c8dff", backgroundColor: "rgba(76,141,255,.15)", fill: true,
+          pointRadius: 0, borderWidth: 2.4, tension: .2 },
+        { type: "scatter", label: "stima per uscita", data: FTP.map(p => p.ride),
+          borderColor: "#8a97a9", backgroundColor: "#8a97a9", pointRadius: 2.5 },
+      ] },
+    options: { plugins: { legend: { position: "bottom" } },
+      scales: { x: { ticks: { maxTicksLimit: 10 } },
+                y: { title: { display: true, text: "watt" } } },
+      animation: false, responsive: true },
+  });
+}
 </script>
 {% endif %}
 {% endblock %}

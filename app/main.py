@@ -684,8 +684,31 @@ def _index_climbs(session, w: Workout) -> None:
     # also time this ride on every user-defined segment
     for seg in session.exec(select(CustomSegment)).all():
         _match_custom(session, seg, w, streams)
+    # best 20-min power (real if a power meter, else estimated) for the FTP trend
+    if streams and streams.get("t"):
+        power = cyclingmod._fill(streams.get("power") or [])
+        if not (w.avg_power and any(power)):
+            power = cyclingmod.estimate_power_series(
+                streams, cyclingmod.rider_mass(profilemod.load().get("weight_kg")))
+        b = cyclingmod.best_rolling_avg(streams["t"], power, 1200) if power else None
+        w.best20_w = round(b) if b else None
     w.climbs_indexed = True
     session.add(w)
+
+
+def _ftp_series(window_days: int = 42) -> list[dict]:
+    """Estimated FTP over time: per ride 0.95×best-20min power, plus a rolling
+    6-week best (the "current eFTP" — rises only when you beat your recent best)."""
+    with Session(engine) as session:
+        rides = session.exec(select(Workout).where(Workout.best20_w != None)  # noqa: E711
+                             .order_by(Workout.start_date)).all()
+    pts = [(w.start_date.date(), w.best20_w) for w in rides if w.best20_w]
+    out = []
+    for d, b in pts:
+        lo = d - timedelta(days=window_days)
+        best = max(b2 for d2, b2 in pts if lo <= d2 <= d)
+        out.append({"date": d.isoformat(), "ride": round(b * 0.95), "ftp": round(best * 0.95)})
+    return out
 
 
 def _match_custom(session, seg: CustomSegment, w: Workout, streams=None) -> None:
@@ -733,16 +756,21 @@ def _fitness_series() -> tuple[list, dict]:
 def form_page(request: Request, months: str = "6"):
     if months not in FORM_MONTHS:
         months = "6"
+    _ensure_climbs_indexed()          # also fills best20_w for the FTP trend
     series, summary = _fitness_series()
+    ftp_series = _ftp_series()
     shown = series
     if FORM_MONTHS[months] and series:
         cutoff = (date.today() - timedelta(days=FORM_MONTHS[months] * 30)).isoformat()
         shown = [p for p in series if p["date"] >= cutoff]
+        ftp_series = [p for p in ftp_series if p["date"] >= cutoff]
     with Session(engine) as session:
         insight = session.get(PeriodSummary, f"form:{date.today().isoformat()}")
     return templates.TemplateResponse(request, "form.html", {
         "months": months, "windows": FORM_MONTHS, "summary": summary,
         "series_json": json.dumps(shown),
+        "ftp_series_json": json.dumps(ftp_series),
+        "ftp_now": ftp_series[-1]["ftp"] if ftp_series else None,
         "insight_html": md.markdown(insight.content, extensions=["tables"]) if insight else None,
         "insight_date": insight.created_at if insight else None,
         "error": request.query_params.get("error"),
