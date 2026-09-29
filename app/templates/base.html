@@ -45,6 +45,19 @@
       });
     })();
   </script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
+  <script>
+    // Render AI markdown (chat bubbles etc.) to HTML, neutralizing raw HTML first
+    // (markdown syntax doesn't use < >). Falls back to a minimal formatter.
+    window.renderMd = function (text) {
+      const t = String(text == null ? "" : text);
+      if (window.marked && marked.parse) {
+        return marked.parse(t.replace(/</g, "&lt;").replace(/>/g, "&gt;"), { breaks: true });
+      }
+      return t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+              .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>").replace(/\n/g, "<br>");
+    };
+  </script>
   {% block scripts %}{% endblock %}
 </body>
 </html>

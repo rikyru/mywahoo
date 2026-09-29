@@ -126,7 +126,9 @@ const PLAN_CHAT = {{ plan_chat_json | safe }};
 function bubble(log, role, text) {
   const d = document.createElement("div");
   d.className = "chat-msg chat-" + role;
-  d.textContent = text;                  // never innerHTML: the AI writes this
+  // AI markdown -> HTML (renderMd neutralizes raw HTML); user text stays plain
+  if (role === "assistant") d.innerHTML = window.renderMd(text);
+  else d.textContent = text;
   log.appendChild(d);
   log.scrollTop = log.scrollHeight;
   return d;
@@ -188,7 +190,7 @@ document.getElementById("planChatForm").addEventListener("submit", async e => {
     });
     const d = await r.json();
     if (d.error) { thinking.textContent = "⚠️ " + d.error; return; }
-    thinking.textContent = d.reply || "(nessuna risposta)";
+    thinking.innerHTML = window.renderMd(d.reply || "(nessuna risposta)");
     renderPlanActions(d.actions);
   } catch (ex) {
     thinking.textContent = "⚠️ errore di rete";
@@ -255,7 +257,7 @@ document.querySelectorAll(".chat-form").forEach(form => {
       });
       const d = await r.json();
       if (d.error) { thinking.textContent = "⚠️ " + d.error; return; }
-      thinking.textContent = d.reply || "(nessuna risposta)";
+      thinking.innerHTML = window.renderMd(d.reply || "(nessuna risposta)");
       if (d.proposal) showProposal(sid, d.proposal, d.planned_load);
     } catch (ex) {
       thinking.textContent = "⚠️ errore di rete";

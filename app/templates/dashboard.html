@@ -257,7 +257,8 @@ let coachConv = null;
 function coachBubble(role, text) {
   const d = document.createElement("div");
   d.className = "chat-msg chat-" + role;
-  d.textContent = text;
+  if (role === "assistant") d.innerHTML = window.renderMd(text);
+  else d.textContent = text;
   coachLog.appendChild(d);
   coachLog.scrollTop = coachLog.scrollHeight;
   return d;
@@ -307,7 +308,7 @@ document.getElementById("coachForm").addEventListener("submit", async (e) => {
       body: JSON.stringify({ message: text, conversation_id: coachConv, ...COACH_WIN }) });
     const d = await r.json();
     if (d.error) { thinking.textContent = "⚠️ " + d.error; return; }
-    thinking.textContent = d.reply || "(nessuna risposta)";
+    thinking.innerHTML = window.renderMd(d.reply || "(nessuna risposta)");
     coachConv = d.conversation_id;
     if (d.plan_request) renderPlanReq(d.plan_request);
   } catch (ex) { thinking.textContent = "⚠️ errore di rete"; }

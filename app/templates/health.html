@@ -238,7 +238,8 @@ let conversationId = null;   // server assigns one on the first message
 function addBubble(role, text) {
   const div = document.createElement("div");
   div.className = "chat-msg chat-" + role;
-  div.textContent = text;
+  if (role === "assistant") div.innerHTML = window.renderMd(text);
+  else div.textContent = text;
   chatLog.appendChild(div);
   chatLog.scrollTop = chatLog.scrollHeight;
   return div;
@@ -263,7 +264,7 @@ chatForm.addEventListener("submit", async (e) => {
     });
     const data = await r.json();
     if (data.reply) {
-      thinking.textContent = data.reply;
+      thinking.innerHTML = window.renderMd(data.reply);
       conversationId = data.conversation_id;
     } else {
       thinking.textContent = "⚠️ " + (data.error || "errore");

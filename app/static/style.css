@@ -192,7 +192,21 @@ a.chip:hover { background: var(--card-hover); text-decoration: none; }
 .chat-user { align-self: flex-end; background: var(--accent); color: #06101f;
              border-bottom-right-radius: 3px; }
 .chat-assistant { align-self: flex-start; background: var(--bg-elev);
-                  border: 1px solid var(--border); border-bottom-left-radius: 3px; }
+                  border: 1px solid var(--border); border-bottom-left-radius: 3px;
+                  white-space: normal; }   /* rendered markdown handles its own layout */
+/* tame AI markdown inside a chat bubble */
+.chat-assistant > :first-child { margin-top: 0; }
+.chat-assistant > :last-child { margin-bottom: 0; }
+.chat-assistant p { margin: .4rem 0; }
+.chat-assistant h1, .chat-assistant h2, .chat-assistant h3, .chat-assistant h4 {
+  font-size: 1rem; font-weight: 600; margin: .5rem 0 .25rem; }
+.chat-assistant ul, .chat-assistant ol { margin: .3rem 0; padding-left: 1.2rem; }
+.chat-assistant li { margin: .15rem 0; }
+.chat-assistant code { background: rgba(255,255,255,.07); padding: .05rem .3rem;
+  border-radius: 4px; font-size: .88em; }
+.chat-assistant pre { white-space: pre-wrap; word-break: break-word; }
+.chat-assistant table { border-collapse: collapse; }
+.chat-assistant td, .chat-assistant th { border: 1px solid var(--border); padding: .3rem .5rem; }
 /* saved conversation review: full-width bubbles, no height cap */
 .chat-thread { display: flex; flex-direction: column; gap: .7rem; }
 .chat-thread .chat-msg { max-width: 100%; }
