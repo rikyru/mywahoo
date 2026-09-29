@@ -1089,27 +1089,13 @@ def plans_page(request: Request):
         "error": request.query_params.get("err")})
 
 
-@app.post("/plans/generate", dependencies=[Depends(require_auth)])
-async def plans_generate(goal: str = Form(""), n_days: str = Form("7"),
-                         start: str = Form("")):
-    goal = goal.strip()
-    if not goal:
-        return RedirectResponse(f"/plans?{urlencode({'err': 'Descrivi un obiettivo'})}",
-                                status_code=303)
-    try:
-        n = max(1, min(60, int(n_days)))
-    except ValueError:
-        n = 7
-    start_d = _parse_date(start) or date.today()
-    try:
-        data = await anthropic_client.generate_plan(goal, n, start_d.isoformat())
-    except anthropic_client.AnthropicError as e:
-        return RedirectResponse(f"/plans?{urlencode({'err': str(e)})}", status_code=303)
+async def _generate_and_store_plan(goal: str, n_days: int, start_d) -> int | None:
+    """Ask the AI for a plan and persist it as TrainingPlan + PlanSessions.
+    Returns the plan id, or None if the AI gave nothing usable."""
+    data = await anthropic_client.generate_plan(goal, n_days, start_d.isoformat())
     sessions = data.get("sessions") or []
     if not sessions:
-        return RedirectResponse(
-            f"/plans?{urlencode({'err': 'AI non ha restituito un piano valido'})}",
-            status_code=303)
+        return None
     with Session(engine) as session:
         plan = TrainingPlan(title=(data.get("title") or goal)[:200], goal=goal)
         session.add(plan)
@@ -1124,7 +1110,29 @@ async def plans_generate(goal: str = Form(""), n_days: str = Form("7"),
                 duration_min=int(s.get("durata_min") or 0),
                 description=str(s.get("description", ""))))
         session.commit()
-        pid = plan.id
+        return plan.id
+
+
+@app.post("/plans/generate", dependencies=[Depends(require_auth)])
+async def plans_generate(goal: str = Form(""), n_days: str = Form("7"),
+                         start: str = Form("")):
+    goal = goal.strip()
+    if not goal:
+        return RedirectResponse(f"/plans?{urlencode({'err': 'Descrivi un obiettivo'})}",
+                                status_code=303)
+    try:
+        n = max(1, min(60, int(n_days)))
+    except ValueError:
+        n = 7
+    start_d = _parse_date(start) or date.today()
+    try:
+        pid = await _generate_and_store_plan(goal, n, start_d)
+    except anthropic_client.AnthropicError as e:
+        return RedirectResponse(f"/plans?{urlencode({'err': str(e)})}", status_code=303)
+    if not pid:
+        return RedirectResponse(
+            f"/plans?{urlencode({'err': 'AI non ha restituito un piano valido'})}",
+            status_code=303)
     return RedirectResponse(f"/plans/{pid}", status_code=303)
 
 
@@ -1808,6 +1816,85 @@ async def analyze_period(win: str = Form("30"), end: str = Form(""),
                                       model=anthropic_client.effective_model()))
         session.commit()
     return RedirectResponse(redirect, status_code=303)
+
+
+@app.post("/analyze/chat", dependencies=[Depends(require_auth)])
+async def analyze_chat(request: Request):
+    """Coach chat on the dashboard: grounded in the window's training + recovery +
+    nutrition, persisted (Conversation). Can propose a plan the client then
+    generates. Client sends {message, conversation_id?, win/end/from/to}."""
+    try:
+        body = await request.json()
+    except json.JSONDecodeError:
+        return JSONResponse({"error": "richiesta non valida"}, status_code=400)
+    msg = str(body.get("message", "")).strip()[:2000]
+    if not msg:
+        return JSONResponse({"error": "nessuna domanda"}, status_code=400)
+
+    conv_id = body.get("conversation_id")
+    with Session(engine) as session:
+        conv = session.get(Conversation, conv_id) if conv_id else None
+        if conv is None:
+            conv = Conversation(title=f"Coach · {msg[:50]}"[:60])
+            session.add(conv)
+            session.commit()
+            session.refresh(conv)
+        conv_id = conv.id
+        prior = list(session.exec(select(ChatMessage)
+                                  .where(ChatMessage.conversation_id == conv_id)
+                                  .order_by(ChatMessage.created_at)))
+    history = ([{"role": m.role, "content": m.content} for m in prior]
+               + [{"role": "user", "content": msg}])[-12:]
+
+    window = resolve_window(body.get("win", "30"), body.get("end", ""),
+                            body.get("from", ""), body.get("to", ""))
+    try:  # recovery/nutrition are best-effort; the coach still works without them
+        data = await google_health.fetch_health_overview(window["start"].date(),
+                                                         window["end"].date())
+    except google_health.GoogleHealthError:
+        data = {"metrics": {}, "body": {}, "sleep": [], "score": None}
+    with Session(engine) as session:
+        workouts = [w.model_dump(exclude={"raw_summary", "fit_path", "updated_at"})
+                    for w in query_range(session, window["start"], window["end"], None)]
+    nutri = await nutrition.fetch_nutrition(window["start"].date(), window["end"].date())
+    _, form_summary = _fitness_series()
+    try:
+        out = await anthropic_client.coach_chat(data, workouts, history, nutri, form_summary)
+    except anthropic_client.AnthropicError as e:
+        return JSONResponse({"error": str(e)}, status_code=502)
+
+    reply = out.get("risposta") or ""
+    plan_req = out.get("piano_richiesto")
+    stored = reply
+    if plan_req:
+        stored += f"\n\n[Piano proposto] {plan_req.get('obiettivo')} · {plan_req.get('giorni')} giorni"
+    with Session(engine) as session:
+        session.add(ChatMessage(conversation_id=conv_id, role="user", content=msg))
+        session.add(ChatMessage(conversation_id=conv_id, role="assistant", content=stored))
+        c = session.get(Conversation, conv_id)
+        c.updated_at = datetime.utcnow()
+        session.add(c)
+        session.commit()
+    return JSONResponse({"reply": reply, "plan_request": plan_req, "conversation_id": conv_id})
+
+
+@app.post("/analyze/plan", dependencies=[Depends(require_auth)])
+async def analyze_plan(goal: str = Form(""), giorni: str = Form("7")):
+    """Generate + save a plan from the coach chat's proposal (returns its URL)."""
+    goal = goal.strip()
+    if not goal:
+        return JSONResponse({"error": "obiettivo mancante"}, status_code=400)
+    try:
+        n = max(1, min(60, int(giorni)))
+    except (TypeError, ValueError):
+        n = 7
+    try:
+        pid = await _generate_and_store_plan(goal, n, date.today())
+    except anthropic_client.AnthropicError as e:
+        return JSONResponse({"error": str(e)}, status_code=502)
+    if not pid:
+        return JSONResponse({"error": "AI non ha restituito un piano valido"}, status_code=502)
+    return JSONResponse({"plan_id": pid, "url": f"/plans/{pid}"})
 
 
 # ---------------------------------------------------------------- cleanup

@@ -161,6 +161,23 @@
   {% else %}
   <p class="muted">Analizza il carico e l'andamento degli allenamenti del periodo selezionato.</p>
   {% endif %}
+
+  <div class="coach-chat">
+    <div class="card-head">
+      <h3>Continua con il coach</h3>
+      <button class="btn btn-secondary" type="button" id="coachNew">Nuova</button>
+    </div>
+    <p class="muted">Domande sul periodo — allenamenti, <strong>recupero</strong> e
+      <strong>alimentazione</strong> insieme. Puoi anche chiedere di generare un
+      <strong>piano</strong> per la settimana o il mese. La conversazione viene salvata.</p>
+    <div id="coachLog" class="chat-log"></div>
+    <div id="coachPlan"></div>
+    <form id="coachForm" class="chat-input">
+      <input type="text" id="coachMsg" autocomplete="off"
+             placeholder="Es. sto recuperando bene? fammi un piano per la settimana">
+      <button class="btn" type="submit">Invia</button>
+    </form>
+  </div>
 </section>
 
 <section class="card">
@@ -229,6 +246,73 @@ if (window.innerWidth < 640) Chart.defaults.font.size = 13;
 function busy(btn) {
   setTimeout(() => { btn.disabled = true; btn.textContent = "Analisi in corso…"; }, 0);
 }
+
+// ---- coach chat (training + recovery + nutrition, can propose a plan) ----
+const COACH_WIN = { win: "{{ window.win }}", end: "{{ window.end_d | default('') }}",
+                    from: "{{ window.from | default('') }}", to: "{{ window.to | default('') }}" };
+const coachLog = document.getElementById("coachLog");
+const coachPlan = document.getElementById("coachPlan");
+const coachMsg = document.getElementById("coachMsg");
+let coachConv = null;
+function coachBubble(role, text) {
+  const d = document.createElement("div");
+  d.className = "chat-msg chat-" + role;
+  d.textContent = text;
+  coachLog.appendChild(d);
+  coachLog.scrollTop = coachLog.scrollHeight;
+  return d;
+}
+function renderPlanReq(pr) {
+  coachPlan.innerHTML = "";
+  const box = document.createElement("div");
+  box.className = "chat-proposal";
+  const h = document.createElement("div");
+  h.className = "chat-prop-head";
+  h.textContent = "Piano proposto";
+  const p = document.createElement("p");
+  p.className = "muted";
+  p.textContent = `${pr.obiettivo} · ${pr.giorni} giorni`;
+  const btn = document.createElement("button");
+  btn.className = "btn";
+  btn.textContent = "Genera e salva il piano";
+  btn.onclick = async () => {
+    btn.disabled = true; btn.textContent = "Genero il piano…";
+    try {
+      const r = await fetch("/analyze/plan", { method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({ goal: pr.obiettivo, giorni: pr.giorni }) });
+      const d = await r.json();
+      if (d.url) { window.location = d.url; }
+      else { btn.textContent = "⚠️ " + (d.error || "errore"); btn.disabled = false; }
+    } catch (e) { btn.textContent = "⚠️ errore di rete"; btn.disabled = false; }
+  };
+  box.append(h, p, btn);
+  coachPlan.appendChild(box);
+}
+document.getElementById("coachNew").onclick = () => {
+  coachConv = null; coachLog.innerHTML = ""; coachPlan.innerHTML = ""; coachMsg.focus();
+};
+document.getElementById("coachForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const text = coachMsg.value.trim();
+  if (!text) return;
+  coachMsg.value = ""; coachPlan.innerHTML = "";
+  coachBubble("user", text);
+  const thinking = coachBubble("assistant", "…");
+  const btn = e.target.querySelector("button");
+  btn.disabled = true;
+  try {
+    const r = await fetch("/analyze/chat", { method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message: text, conversation_id: coachConv, ...COACH_WIN }) });
+    const d = await r.json();
+    if (d.error) { thinking.textContent = "⚠️ " + d.error; return; }
+    thinking.textContent = d.reply || "(nessuna risposta)";
+    coachConv = d.conversation_id;
+    if (d.plan_request) renderPlanReq(d.plan_request);
+  } catch (ex) { thinking.textContent = "⚠️ errore di rete"; }
+  finally { btn.disabled = false; coachMsg.focus(); }
+});
 // Health card: fetched after render — Google Health takes seconds and must not
 // hold up the page.
 (async () => {

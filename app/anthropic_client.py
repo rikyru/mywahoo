@@ -611,6 +611,50 @@ async def chat_health(overview: dict, workouts: list[dict] | None,
     return await _call_messages(system, history)
 
 
+COACH_CHAT_SYSTEM_PROMPT = """\
+Sei il coach di questo atleta. Rispondi in italiano, conciso e concreto, USANDO i
+dati del periodo forniti sotto: allenamenti con carico, forma (CTL/ATL/TSB),
+metriche di salute/recupero, sonno, e alimentazione (aderenza, kcal/macro dei
+pasti tracciati). Puoi discutere allenamento, recupero e cibo insieme, come nella
+scheda salute. Durate del sonno in ore e minuti.
+
+Se l'atleta chiede un PIANO di allenamento (per la settimana, il mese, o un
+obiettivo), NON scrivere il piano nella risposta: riassumi in una frase cosa
+proporresti e imposta "piano_richiesto" coi parametri, così viene generato e
+salvato come piano vero. "giorni": 7 per una settimana, ~28 per un mese, o quanti
+chiesti. "obiettivo": una frase che sintetizza l'obiettivo tenendo conto di forma,
+recupero e storico (es. "costruire fondo dopo settimana scarica, 3 uscite bici").
+
+Rispondi SOLO con JSON valido, senza testo attorno né code fence:
+{"risposta": "risposta conversazionale in Markdown",
+ "piano_richiesto": {"obiettivo": "…", "giorni": intero} }
+Metti "piano_richiesto" SOLO quando l'atleta vuole un piano; altrimenti null.
+Nessun altro testo."""
+
+
+async def coach_chat(overview: dict, workouts: list[dict] | None, history: list[dict],
+                     nutrition: dict | None = None, form: dict | None = None) -> dict:
+    """Grounded coach chat over training + recovery + nutrition. Returns
+    {"risposta": str, "piano_richiesto": {obiettivo, giorni}|None} — the latter
+    lets the caller generate + save a real plan."""
+    import re
+    payload = _health_payload(overview, workouts, nutrition)
+    if form:
+        payload["forma_attuale"] = form
+    system = (COACH_CHAT_SYSTEM_PROMPT + "\n\nDATI DEL PERIODO (JSON):\n"
+              + json.dumps(payload, ensure_ascii=False, default=str))
+    raw = await _call_messages(system, history)
+    m = re.search(r"\{.*\}", raw, re.S)
+    if not m:
+        return {"risposta": raw.strip(), "piano_richiesto": None}
+    try:
+        d = json.loads(m.group(0))
+    except json.JSONDecodeError:
+        return {"risposta": raw.strip(), "piano_richiesto": None}
+    return {"risposta": str(d.get("risposta") or "").strip(),
+            "piano_richiesto": d.get("piano_richiesto") or None}
+
+
 async def list_openai_models() -> list[str]:
     """Chat-capable OpenAI model ids the key can use, for the Settings dropdown."""
     try:

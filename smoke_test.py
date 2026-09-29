@@ -125,7 +125,48 @@ with TestClient(app) as client:
 
     r = client.get("/")
     assert r.status_code == 200 and "Analisi allenamenti" in r.text and "Analizza con AI" in r.text
-    print("dashboard training analysis OK")
+    assert "Continua con il coach" in r.text and 'id="coachForm"' in r.text
+    print("dashboard training analysis + coach chat OK")
+
+    # coach chat: grounded reply, persisted, and a plan proposal the client can build
+    import app.anthropic_client as _ac
+    async def _fake_coach(overview, workouts, history, nutrition=None, form=None):
+        _fake_coach.seen = {"n_workouts": len(workouts or []), "has_form": form is not None}
+        return {"risposta": "Recuperi bene; ecco una settimana.",
+                "piano_richiesto": {"obiettivo": "fondo bici 3 uscite", "giorni": 7}}
+    _real_coach, _ac.coach_chat = _ac.coach_chat, _fake_coach
+    try:
+        r = client.post("/analyze/chat", json={"message": "come sto? fammi un piano settimanale"})
+        assert r.status_code == 200, r.text
+        d = r.json()
+        assert "Recuperi bene" in d["reply"] and d["conversation_id"]
+        assert d["plan_request"]["giorni"] == 7
+        assert _fake_coach.seen["has_form"]        # form (CTL/ATL/TSB) passed to the coach
+        # the turn is saved to a Conversation (reviewable in /conversations)
+        from app.db import Conversation as _Conv, ChatMessage as _CM
+        with Session(engine) as s:
+            conv = s.get(_Conv, d["conversation_id"])
+            assert conv and conv.title.startswith("Coach")
+            msgs = s.exec(select(_CM).where(_CM.conversation_id == d["conversation_id"])).all()
+            assert len(msgs) == 2 and "[Piano proposto]" in msgs[1].content
+    finally:
+        _ac.coach_chat = _real_coach
+    # building the proposed plan creates a real TrainingPlan (generate_plan stubbed)
+    async def _fake_gen(goal, n, start):
+        return {"title": "Settimana fondo", "sessions": [
+            {"date": "2026-07-20", "day": "Lun", "title": "Bici fondo", "sport": "Bici",
+             "durata_min": 90, "description": "z2"}]}
+    _real_gen, _ac.generate_plan = _ac.generate_plan, _fake_gen
+    try:
+        r = client.post("/analyze/plan", data={"goal": "fondo bici", "giorni": "7"},
+                        follow_redirects=False)
+        assert r.status_code == 200 and r.json()["url"].startswith("/plans/")
+        from app.db import TrainingPlan as _TP
+        with Session(engine) as s:
+            assert s.exec(select(_TP).where(_TP.title == "Settimana fondo")).first()
+    finally:
+        _ac.generate_plan = _real_gen
+    print("coach chat: plan proposal -> generated & saved plan OK")
 
     r = client.get("/settings")
     assert r.status_code == 200 and "Motore AI" in r.text

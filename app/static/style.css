@@ -314,6 +314,9 @@ a.chip:hover { background: var(--card-hover); text-decoration: none; }
 .seg-rename { margin: .2rem 0 .6rem; }
 .seg-rename > summary { cursor: pointer; font-size: .85rem; }
 .seg-rename .seg-create { margin-top: .5rem; }
+.coach-chat { margin-top: 1rem; border-top: 1px solid var(--border); padding-top: .8rem; }
+.coach-chat .chat-log:empty { display: none; }
+.coach-chat #coachPlan { margin: .5rem 0; }
 
 .plan-done { margin-top: .6rem; }
 .plan-done > summary { display: inline-block; list-style: none; cursor: pointer; }
