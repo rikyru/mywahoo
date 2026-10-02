@@ -338,6 +338,30 @@ def _energy_series(data: dict | None, nutri: dict | None) -> list[dict]:
             for p in burned]
 
 
+HEALTH_STALE_DAYS = 2   # data not refreshed for longer than this -> warn
+
+
+def _latest_health_date(data: dict) -> str | None:
+    """Freshest date across metrics + sleep — to tell if Google data has stopped."""
+    dates = [s[-1]["date"] for m in (data.get("metrics") or {}).values()
+             if (s := m.get("series")) and s[-1].get("date")]
+    dates += [n["date"] for n in (data.get("sleep") or []) if n.get("date")]
+    return max(dates) if dates else None
+
+
+def _health_stale_days(data: dict) -> int | None:
+    """Days since the freshest Google data, or None if there is none / it's fresh.
+    Only meaningful for the current window (a past window is old by design)."""
+    last = _latest_health_date(data)
+    if not last:
+        return None
+    try:
+        days = (date.today() - date.fromisoformat(last)).days
+    except ValueError:
+        return None
+    return days if days > HEALTH_STALE_DAYS else None
+
+
 @app.get("/health", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
 async def health_page(request: Request, win: str = "30", end: str = ""):
     window = resolve_window(win, end, request.query_params.get("from", ""),
@@ -362,6 +386,8 @@ async def health_page(request: Request, win: str = "30", end: str = ""):
     return templates.TemplateResponse(request, "health.html", {
         "connected": True, "data": data, "window": window, "windows": WINDOWS,
         "nutrition": nutri,
+        "stale_days": _health_stale_days(data) if window["is_current"] else None,
+        "last_data": _latest_health_date(data),
         "energy_json": json.dumps(_energy_series(data, nutri)),
         "insight_html": md.markdown(insight.content, extensions=["tables"]) if insight else None,
         "insight_date": insight.created_at if insight else None,
@@ -1705,6 +1731,8 @@ async def api_health_summary():
     try:
         data = await google_health.fetch_health_overview(
             date.today() - timedelta(days=6), date.today())
+    except google_health.GoogleNotAuthenticatedError:
+        return JSONResponse({"reconnect": True})   # token dead -> prompt re-login
     except google_health.GoogleHealthError as e:
         return JSONResponse({"error": str(e)}, status_code=502)
 
@@ -1722,6 +1750,7 @@ async def api_health_summary():
         "sleep_h": (round(sum(n["asleep_min"] for n in nights) / len(nights) / 60, 1)
                     if nights else None),
         "nights": len(nights),
+        "stale_days": _health_stale_days(data),   # connected but data stopped flowing
     }
     _HEALTH_CACHE["data"] = {"at": now, "payload": payload}
     return JSONResponse(payload)

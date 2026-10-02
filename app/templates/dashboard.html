@@ -323,7 +323,16 @@ document.getElementById("coachForm").addEventListener("submit", async (e) => {
     const r = await fetch("/api/health/summary");
     const d = await r.json();
     if (d.error) throw new Error(d.error);
+    if (d.reconnect) {
+      host.innerHTML = `<p class="muted">🔌 Connessione a Google Health scaduta.
+        <a href="/login/google">Ricollega</a></p>`;
+      return;
+    }
     const parts = [];
+    if (d.stale_days) {
+      parts.push(`<p class="gm-warn">⚠️ Dati fermi da ${d.stale_days} giorni —
+        <a href="/login/google">ricollega</a> o controlla le app partner.</p>`);
+    }
     if (d.score) {
       const cls = d.score.score >= 67 ? "gm-good" : d.score.score < 40 ? "gm-warn" : "";
       parts.push(`<div class="glance-state">${esc(d.score.label)}

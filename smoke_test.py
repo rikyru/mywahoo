@@ -249,7 +249,7 @@ with TestClient(app) as client:
         s.refresh(ps)
         sid = ps.id
 
-    r = client.get("/calendar")
+    r = client.get("/calendar?month=" + recent.strftime("%Y-%m"))  # recent may be last month
     assert r.status_code == 200 and "Circuito corpo libero" in r.text
     print("calendar shows planned session OK")
 
@@ -928,6 +928,18 @@ _ws = _wellness_series({"hrv": {"series": _score_ser([60, 62, 58, 65, 70, 68, 72
 assert len(_ws) >= 3 and all(0 <= p["value"] <= 100 for p in _ws), _ws
 assert _ws[-1]["date"] == "2026-07-16"
 print(f"wellness score history OK ({len(_ws)} giorni, ultimo {_ws[-1]['value']})")
+
+# --- stale-data detection: warn when Google data stops refreshing ---
+from app.main import _latest_health_date, _health_stale_days
+from datetime import date as _dd, timedelta as _tdd
+_old = (_dd.today() - _tdd(days=5)).isoformat()
+_data_old = {"metrics": {"hrv": {"series": [{"date": _old, "value": 60}]}}, "sleep": [{"date": _old}]}
+assert _latest_health_date(_data_old) == _old and _health_stale_days(_data_old) == 5
+_fresh = _dd.today().isoformat()
+assert _health_stale_days({"metrics": {"hrv": {"series": [{"date": _fresh, "value": 60}]}},
+                           "sleep": []}) is None          # fresh -> no warning
+assert _health_stale_days({"metrics": {}, "sleep": []}) is None  # no data -> no warning
+print("health staleness detection OK")
 
 # --- same-day sport guard for merging a manual workout with a Google exercise ---
 from app.google_health import _sameday_sport_ok, _sport_family, _sport_label

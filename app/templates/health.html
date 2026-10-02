@@ -59,6 +59,15 @@
   </div>
   {% endif %}
 
+  {% if stale_days %}
+  <div class="alert error">
+    ⚠️ Dati Google fermi da <strong>{{ stale_days }} giorni</strong>
+    (ultimo: {{ last_data }}). Se la connessione è scaduta
+    <a href="/login/google">ricollega OpenFit</a>; altrimenti controlla le
+    <strong>App partner</strong> nell'app Google Health (una fonte potrebbe essersi scollegata).
+  </div>
+  {% endif %}
+
   {# ---- wellness score ---- #}
   {% if data.score %}
   {% set tone = 'good' if data.score.score >= 67 else ('avg' if data.score.score >= 40 else 'bad') %}
