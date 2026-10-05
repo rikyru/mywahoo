@@ -2043,6 +2043,12 @@ def workout_detail(request: Request, workout_id: int):
         climbs = cyclingmod.detect_climbs(streams)
         ftp = _estimated_ftp()
 
+    # Time in HR zones (any sport with a HR stream)
+    hr_zones = []
+    if streams and any(streams.get("hr") or []):
+        rest_hr, max_hr, _ = _hr_anchors()
+        hr_zones = fitmod.hr_zone_distribution(streams, rest_hr, max_hr)
+
     can_segment = bool(streams and streams.get("latlng")
                        and any(p for p in streams["latlng"])
                        and google_health._sport_family(w.sport) == "bike")
@@ -2059,7 +2065,7 @@ def workout_detail(request: Request, workout_id: int):
         "w": w,
         "streams_json": streams_json,
         "merge": merge, "can_segment": can_segment, "edit_seg": edit_seg,
-        "est_power": est_power, "climbs": climbs, "ftp": ftp,
+        "est_power": est_power, "climbs": climbs, "ftp": ftp, "hr_zones": hr_zones,
         "analysis_html": md.markdown(analysis.content, extensions=["tables"]) if analysis else None,
         "analysis_date": analysis.created_at if analysis else None,
         "message": request.query_params.get("msg"),

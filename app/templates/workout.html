@@ -101,6 +101,30 @@
   </table>
 </section>
 
+{% if hr_zones %}
+<section class="card">
+  <h3>Zone di frequenza cardiaca</h3>
+  <div class="hrz-bar">
+    {% for z in hr_zones %}
+    {% if z.pct %}<span class="hrz-seg" style="width: {{ z.pct }}%; background: {{ z.color }}"
+         title="{{ z.label }}: {{ z.pct }}%"></span>{% endif %}
+    {% endfor %}
+  </div>
+  <table class="metrics hrz-table">
+    {% for z in hr_zones %}
+    <tr>
+      <td><span class="hrz-dot" style="background: {{ z.color }}"></span>{{ z.label }}</td>
+      <td class="muted">{{ z.lo_bpm }}–{{ z.hi_bpm }} bpm</td>
+      <td>{{ z.seconds | duration }}</td>
+      <td><strong>{{ z.pct }}%</strong></td>
+    </tr>
+    {% endfor %}
+  </table>
+  <p class="muted">Zone sul tuo <strong>HRR</strong> (riposo→max dal profilo). Regola le
+    ancore in <a href="/settings">Impostazioni</a> se le soglie non ti tornano.</p>
+</section>
+{% endif %}
+
 {% if est_power %}
 <section class="card">
   <div class="card-head">

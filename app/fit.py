@@ -364,6 +364,55 @@ def ai_stats(streams: dict) -> dict:
     return out
 
 
+# 5 heart-rate zones by % of heart-rate reserve (Karvonen), with Italian labels
+HR_ZONES = [
+    (0.00, "Z1 · Recupero", "#4c8dff"),
+    (0.60, "Z2 · Fondo", "#2a9d8f"),
+    (0.70, "Z3 · Medio", "#f59e0b"),
+    (0.80, "Z4 · Soglia", "#fb7185"),
+    (0.90, "Z5 · Massimale", "#d62828"),
+]
+
+
+def hr_zone_distribution(streams: dict, rest_hr: float, max_hr: float) -> list[dict]:
+    """Time spent in each HR zone (by %HRR), as seconds + percentage. Each sample
+    is weighted by its duration (gap to the next). Empty if no usable HR/anchors."""
+    t = streams.get("t") or []
+    hr = streams.get("hr") or []
+    hrr = max_hr - rest_hr
+    if len(t) < 3 or len(hr) < len(t) or hrr <= 0:
+        return []
+    lowers = [z[0] for z in HR_ZONES]
+    secs = [0.0] * len(HR_ZONES)
+    gaps = [t[i + 1] - t[i] for i in range(len(t) - 1)]
+    median_gap = sorted(gaps)[len(gaps) // 2] if gaps else 1.0
+    for i, h in enumerate(hr):
+        if not h:
+            continue
+        frac = (h - rest_hr) / hrr
+        z = 0
+        for j, lo in enumerate(lowers):
+            if frac >= lo:
+                z = j
+        dur = gaps[i] if i < len(gaps) else median_gap
+        if 0 < dur <= median_gap * 10:    # ignore pauses/gaps that would skew the time
+            secs[z] += dur
+    total = sum(secs)
+    if total <= 0:
+        return []
+    out = []
+    for j, (lo, label, color) in enumerate(HR_ZONES):
+        hi = lowers[j + 1] if j + 1 < len(lowers) else 1.0
+        out.append({
+            "label": label, "color": color,
+            "lo_bpm": round(rest_hr + lo * hrr),
+            "hi_bpm": round(rest_hr + hi * hrr) if j + 1 < len(HR_ZONES) else round(max_hr),
+            "seconds": int(secs[j]),
+            "pct": round(secs[j] / total * 100),
+        })
+    return out
+
+
 def load_streams(workout_id: int) -> Optional[dict]:
     with Session(engine) as db:
         row = db.get(WorkoutStream, workout_id)

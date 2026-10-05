@@ -328,6 +328,14 @@ a.chip:hover { background: var(--card-hover); text-decoration: none; }
 .seg-rename { margin: .2rem 0 .6rem; }
 .seg-rename > summary { cursor: pointer; font-size: .85rem; }
 .seg-rename .seg-create { margin-top: .5rem; }
+/* ---------- HR zones ---------- */
+.hrz-bar { display: flex; height: 16px; border-radius: 8px; overflow: hidden;
+  background: var(--bg-elev); margin: .2rem 0 .8rem; }
+.hrz-seg { height: 100%; }
+.hrz-table td { padding: .28rem .5rem; }
+.hrz-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%;
+  margin-right: .5rem; vertical-align: middle; }
+
 .coach-chat { margin-top: 1rem; border-top: 1px solid var(--border); padding-top: .8rem; }
 .coach-chat .chat-log:empty { display: none; }
 .coach-chat #coachPlan { margin: .5rem 0; }

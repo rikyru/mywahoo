@@ -941,6 +941,17 @@ assert _health_stale_days({"metrics": {"hrv": {"series": [{"date": _fresh, "valu
 assert _health_stale_days({"metrics": {}, "sleep": []}) is None  # no data -> no warning
 print("health staleness detection OK")
 
+# --- HR zone distribution per activity ---
+from app.fit import hr_zone_distribution
+_hz = hr_zone_distribution({"t": list(range(100)), "hr": [100] * 50 + [170] * 50}, 50, 190)
+assert len(_hz) == 5 and sum(z["pct"] for z in _hz) == 100, _hz
+_pct = {z["label"][:2]: z["pct"] for z in _hz}
+assert _pct["Z1"] == 50 and _pct["Z4"] == 50 and _pct["Z3"] == 0, _pct  # 100bpm->Z1, 170->Z4
+assert _hz[0]["lo_bpm"] == 50 and _hz[-1]["hi_bpm"] == 190                # anchored to rest/max
+assert hr_zone_distribution({"t": [1, 2, 3], "hr": []}, 50, 190) == []   # no HR -> empty
+assert hr_zone_distribution({"t": list(range(9)), "hr": [120] * 9}, 190, 50) == []  # bad anchors
+print("HR zones distribution OK")
+
 # --- same-day sport guard for merging a manual workout with a Google exercise ---
 from app.google_health import _sameday_sport_ok, _sport_family, _sport_label
 from app.main import sport_icon
