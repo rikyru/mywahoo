@@ -22,8 +22,8 @@ from starlette.middleware.sessions import SessionMiddleware
 from . import (anthropic_client, cycling as cyclingmod, fit as fitmod, form as formmod,
                google_health, gpx as gpxmod, nutrition, profile as profilemod, wahoo)
 from .config import settings, setup_logging
-from .db import (AiAnalysis, ChatMessage, ClimbEffort, Conversation, CustomEffort,
-                 CustomSegment, IgnoredImport, PeriodSummary, PlanSession,
+from .db import (AiAnalysis, BodyMeasure, ChatMessage, ClimbEffort, Conversation,
+                 CustomEffort, CustomSegment, IgnoredImport, PeriodSummary, PlanSession,
                  RouteAssessment, TrainingPlan, Workout, WorkoutStream, engine,
                  get_setting, init_db, set_setting)
 
@@ -362,29 +362,45 @@ def _health_stale_days(data: dict) -> int | None:
     return days if days > HEALTH_STALE_DAYS else None
 
 
+def _body_context() -> dict:
+    """Latest smart-scale reading + recent history for the body-composition card.
+    Independent of Google Health."""
+    with Session(engine) as session:
+        rows = session.exec(select(BodyMeasure)
+                            .order_by(BodyMeasure.measured_at.desc()).limit(60)).all()
+    if not rows:
+        return {"body_latest": None, "body_series_json": "[]"}
+    rows = list(reversed(rows))   # oldest -> newest
+    series = [{"date": r.measured_at.strftime("%Y-%m-%d"),
+               "weight": r.weight_kg, "fat": r.body_fat, "muscle": r.muscle_kg}
+              for r in rows]
+    return {"body_latest": rows[-1], "body_series_json": json.dumps(series)}
+
+
 @app.get("/health", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
 async def health_page(request: Request, win: str = "30", end: str = ""):
     window = resolve_window(win, end, request.query_params.get("from", ""),
                             request.query_params.get("to", ""))
+    base = {"window": window, "windows": WINDOWS, **_body_context()}   # scale shows even w/o Google
     if not google_health.is_authenticated():
         return templates.TemplateResponse(request, "health.html",
-                                          {"connected": False, "data": None, "window": window})
+                                          {**base, "connected": False, "data": None})
     try:
         data = await google_health.fetch_health_overview(window["start"].date(),
                                                          window["end"].date())
     except google_health.GoogleNotAuthenticatedError:
         return templates.TemplateResponse(request, "health.html",
-                                          {"connected": False, "expired": True,
-                                           "data": None, "window": window})
+                                          {**base, "connected": False, "expired": True,
+                                           "data": None})
     except google_health.GoogleHealthError as e:
         return templates.TemplateResponse(request, "health.html",
-                                          {"connected": True, "data": None,
-                                           "error": str(e), "window": window})
+                                          {**base, "connected": True, "data": None,
+                                           "error": str(e)})
     nutri = await nutrition.fetch_nutrition(window["start"].date(), window["end"].date())
     with Session(engine) as session:
         insight = session.get(PeriodSummary, _health_key(window))
     return templates.TemplateResponse(request, "health.html", {
-        "connected": True, "data": data, "window": window, "windows": WINDOWS,
+        **base, "connected": True, "data": data, "windows": WINDOWS,
         "nutrition": nutri,
         "stale_days": _health_stale_days(data) if window["is_current"] else None,
         "last_data": _latest_health_date(data),
@@ -1696,6 +1712,61 @@ async def webhook_wahoo(request: Request, background: BackgroundTasks):
     if event_type == "workout_summary" or "workout_summary" in payload:
         background.add_task(_process_webhook, payload)
     return JSONResponse({"status": "accepted"})
+
+
+# fields Home Assistant may send -> BodyMeasure columns (aliases accepted)
+_BODY_FIELDS = {
+    "weight": "weight_kg", "weight_kg": "weight_kg", "peso": "weight_kg",
+    "impedance": "impedance", "impedenza": "impedance",
+    "bmi": "bmi", "body_fat": "body_fat", "fat": "body_fat", "massa_grassa": "body_fat",
+    "water": "water_pct", "water_pct": "water_pct", "acqua": "water_pct",
+    "bone": "bone_kg", "bone_mass": "bone_kg", "massa_ossea": "bone_kg",
+    "muscle": "muscle_kg", "muscle_mass": "muscle_kg", "massa_muscolare": "muscle_kg",
+    "visceral": "visceral", "grasso_viscerale": "visceral",
+    "bmr": "bmr", "metabolic_age": "metabolic_age", "eta_metabolica": "metabolic_age",
+}
+
+
+@app.post("/webhook/body")
+async def webhook_body(request: Request):
+    """Smart-scale reading pushed by Home Assistant. Validates a shared token,
+    stores a BodyMeasure (dedup within a few minutes of settling pushes) and
+    refreshes the profile weight so load/FTP/energy use the real value."""
+    try:
+        payload = await request.json()
+    except json.JSONDecodeError:
+        raise HTTPException(400, "Invalid JSON")
+    received = payload.get("token") or request.headers.get("x-webhook-token", "")
+    if not settings.body_webhook_token or \
+            not secrets.compare_digest(str(received), settings.body_webhook_token):
+        logger.warning("Body webhook with invalid token rejected")
+        raise HTTPException(401, "Invalid webhook token")
+
+    def num(v):
+        try:
+            f = float(v)
+            return f if f == f else None   # drop NaN
+        except (TypeError, ValueError):
+            return None
+
+    vals = {col: num(payload[k]) for k, col in _BODY_FIELDS.items()
+            if k in payload and num(payload[k]) is not None}
+    if not vals.get("weight_kg"):
+        return JSONResponse({"error": "peso mancante"}, status_code=400)
+
+    now = datetime.utcnow()
+    with Session(engine) as session:
+        recent = session.exec(select(BodyMeasure).where(
+            BodyMeasure.measured_at >= now - timedelta(minutes=5))
+            .order_by(BodyMeasure.measured_at.desc())).first()
+        m = recent or BodyMeasure(measured_at=now)
+        for col, v in vals.items():
+            setattr(m, col, v)
+        session.add(m)
+        session.commit()
+    profilemod.save({"weight_kg": vals["weight_kg"]})   # keep profile weight current
+    logger.info("Body measure stored: %s kg (%s fields)", vals["weight_kg"], len(vals))
+    return JSONResponse({"status": "ok"})
 
 
 # ---------------------------------------------------------------- pages

@@ -9,6 +9,7 @@ os.environ.update({
     "WAHOO_CLIENT_SECRET": "x",
     "WAHOO_REDIRECT_URI": "http://localhost:8080/oauth/callback",
     "WAHOO_WEBHOOK_TOKEN": "hook-secret",
+    "BODY_WEBHOOK_TOKEN": "body-secret",
     "ANTHROPIC_API_KEY": "test",
     "APP_SECRET_KEY": "test-secret",
     "APP_BASE_URL": "http://localhost:8080",
@@ -171,6 +172,35 @@ with TestClient(app) as client:
     r = client.get("/settings")
     assert r.status_code == 200 and "Motore AI" in r.text
     print("settings page OK")
+
+    # --- smart-scale webhook (Home Assistant push) ---
+    from app.db import BodyMeasure
+    r = client.post("/webhook/body", json={"token": "wrong", "weight": 74})
+    assert r.status_code == 401                                   # bad token rejected
+    r = client.post("/webhook/body", json={
+        "token": "body-secret", "weight": 74.6, "body_fat": 18.2, "muscle": 55.1,
+        "water": 55.0, "visceral": 7, "bmr": 1680, "bmi": 23.5, "metabolic_age": 30,
+        "impedance": 500})
+    assert r.status_code == 200
+    with Session(engine) as s:
+        rows = s.exec(select(BodyMeasure)).all()
+        assert len(rows) == 1 and rows[0].weight_kg == 74.6 and rows[0].muscle_kg == 55.1
+    # a second push within minutes updates the same reading (settling), not a new row
+    r = client.post("/webhook/body", json={"token": "body-secret", "weight": 74.7})
+    assert r.status_code == 200
+    with Session(engine) as s:
+        rows = s.exec(select(BodyMeasure)).all()
+        assert len(rows) == 1 and rows[0].weight_kg == 74.7     # merged, fat kept
+        assert rows[0].body_fat == 18.2
+    # the scale weight refreshes the profile (used by load/FTP/energy)
+    from app import profile as _pf
+    assert _pf.load()["weight_kg"] == 74.7
+    # missing weight is rejected
+    assert client.post("/webhook/body", json={"token": "body-secret", "body_fat": 20}).status_code == 400
+    # the health page shows the body-composition card (even without Google)
+    r = client.get("/health")
+    assert r.status_code == 200 and "Composizione corporea" in r.text
+    print("smart-scale webhook: stored, deduped, profile weight updated, shown OK")
 
     r = client.get("/segments")
     assert r.status_code == 200 and "Segmenti ricorrenti" in r.text

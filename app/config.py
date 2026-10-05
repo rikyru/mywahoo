@@ -27,6 +27,8 @@ class Settings:
             os.environ.get("SESSION_HTTPS_ONLY", "").strip().lower() in ("1", "true", "yes")
         # Local timezone for displaying timestamps (Google returns UTC)
         self.timezone: str = os.environ.get("APP_TZ", "Europe/Rome")
+        # Shared token for the smart-scale webhook (Home Assistant pushes here)
+        self.body_webhook_token: str = os.environ.get("BODY_WEBHOOK_TOKEN", "")
         self.log_level: str = os.environ.get("LOG_LEVEL", "INFO").upper()
         self.db_path: str = os.environ.get("DB_PATH", "/data/wahoo.db")
         self.fit_dir: str = os.environ.get("FIT_DIR", "/data/fits")

@@ -216,6 +216,22 @@ class WorkoutStream(SQLModel, table=True):
     n_records: int = 0
 
 
+class BodyMeasure(SQLModel, table=True):
+    """A body-composition reading from the smart scale (pushed by Home Assistant)."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    measured_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+    weight_kg: Optional[float] = None
+    impedance: Optional[float] = None
+    bmi: Optional[float] = None
+    body_fat: Optional[float] = None          # %
+    water_pct: Optional[float] = None          # %
+    bone_kg: Optional[float] = None
+    muscle_kg: Optional[float] = None
+    visceral: Optional[float] = None
+    bmr: Optional[float] = None                # kcal
+    metabolic_age: Optional[float] = None      # years
+
+
 class AiAnalysis(SQLModel, table=True):
     """Cached Claude analysis, one per workout."""
     workout_id: int = Field(primary_key=True, foreign_key="workout.id")

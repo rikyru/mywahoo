@@ -36,6 +36,28 @@
 </div>
 {% endif %}
 
+{% if body_latest %}
+{% set b = body_latest %}
+<section class="card">
+  <div class="card-head">
+    <h3>Composizione corporea <small class="muted">· bilancia</small></h3>
+    <span class="muted">{{ b.measured_at.strftime("%d/%m/%Y %H:%M") }}</span>
+  </div>
+  <section class="kpi-row">
+    {% if b.weight_kg %}<div class="kpi"><span class="kpi-value">{{ "%.1f"|format(b.weight_kg) }}<small> kg</small></span><span class="kpi-label">peso</span></div>{% endif %}
+    {% if b.body_fat %}<div class="kpi"><span class="kpi-value">{{ "%.1f"|format(b.body_fat) }}<small>%</small></span><span class="kpi-label">massa grassa</span></div>{% endif %}
+    {% if b.muscle_kg %}<div class="kpi"><span class="kpi-value">{{ "%.1f"|format(b.muscle_kg) }}<small> kg</small></span><span class="kpi-label">muscolo</span></div>{% endif %}
+    {% if b.water_pct %}<div class="kpi"><span class="kpi-value">{{ "%.1f"|format(b.water_pct) }}<small>%</small></span><span class="kpi-label">acqua</span></div>{% endif %}
+    {% if b.visceral %}<div class="kpi"><span class="kpi-value">{{ "%.1f"|format(b.visceral) }}</span><span class="kpi-label">grasso viscerale</span></div>{% endif %}
+    {% if b.bmi %}<div class="kpi"><span class="kpi-value">{{ "%.1f"|format(b.bmi) }}</span><span class="kpi-label">BMI</span></div>{% endif %}
+    {% if b.bmr %}<div class="kpi"><span class="kpi-value">{{ "%.0f"|format(b.bmr) }}<small> kcal</small></span><span class="kpi-label">metabolismo basale</span></div>{% endif %}
+    {% if b.bone_kg %}<div class="kpi"><span class="kpi-value">{{ "%.1f"|format(b.bone_kg) }}<small> kg</small></span><span class="kpi-label">massa ossea</span></div>{% endif %}
+    {% if b.metabolic_age %}<div class="kpi"><span class="kpi-value">{{ "%.0f"|format(b.metabolic_age) }}<small> anni</small></span><span class="kpi-label">età metabolica</span></div>{% endif %}
+  </section>
+  {% if connected and data %}<canvas id="bodyChart" height="90"></canvas>{% endif %}
+</section>
+{% endif %}
+
 {% if not connected %}
   <div class="alert error">
     {% if expired %}
@@ -326,6 +348,30 @@ if (scoreCanvas && SCORE_SERIES.length > 2) {
     options: { plugins: { legend: { display: false } },
                scales: { x: { ticks: { maxTicksLimit: 8 } }, y: { min: 0, max: 100 } },
                animation: false, responsive: true },
+  });
+}
+
+// Body composition trend from the smart scale (weight + fat% + muscle)
+const BODY = {{ body_series_json | default("[]") | safe }};
+const bodyCanvas = document.getElementById("bodyChart");
+if (bodyCanvas && BODY.length > 1) {
+  new Chart(bodyCanvas, {
+    data: { labels: BODY.map(p => p.date.slice(5)),
+      datasets: [
+        { type: "line", label: "Peso (kg)", data: BODY.map(p => p.weight), yAxisID: "y",
+          borderColor: "#4c8dff", backgroundColor: "#4c8dff22", pointRadius: 2,
+          borderWidth: 2, tension: .25, fill: true },
+        { type: "line", label: "Massa grassa (%)", data: BODY.map(p => p.fat), yAxisID: "y2",
+          borderColor: "#fb7185", pointRadius: 2, borderWidth: 1.4, tension: .25 },
+        { type: "line", label: "Muscolo (kg)", data: BODY.map(p => p.muscle), yAxisID: "y",
+          borderColor: "#2a9d8f", pointRadius: 2, borderWidth: 1.4, tension: .25 },
+      ] },
+    options: { plugins: { legend: { position: "bottom" } },
+      scales: { x: { ticks: { maxTicksLimit: 8 } },
+                y: { position: "left", title: { display: true, text: "kg" } },
+                y2: { position: "right", title: { display: true, text: "%" },
+                      grid: { drawOnChartArea: false } } },
+      animation: false, responsive: true },
   });
 }
 
