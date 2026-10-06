@@ -120,16 +120,20 @@ async def recompute_and_push() -> bool:
     res = await build_targets_auto()
     if not res:
         return False
-    return await push_targets(res["targets"])
+    # In a cut, portions may only shrink: never inflate the meal plan to chase
+    # a higher kcal goal than the base plan provides.
+    allow_upscale = profilemod.nutrition_cfg().get("goal") != "cut"
+    return await push_targets(res["targets"], allow_upscale=allow_upscale)
 
 
-async def push_targets(targets: dict) -> bool:
+async def push_targets(targets: dict, allow_upscale: bool = True) -> bool:
     """Send the kcal/macro targets to planmydinner.
 
     Prefers the dedicated integration endpoint (POST /integration/apply-targets),
     which stores the targets AND re-scales the current plan's portions to match.
     Falls back to writing the raw planner rules on older planmydinner builds that
     don't expose the endpoint yet, so the push works across the transition.
+    `allow_upscale` is False in a cut: portions may only shrink, never grow.
     """
     if not is_configured():
         return False
@@ -138,15 +142,19 @@ async def push_targets(targets: dict) -> bool:
     try:
         async with httpx.AsyncClient(timeout=20) as client:
             resp = await client.post(f"{base}/integration/apply-targets",
-                                     params={"profile_id": prof}, json=targets)
+                                     params={"profile_id": prof},
+                                     json={**targets, "allow_upscale": allow_upscale})
             if resp.status_code == 200:
                 logger.info("Applied nutrition targets via planmydinner integration: %s",
                             targets)
                 return True
             if resp.status_code in (404, 405):
                 # Older planmydinner: fall back to the raw planner-rules write.
+                rules_targets = dict(targets)
+                if not allow_upscale:
+                    rules_targets["allow_upscale"] = 0.0
                 resp = await client.put(f"{base}/planner/rules/{prof}",
-                                        json={"nutrition_targets": targets})
+                                        json={"nutrition_targets": rules_targets})
                 if resp.status_code == 200:
                     logger.info("Pushed nutrition targets to planmydinner (rules): %s",
                                 targets)

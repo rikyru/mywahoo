@@ -1633,7 +1633,8 @@ async def nutrition_push_targets():
     if not res:
         return JSONResponse({"error": "Serve una pesata con BMR (sali sulla bilancia)"},
                             status_code=400)
-    ok = await nutrition.push_targets(res["targets"])
+    allow_upscale = res["basis"].get("goal") != "cut"
+    ok = await nutrition.push_targets(res["targets"], allow_upscale=allow_upscale)
     if not ok:
         return JSONResponse({"error": "planmydinner ha rifiutato o non risponde"},
                             status_code=502)
