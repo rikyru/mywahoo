@@ -124,18 +124,33 @@ async def recompute_and_push() -> bool:
 
 
 async def push_targets(targets: dict) -> bool:
-    """Write the kcal/macro targets into planmydinner's planner rules."""
+    """Send the kcal/macro targets to planmydinner.
+
+    Prefers the dedicated integration endpoint (POST /integration/apply-targets),
+    which stores the targets AND re-scales the current plan's portions to match.
+    Falls back to writing the raw planner rules on older planmydinner builds that
+    don't expose the endpoint yet, so the push works across the transition.
+    """
     if not is_configured():
         return False
     base = settings.planmydinner_url.rstrip("/")
     prof = settings.planmydinner_profile
     try:
-        async with httpx.AsyncClient(timeout=15) as client:
-            resp = await client.put(f"{base}/planner/rules/{prof}",
-                                    json={"nutrition_targets": targets})
-        if resp.status_code == 200:
-            logger.info("Pushed nutrition targets to planmydinner: %s", targets)
-            return True
+        async with httpx.AsyncClient(timeout=20) as client:
+            resp = await client.post(f"{base}/integration/apply-targets",
+                                     params={"profile_id": prof}, json=targets)
+            if resp.status_code == 200:
+                logger.info("Applied nutrition targets via planmydinner integration: %s",
+                            targets)
+                return True
+            if resp.status_code in (404, 405):
+                # Older planmydinner: fall back to the raw planner-rules write.
+                resp = await client.put(f"{base}/planner/rules/{prof}",
+                                        json={"nutrition_targets": targets})
+                if resp.status_code == 200:
+                    logger.info("Pushed nutrition targets to planmydinner (rules): %s",
+                                targets)
+                    return True
         logger.warning("planmydinner rejected targets (%s): %s",
                        resp.status_code, resp.text[:200])
     except httpx.HTTPError as e:
