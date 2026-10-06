@@ -104,15 +104,20 @@ async def measured_tdee(days: int = 28) -> float | None:
     return sum(vals) / len(vals) if vals else None
 
 
-async def build_targets_measured() -> dict | None:
-    """build_targets but using the measured TDEE from Google when available."""
-    return build_targets(await measured_tdee())
+async def build_targets_auto() -> dict | None:
+    """build_targets honoring the configured TDEE basis: the measured Google
+    burn only when the user opted in, otherwise the conservative BMR estimate
+    (trackers tend to overcount, so estimate is the safer default)."""
+    tdee = None
+    if profilemod.nutrition_cfg().get("tdee_basis") == "measured":
+        tdee = await measured_tdee()
+    return build_targets(tdee)
 
 
 async def recompute_and_push() -> bool:
-    """Recompute targets (measured TDEE when possible) and push them. Used both
-    by the settings button and automatically after each weigh-in."""
-    res = await build_targets_measured()
+    """Recompute targets (per the configured TDEE basis) and push them. Used
+    both by the settings button and automatically after each weigh-in."""
+    res = await build_targets_auto()
     if not res:
         return False
     return await push_targets(res["targets"])

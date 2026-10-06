@@ -89,7 +89,13 @@
       <input type="number" step="1" min="0" max="40" name="adjust_pct"
              value="{{ nutrition_cfg.adjust_pct | round | int }}">
     </label>
-    <label>Fattore attività (TDEE = BMR ×)
+    <label>Base del TDEE (spesa giornaliera)
+      <select name="tdee_basis">
+        <option value="estimate" {% if nutrition_cfg.tdee_basis == 'estimate' %}selected{% endif %}>Stima BMR × fattore (prudente)</option>
+        <option value="measured" {% if nutrition_cfg.tdee_basis == 'measured' %}selected{% endif %}>Misurato da Google (può sovrastimare)</option>
+      </select>
+    </label>
+    <label>Fattore attività (usato con la stima: TDEE = BMR ×)
       <input type="number" step="0.05" min="1" max="2.5" name="activity_factor"
              value="{{ nutrition_cfg.activity_factor }}">
     </label>

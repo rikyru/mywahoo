@@ -248,7 +248,7 @@ with TestClient(app) as client:
 
     # measured-TDEE builder: no Google in tests -> falls back to the estimate
     import asyncio
-    built = asyncio.run(nutrition.build_targets_measured())
+    built = asyncio.run(nutrition.build_targets_auto())
     assert built and built["basis"]["tdee_source"].startswith("stima"), built
     assert built["targets"]["kcal"] > 0
     # the preview endpoint returns the same shape

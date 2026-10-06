@@ -48,9 +48,12 @@ def save(values: dict) -> None:
 
 # Nutrition goal config (drives the kcal/macro targets pushed to planmydinner).
 # Kept apart from the physical profile: these are preferences, not measurements.
-NUTRITION_DEFAULTS = {"goal": "cut", "adjust_pct": 15.0,
-                      "activity_factor": 1.45, "protein_per_kg_lean": 2.0}
+NUTRITION_DEFAULTS = {"goal": "cut", "adjust_pct": 15.0, "activity_factor": 1.45,
+                      "protein_per_kg_lean": 2.0, "tdee_basis": "estimate"}
 NUTRITION_GOALS = ("cut", "maintain", "bulk")
+# How to estimate daily burn: "estimate" = BMR × activity_factor (conservative,
+# trackers overcount); "measured" = average Google calories_burned.
+TDEE_BASES = ("estimate", "measured")
 
 
 def nutrition_cfg() -> dict:
@@ -58,11 +61,14 @@ def nutrition_cfg() -> dict:
     goal = get_setting("nutrition.goal", "") or NUTRITION_DEFAULTS["goal"]
     if goal not in NUTRITION_GOALS:
         goal = NUTRITION_DEFAULTS["goal"]
+    basis = get_setting("nutrition.tdee_basis", "") or NUTRITION_DEFAULTS["tdee_basis"]
+    if basis not in TDEE_BASES:
+        basis = NUTRITION_DEFAULTS["tdee_basis"]
+    adjust = _num(get_setting("nutrition.adjust_pct", ""))
     return {
         "goal": goal,
-        "adjust_pct": _num(get_setting("nutrition.adjust_pct", ""))
-        if _num(get_setting("nutrition.adjust_pct", "")) is not None
-        else NUTRITION_DEFAULTS["adjust_pct"],
+        "tdee_basis": basis,
+        "adjust_pct": adjust if adjust is not None else NUTRITION_DEFAULTS["adjust_pct"],
         "activity_factor": _num(get_setting("nutrition.activity_factor", ""))
         or NUTRITION_DEFAULTS["activity_factor"],
         "protein_per_kg_lean": _num(get_setting("nutrition.protein_per_kg_lean", ""))
@@ -74,6 +80,9 @@ def save_nutrition_cfg(values: dict) -> None:
     if "goal" in values:
         g = (values["goal"] or "").strip()
         set_setting("nutrition.goal", g if g in NUTRITION_GOALS else "")
+    if "tdee_basis" in values:
+        b = (values["tdee_basis"] or "").strip()
+        set_setting("nutrition.tdee_basis", b if b in TDEE_BASES else "")
     for k in ("adjust_pct", "activity_factor", "protein_per_kg_lean"):
         if k in values:
             v = _num(values[k])

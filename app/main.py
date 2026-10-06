@@ -1602,12 +1602,12 @@ def settings_profile(height_cm: str = Form(""), weight_kg: str = Form(""),
 
 
 @app.post("/settings/nutrition", dependencies=[Depends(require_auth)])
-def settings_nutrition(goal: str = Form("cut"), adjust_pct: str = Form(""),
-                       activity_factor: str = Form(""),
+def settings_nutrition(goal: str = Form("cut"), tdee_basis: str = Form("estimate"),
+                       adjust_pct: str = Form(""), activity_factor: str = Form(""),
                        protein_per_kg_lean: str = Form("")):
     """Save the meal-plan goal config (drives the planmydinner targets)."""
     profilemod.save_nutrition_cfg({
-        "goal": goal, "adjust_pct": adjust_pct,
+        "goal": goal, "tdee_basis": tdee_basis, "adjust_pct": adjust_pct,
         "activity_factor": activity_factor, "protein_per_kg_lean": protein_per_kg_lean})
     return RedirectResponse(
         f"/settings?{urlencode({'msg': 'Obiettivo alimentare salvato'})}", status_code=303)
@@ -1617,7 +1617,7 @@ def settings_nutrition(goal: str = Form("cut"), adjust_pct: str = Form(""),
 async def api_nutrition_targets():
     """Preview the kcal/macro targets computed from the latest weigh-in + goal.
     Uses the measured TDEE from Google when available, else the BMR estimate."""
-    res = await nutrition.build_targets_measured()
+    res = await nutrition.build_targets_auto()
     if not res:
         return JSONResponse({"error": "Serve una pesata con BMR (sali sulla bilancia)"},
                             status_code=400)
@@ -1629,7 +1629,7 @@ async def nutrition_push_targets():
     """Compute the targets and write them into planmydinner's planner rules."""
     if not nutrition.is_configured():
         return JSONResponse({"error": "planmydinner non configurato"}, status_code=400)
-    res = await nutrition.build_targets_measured()
+    res = await nutrition.build_targets_auto()
     if not res:
         return JSONResponse({"error": "Serve una pesata con BMR (sali sulla bilancia)"},
                             status_code=400)
