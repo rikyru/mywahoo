@@ -246,6 +246,16 @@ with TestClient(app) as client:
     assert nutrition.compute_targets(None, 59, 81, "cut", 15, 1.45, 2.0) is None
     print("nutrition targets (deficit/maintenance/floor/measured) OK")
 
+    # measured-TDEE builder: no Google in tests -> falls back to the estimate
+    import asyncio
+    built = asyncio.run(nutrition.build_targets_measured())
+    assert built and built["basis"]["tdee_source"].startswith("stima"), built
+    assert built["targets"]["kcal"] > 0
+    # the preview endpoint returns the same shape
+    r = client.get("/api/nutrition/targets")
+    assert r.status_code == 200 and "targets" in r.json(), r.text
+    print("nutrition targets preview endpoint + measured fallback OK")
+
     r = client.get("/segments")
     assert r.status_code == 200 and "Segmenti ricorrenti" in r.text
     print("segments page renders OK")

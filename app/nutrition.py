@@ -89,6 +89,35 @@ def build_targets(tdee: float | None = None) -> dict | None:
     return {"targets": targets, "basis": basis}
 
 
+async def measured_tdee(days: int = 28) -> float | None:
+    """Average daily energy burn from Google Health (BMR + activity = TDEE).
+    Best-effort: returns None if Google isn't connected or has no burn data."""
+    from datetime import date as _date, timedelta
+    from . import google_health
+    try:
+        overview = await google_health.fetch_health_overview(
+            _date.today() - timedelta(days=days - 1), _date.today())
+    except google_health.GoogleHealthError:
+        return None
+    series = ((overview or {}).get("metrics") or {}).get("calories_burned", {}).get("series") or []
+    vals = [p["value"] for p in series if p.get("value")]
+    return sum(vals) / len(vals) if vals else None
+
+
+async def build_targets_measured() -> dict | None:
+    """build_targets but using the measured TDEE from Google when available."""
+    return build_targets(await measured_tdee())
+
+
+async def recompute_and_push() -> bool:
+    """Recompute targets (measured TDEE when possible) and push them. Used both
+    by the settings button and automatically after each weigh-in."""
+    res = await build_targets_measured()
+    if not res:
+        return False
+    return await push_targets(res["targets"])
+
+
 async def push_targets(targets: dict) -> bool:
     """Write the kcal/macro targets into planmydinner's planner rules."""
     if not is_configured():

@@ -1615,8 +1615,9 @@ def settings_nutrition(goal: str = Form("cut"), adjust_pct: str = Form(""),
 
 @app.get("/api/nutrition/targets", dependencies=[Depends(require_auth)])
 async def api_nutrition_targets():
-    """Preview the kcal/macro targets computed from the latest weigh-in + goal."""
-    res = nutrition.build_targets()
+    """Preview the kcal/macro targets computed from the latest weigh-in + goal.
+    Uses the measured TDEE from Google when available, else the BMR estimate."""
+    res = await nutrition.build_targets_measured()
     if not res:
         return JSONResponse({"error": "Serve una pesata con BMR (sali sulla bilancia)"},
                             status_code=400)
@@ -1628,7 +1629,7 @@ async def nutrition_push_targets():
     """Compute the targets and write them into planmydinner's planner rules."""
     if not nutrition.is_configured():
         return JSONResponse({"error": "planmydinner non configurato"}, status_code=400)
-    res = nutrition.build_targets()
+    res = await nutrition.build_targets_measured()
     if not res:
         return JSONResponse({"error": "Serve una pesata con BMR (sali sulla bilancia)"},
                             status_code=400)
@@ -1769,10 +1770,12 @@ _BODY_FIELDS = {
 
 
 @app.post("/webhook/body")
-async def webhook_body(request: Request):
+async def webhook_body(request: Request, background: BackgroundTasks):
     """Smart-scale reading pushed by Home Assistant. Validates a shared token,
     stores a BodyMeasure (dedup within a few minutes of settling pushes) and
-    refreshes the profile weight so load/FTP/energy use the real value."""
+    refreshes the profile weight so load/FTP/energy use the real value. When
+    planmydinner is configured, the meal-plan targets are recomputed and pushed
+    in the background (so the webhook answers HA immediately)."""
     try:
         payload = await request.json()
     except json.JSONDecodeError:
@@ -1818,6 +1821,10 @@ async def webhook_body(request: Request):
         session.commit()
     profilemod.save({"weight_kg": vals["weight_kg"]})   # keep profile weight current
     logger.info("Body measure stored: %s kg (%s fields)", vals["weight_kg"], len(vals))
+    # New weigh-in -> refresh the planmydinner targets (real BMR/lean changed).
+    # Background so HA gets its 200 without waiting on Google + planmydinner.
+    if nutrition.is_configured() and vals.get("bmr"):
+        background.add_task(nutrition.recompute_and_push)
     return JSONResponse({"status": "ok"})
 
 
