@@ -8,7 +8,9 @@ value.
 """
 from datetime import date
 
-from .db import get_setting, set_setting
+from sqlmodel import Session, select
+
+from .db import BodyMeasure, engine, get_setting, set_setting
 
 NUMERIC_FIELDS = ("height_cm", "weight_kg", "birth_year", "rest_hr", "max_hr")
 # sex + ai_notes are free text, handled apart from the numeric fields
@@ -77,6 +79,45 @@ def hr_anchors(p: dict | None = None, measured_max: float | None = None) -> tupl
     return float(rest), float(mx), sex
 
 
+def _body_composition() -> dict:
+    """Latest smart-scale reading + trend, for the AI prompt. Empty if no scale
+    data. The trend compares the latest reading with the oldest in the last ~90
+    days so the AI can see where fat/muscle are heading, not just today's number."""
+    with Session(engine) as session:
+        rows = session.exec(select(BodyMeasure)
+                            .order_by(BodyMeasure.measured_at.desc()).limit(90)).all()
+    if not rows:
+        return {}
+    last = rows[0]
+    out: dict = {}
+    if last.body_fat is not None:
+        out["massa_grassa_pct"] = round(last.body_fat, 1)
+    if last.muscle_kg is not None:
+        out["massa_muscolare_kg"] = round(last.muscle_kg, 1)
+    if last.water_pct is not None:
+        out["acqua_pct"] = round(last.water_pct, 1)
+    if last.visceral is not None:
+        out["grasso_viscerale"] = round(last.visceral, 1)
+    if last.bmr is not None:
+        out["metabolismo_basale_kcal"] = round(last.bmr)
+    if last.metabolic_age is not None:
+        out["eta_metabolica"] = round(last.metabolic_age)
+    # trend vs the oldest reading we have in the window (needs ≥2 weigh-ins)
+    if len(rows) > 1:
+        first = rows[-1]
+        trend = {}
+        if last.weight_kg is not None and first.weight_kg is not None:
+            trend["peso_kg"] = round(last.weight_kg - first.weight_kg, 1)
+        if last.body_fat is not None and first.body_fat is not None:
+            trend["massa_grassa_pct"] = round(last.body_fat - first.body_fat, 1)
+        if last.muscle_kg is not None and first.muscle_kg is not None:
+            trend["massa_muscolare_kg"] = round(last.muscle_kg - first.muscle_kg, 1)
+        if trend:
+            days = (last.measured_at - first.measured_at).days
+            out["andamento"] = {"giorni": days, "delta": trend}
+    return out
+
+
 def ai_context(p: dict | None = None) -> dict:
     """Compact profile for the AI prompts (only the fields actually filled in)."""
     p = p if p is not None else load()
@@ -95,6 +136,8 @@ def ai_context(p: dict | None = None) -> dict:
         out["fc_riposo"] = round(p["rest_hr"])
     if p.get("max_hr"):
         out["fc_max"] = round(p["max_hr"])
+    if (comp := _body_composition()):
+        out["composizione_corporea"] = comp
     # Free-text memory: injuries, equipment, availability, goals, preferences.
     # Placed last and labelled so the AI treats it as durable context to respect.
     if p.get("ai_notes"):

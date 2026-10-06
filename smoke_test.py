@@ -221,6 +221,12 @@ with TestClient(app) as client:
     assert bodycomp.compute(81.6, 499, None, None, "M") == {}
     print("body composition compute (fat/muscle/water/visceral/BMR/age) OK")
 
+    # body composition reaches the AI prompt (via profile.ai_context)
+    who = _pf.ai_context()
+    assert "composizione_corporea" in who, who
+    assert who["composizione_corporea"]["massa_grassa_pct"] == 18.2, who
+    print("body composition fed to AI context OK")
+
     r = client.get("/segments")
     assert r.status_code == 200 and "Segmenti ricorrenti" in r.text
     print("segments page renders OK")
