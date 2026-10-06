@@ -19,8 +19,9 @@ from sqlalchemy import func
 from sqlmodel import Session, select
 from starlette.middleware.sessions import SessionMiddleware
 
-from . import (anthropic_client, cycling as cyclingmod, fit as fitmod, form as formmod,
-               google_health, gpx as gpxmod, nutrition, profile as profilemod, wahoo)
+from . import (anthropic_client, bodycomp, cycling as cyclingmod, fit as fitmod,
+               form as formmod, google_health, gpx as gpxmod, nutrition,
+               profile as profilemod, wahoo)
 from .config import settings, setup_logging
 from .db import (AiAnalysis, BodyMeasure, ChatMessage, ClimbEffort, Conversation,
                  CustomEffort, CustomSegment, IgnoredImport, PeriodSummary, PlanSession,
@@ -1753,6 +1754,17 @@ async def webhook_body(request: Request):
             if k in payload and num(payload[k]) is not None}
     if not vals.get("weight_kg"):
         return JSONResponse({"error": "peso mancante"}, status_code=400)
+
+    # The scale only sends weight + impedance instantly; the other metrics are
+    # derived (ESPHome recomputes them on a slow poll, so pushed values are
+    # often stale/missing). We recompute them here from weight+impedance+profile
+    # so every reading is complete and internally consistent. Computed values
+    # are authoritative and override anything HA may have sent.
+    prof = profilemod.load()
+    derived = bodycomp.compute(vals.get("weight_kg"), vals.get("impedance"),
+                               prof.get("height_cm"), profilemod.age(prof),
+                               prof.get("sex"))
+    vals.update(derived)
 
     now = datetime.utcnow()
     with Session(engine) as session:

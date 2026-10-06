@@ -54,7 +54,7 @@
     {% if b.bone_kg %}<div class="kpi"><span class="kpi-value">{{ "%.1f"|format(b.bone_kg) }}<small> kg</small></span><span class="kpi-label">massa ossea</span></div>{% endif %}
     {% if b.metabolic_age %}<div class="kpi"><span class="kpi-value">{{ "%.0f"|format(b.metabolic_age) }}<small> anni</small></span><span class="kpi-label">età metabolica</span></div>{% endif %}
   </section>
-  {% if connected and data %}<canvas id="bodyChart" height="90"></canvas>{% endif %}
+  <canvas id="bodyChart" height="90"></canvas>
 </section>
 {% endif %}
 
@@ -351,30 +351,6 @@ if (scoreCanvas && SCORE_SERIES.length > 2) {
   });
 }
 
-// Body composition trend from the smart scale (weight + fat% + muscle)
-const BODY = {{ body_series_json | default("[]") | safe }};
-const bodyCanvas = document.getElementById("bodyChart");
-if (bodyCanvas && BODY.length > 1) {
-  new Chart(bodyCanvas, {
-    data: { labels: BODY.map(p => p.date.slice(5)),
-      datasets: [
-        { type: "line", label: "Peso (kg)", data: BODY.map(p => p.weight), yAxisID: "y",
-          borderColor: "#4c8dff", backgroundColor: "#4c8dff22", pointRadius: 2,
-          borderWidth: 2, tension: .25, fill: true },
-        { type: "line", label: "Massa grassa (%)", data: BODY.map(p => p.fat), yAxisID: "y2",
-          borderColor: "#fb7185", pointRadius: 2, borderWidth: 1.4, tension: .25 },
-        { type: "line", label: "Muscolo (kg)", data: BODY.map(p => p.muscle), yAxisID: "y",
-          borderColor: "#2a9d8f", pointRadius: 2, borderWidth: 1.4, tension: .25 },
-      ] },
-    options: { plugins: { legend: { position: "bottom" } },
-      scales: { x: { ticks: { maxTicksLimit: 8 } },
-                y: { position: "left", title: { display: true, text: "kg" } },
-                y2: { position: "right", title: { display: true, text: "%" },
-                      grid: { drawOnChartArea: false } } },
-      animation: false, responsive: true },
-  });
-}
-
 // Stacked sleep stages per night
 const sleepCanvas = document.getElementById("sleepChart");
 if (sleepCanvas && SLEEP.length) {
@@ -427,6 +403,38 @@ if (energyCanvas && ENERGY.length) {
       + `(barre rosse = giorno in deficit sui pasti tracciati).`;
   }
 }
+</script>
+{% endif %}
+
+{# Body-composition trend: independent of Google so it shows with scale data alone #}
+{% if body_latest %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<script>
+(function () {
+  const SCALE_BODY = {{ body_series_json | default("[]") | safe }};
+  const bodyCanvas = document.getElementById("bodyChart");
+  if (!bodyCanvas || SCALE_BODY.length < 2) return;
+  Chart.defaults.color = "#8a97a9";
+  Chart.defaults.borderColor = "rgba(255,255,255,.06)";
+  new Chart(bodyCanvas, {
+    data: { labels: SCALE_BODY.map(p => p.date.slice(5)),
+      datasets: [
+        { type: "line", label: "Peso (kg)", data: SCALE_BODY.map(p => p.weight), yAxisID: "y",
+          borderColor: "#4c8dff", backgroundColor: "#4c8dff22", pointRadius: 2,
+          borderWidth: 2, tension: .25, fill: true },
+        { type: "line", label: "Massa grassa (%)", data: SCALE_BODY.map(p => p.fat), yAxisID: "y2",
+          borderColor: "#fb7185", pointRadius: 2, borderWidth: 1.4, tension: .25 },
+        { type: "line", label: "Muscolo (kg)", data: SCALE_BODY.map(p => p.muscle), yAxisID: "y",
+          borderColor: "#2a9d8f", pointRadius: 2, borderWidth: 1.4, tension: .25 },
+      ] },
+    options: { plugins: { legend: { position: "bottom" } },
+      scales: { x: { ticks: { maxTicksLimit: 8 } },
+                y: { position: "left", title: { display: true, text: "kg" } },
+                y2: { position: "right", title: { display: true, text: "%" },
+                      grid: { drawOnChartArea: false } } },
+      animation: false, responsive: true },
+  });
+})();
 </script>
 {% endif %}
 {% endblock %}

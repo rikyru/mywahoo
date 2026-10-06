@@ -202,6 +202,25 @@ with TestClient(app) as client:
     assert r.status_code == 200 and "Composizione corporea" in r.text
     print("smart-scale webhook: stored, deduped, profile weight updated, shown OK")
 
+    # --- body composition derived in-app from weight+impedance+profile ---
+    # (ESPHome's template sensors poll slowly, so OpenFit computes these itself)
+    from app import bodycomp
+    d = bodycomp.compute(81.6, 499, 173, 34, "M")
+    assert 23 < d["bmi"] < 29, d
+    assert 10 < d["body_fat"] < 30, d          # plausible male adult %
+    assert 50 < d["muscle_kg"] < 75, d
+    assert 40 < d["water_pct"] < 70, d
+    assert 1 <= d["visceral"] <= 50, d
+    assert 1500 < d["bmr"] < 2200, d
+    assert 15 <= d["metabolic_age"] <= 80, d
+    assert 1.5 < d["bone_kg"] < 4, d
+    # weight-only (no impedance): still get BMI/visceral/BMR, no bioimpedance metrics
+    d2 = bodycomp.compute(81.6, None, 173, 34, "M")
+    assert "bmi" in d2 and "bmr" in d2 and "body_fat" not in d2, d2
+    # incomplete profile -> nothing derived (keeps whatever the scale sent)
+    assert bodycomp.compute(81.6, 499, None, None, "M") == {}
+    print("body composition compute (fat/muscle/water/visceral/BMR/age) OK")
+
     r = client.get("/segments")
     assert r.status_code == 200 and "Segmenti ricorrenti" in r.text
     print("segments page renders OK")
