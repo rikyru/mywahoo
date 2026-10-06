@@ -227,6 +227,25 @@ with TestClient(app) as client:
     assert who["composizione_corporea"]["massa_grassa_pct"] == 18.2, who
     print("body composition fed to AI context OK")
 
+    # --- nutrition targets from BMR + lean mass + goal ---
+    from app import nutrition
+    cut = nutrition.compute_targets(1664, 59.4, 81.6, "cut", 15, 1.45, 2.0)
+    #  TDEE = 1664*1.45 = 2412.8 ; cut -15% -> ~2051 kcal
+    assert 2000 < cut["kcal"] < 2100, cut
+    assert 110 < cut["protein_g"] < 125, cut      # 2 g/kg of 59.4 lean
+    assert cut["carbs_g"] > 0 and cut["fat_g"] > 0, cut
+    maint = nutrition.compute_targets(1664, 59.4, 81.6, "maintain", 15, 1.45, 2.0)
+    assert maint["kcal"] > cut["kcal"], (maint, cut)     # maintenance > deficit
+    # kcal never prescribed below ~BMR even with an absurd deficit
+    floored = nutrition.compute_targets(1664, 59.4, 81.6, "cut", 90, 1.45, 2.0)
+    assert floored["kcal"] >= round(1664 * 1.05), floored
+    # measured TDEE overrides the estimate when provided
+    meas = nutrition.compute_targets(1664, 59.4, 81.6, "cut", 15, 1.45, 2.0, tdee=2600)
+    assert meas["kcal"] > cut["kcal"], (meas, cut)
+    # no BMR -> no targets
+    assert nutrition.compute_targets(None, 59, 81, "cut", 15, 1.45, 2.0) is None
+    print("nutrition targets (deficit/maintenance/floor/measured) OK")
+
     r = client.get("/segments")
     assert r.status_code == 200 and "Segmenti ricorrenti" in r.text
     print("segments page renders OK")

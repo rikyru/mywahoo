@@ -46,6 +46,40 @@ def save(values: dict) -> None:
         set_setting("profile.ai_notes", (values["ai_notes"] or "").strip()[:AI_NOTES_MAX])
 
 
+# Nutrition goal config (drives the kcal/macro targets pushed to planmydinner).
+# Kept apart from the physical profile: these are preferences, not measurements.
+NUTRITION_DEFAULTS = {"goal": "cut", "adjust_pct": 15.0,
+                      "activity_factor": 1.45, "protein_per_kg_lean": 2.0}
+NUTRITION_GOALS = ("cut", "maintain", "bulk")
+
+
+def nutrition_cfg() -> dict:
+    """Goal + knobs for the meal-plan targets, with sensible defaults."""
+    goal = get_setting("nutrition.goal", "") or NUTRITION_DEFAULTS["goal"]
+    if goal not in NUTRITION_GOALS:
+        goal = NUTRITION_DEFAULTS["goal"]
+    return {
+        "goal": goal,
+        "adjust_pct": _num(get_setting("nutrition.adjust_pct", ""))
+        if _num(get_setting("nutrition.adjust_pct", "")) is not None
+        else NUTRITION_DEFAULTS["adjust_pct"],
+        "activity_factor": _num(get_setting("nutrition.activity_factor", ""))
+        or NUTRITION_DEFAULTS["activity_factor"],
+        "protein_per_kg_lean": _num(get_setting("nutrition.protein_per_kg_lean", ""))
+        or NUTRITION_DEFAULTS["protein_per_kg_lean"],
+    }
+
+
+def save_nutrition_cfg(values: dict) -> None:
+    if "goal" in values:
+        g = (values["goal"] or "").strip()
+        set_setting("nutrition.goal", g if g in NUTRITION_GOALS else "")
+    for k in ("adjust_pct", "activity_factor", "protein_per_kg_lean"):
+        if k in values:
+            v = _num(values[k])
+            set_setting(f"nutrition.{k}", "" if v is None else str(v))
+
+
 def age(p: dict | None = None) -> int | None:
     p = p if p is not None else load()
     y = p.get("birth_year")

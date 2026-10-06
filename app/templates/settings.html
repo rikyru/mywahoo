@@ -71,6 +71,44 @@
 </section>
 
 <section class="card">
+  <div class="card-head">
+    <h3>Obiettivo alimentare</h3>
+    {% if planmydinner_on %}<span class="muted">→ planmydinner</span>{% endif %}
+  </div>
+  <p class="muted">Usa BMR reale e massa magra dall'ultima pesata per calcolare le
+    calorie e i macro target, da inviare a planmydinner come base del piano pasti.</p>
+  <form method="post" action="/settings/nutrition" class="edit-form">
+    <label>Obiettivo
+      <select name="goal">
+        <option value="cut" {% if nutrition_cfg.goal == 'cut' %}selected{% endif %}>Dimagrimento (deficit)</option>
+        <option value="maintain" {% if nutrition_cfg.goal == 'maintain' %}selected{% endif %}>Mantenimento</option>
+        <option value="bulk" {% if nutrition_cfg.goal == 'bulk' %}selected{% endif %}>Massa (surplus)</option>
+      </select>
+    </label>
+    <label>Deficit / surplus (%)
+      <input type="number" step="1" min="0" max="40" name="adjust_pct"
+             value="{{ nutrition_cfg.adjust_pct | round | int }}">
+    </label>
+    <label>Fattore attività (TDEE = BMR ×)
+      <input type="number" step="0.05" min="1" max="2.5" name="activity_factor"
+             value="{{ nutrition_cfg.activity_factor }}">
+    </label>
+    <label>Proteine (g per kg di massa magra)
+      <input type="number" step="0.1" min="1" max="3.5" name="protein_per_kg_lean"
+             value="{{ nutrition_cfg.protein_per_kg_lean }}">
+    </label>
+    <div class="edit-actions">
+      <button class="btn" type="submit">Salva obiettivo</button>
+    </div>
+  </form>
+  <div class="edit-actions" style="margin-top:.6rem">
+    <button class="btn" type="button" id="btnPreview">Calcola target</button>
+    {% if planmydinner_on %}<button class="btn btn-primary" type="button" id="btnPush">Invia a planmydinner</button>{% endif %}
+  </div>
+  <div id="targetsOut" class="muted" style="margin-top:.6rem"></div>
+</section>
+
+<section class="card">
   <h3>Accesso</h3>
   <p class="muted">Password per accedere all'app (login rapido, indipendente da Wahoo).
     {% if not has_password %}Attualmente nessuna password: si accede solo via Wahoo.{% endif %}</p>
@@ -123,5 +161,37 @@
 const prov = document.getElementById("provider"), md = document.getElementById("model");
 function sync() { md.setAttribute("list", prov.value === "openai" ? "openaiModels" : ""); }
 prov.addEventListener("change", sync); sync();
+
+// Nutrition targets: preview (compute) and push to planmydinner
+const out = document.getElementById("targetsOut");
+function renderTargets(res, pushed) {
+  const t = res.targets, b = res.basis;
+  const goalLbl = {cut: "deficit", maintain: "mantenimento", bulk: "surplus"}[b.goal] || b.goal;
+  out.innerHTML =
+    `<strong>${t.kcal} kcal</strong> · P ${t.protein_g} g · C ${t.carbs_g} g · G ${t.fat_g} g<br>` +
+    `<span class="muted">${goalLbl} ${b.adjust_pct}% · TDEE ${b.tdee} kcal (${b.tdee_source}) · ` +
+    `BMR ${b.bmr ? Math.round(b.bmr) : "–"}${b.lean_kg ? " · magra " + b.lean_kg + " kg" : ""} · ` +
+    `${b.protein_per_kg_lean} g/kg magra</span>` +
+    (pushed ? `<br><strong style="color:#2a9d8f">Inviato a planmydinner ✓</strong>` : "");
+}
+async function callTargets(url) {
+  out.textContent = "…";
+  try {
+    const r = await fetch(url, {method: url.includes("push") ? "POST" : "GET"});
+    const j = await r.json();
+    if (!r.ok) { out.textContent = j.error || "Errore"; return null; }
+    return j;
+  } catch (e) { out.textContent = "Errore di rete"; return null; }
+}
+document.getElementById("btnPreview").addEventListener("click", async () => {
+  const j = await callTargets("/api/nutrition/targets");
+  if (j) renderTargets(j, false);
+});
+const pushBtn = document.getElementById("btnPush");
+if (pushBtn) pushBtn.addEventListener("click", async () => {
+  if (!confirm("Scrivere questi target su planmydinner? Guideranno la prossima generazione del piano.")) return;
+  const j = await callTargets("/nutrition/push-targets");
+  if (j) renderTargets(j, true);
+});
 </script>
 {% endblock %}

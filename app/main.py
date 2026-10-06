@@ -1581,6 +1581,8 @@ async def settings_page(request: Request):
         "eff_rest_hr": round(rest_hr),
         "eff_max_hr": round(max_hr),
         "measured_max_hr": round(measured_max) if measured_max else None,
+        "nutrition_cfg": profilemod.nutrition_cfg(),
+        "planmydinner_on": nutrition.is_configured(),
         "message": request.query_params.get("msg"),
         "error": request.query_params.get("error"),
     })
@@ -1597,6 +1599,44 @@ def settings_profile(height_cm: str = Form(""), weight_kg: str = Form(""),
     return RedirectResponse(
         f"/settings?{urlencode({'msg': 'Dati personali salvati (rivedi la Forma: il carico è ricalcolato)'})}",
         status_code=303)
+
+
+@app.post("/settings/nutrition", dependencies=[Depends(require_auth)])
+def settings_nutrition(goal: str = Form("cut"), adjust_pct: str = Form(""),
+                       activity_factor: str = Form(""),
+                       protein_per_kg_lean: str = Form("")):
+    """Save the meal-plan goal config (drives the planmydinner targets)."""
+    profilemod.save_nutrition_cfg({
+        "goal": goal, "adjust_pct": adjust_pct,
+        "activity_factor": activity_factor, "protein_per_kg_lean": protein_per_kg_lean})
+    return RedirectResponse(
+        f"/settings?{urlencode({'msg': 'Obiettivo alimentare salvato'})}", status_code=303)
+
+
+@app.get("/api/nutrition/targets", dependencies=[Depends(require_auth)])
+async def api_nutrition_targets():
+    """Preview the kcal/macro targets computed from the latest weigh-in + goal."""
+    res = nutrition.build_targets()
+    if not res:
+        return JSONResponse({"error": "Serve una pesata con BMR (sali sulla bilancia)"},
+                            status_code=400)
+    return JSONResponse(res)
+
+
+@app.post("/nutrition/push-targets", dependencies=[Depends(require_auth)])
+async def nutrition_push_targets():
+    """Compute the targets and write them into planmydinner's planner rules."""
+    if not nutrition.is_configured():
+        return JSONResponse({"error": "planmydinner non configurato"}, status_code=400)
+    res = nutrition.build_targets()
+    if not res:
+        return JSONResponse({"error": "Serve una pesata con BMR (sali sulla bilancia)"},
+                            status_code=400)
+    ok = await nutrition.push_targets(res["targets"])
+    if not ok:
+        return JSONResponse({"error": "planmydinner ha rifiutato o non risponde"},
+                            status_code=502)
+    return JSONResponse({"status": "ok", **res})
 
 
 @app.post("/settings/profile/sync", dependencies=[Depends(require_auth)])

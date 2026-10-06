@@ -13,15 +13,100 @@ import logging
 from datetime import date
 
 import httpx
+from sqlmodel import Session, select
 
 from . import profile as profilemod
 from .config import settings
+from .db import BodyMeasure, engine
 
 logger = logging.getLogger(__name__)
 
 
 def is_configured() -> bool:
     return bool(settings.planmydinner_url)
+
+
+# ---------------------------------------------------------------- targets
+# Body-composition–driven kcal/macro targets, pushed to planmydinner so the
+# meal plan is sized on measured data (real BMR + lean mass) instead of a
+# generic formula. The goal (cut/maintain/bulk) and knobs are user-configurable
+# in the profile; this is the single place that turns them into numbers.
+
+def compute_targets(bmr: float | None, lean_kg: float | None, weight_kg: float | None,
+                    goal: str, adjust_pct: float, activity_factor: float,
+                    protein_per_kg_lean: float, tdee: float | None = None) -> dict | None:
+    """kcal + macro targets from BMR/lean mass and the goal. `tdee` (measured
+    daily burn, e.g. from Google) is used when given; otherwise TDEE is
+    estimated as BMR × activity_factor. Returns None if BMR is unknown."""
+    if not bmr or bmr <= 0:
+        return None
+    base = tdee if (tdee and tdee > 0) else bmr * (activity_factor or 1.45)
+
+    if goal == "cut":
+        kcal = base * (1 - (adjust_pct or 0) / 100.0)
+    elif goal == "bulk":
+        kcal = base * (1 + (adjust_pct or 0) / 100.0)
+    else:  # maintain
+        kcal = base
+    kcal = max(kcal, bmr * 1.05)            # never prescribe below ~BMR
+
+    # protein on lean mass (fallback: 75% of body weight as a lean proxy)
+    lean = lean_kg if (lean_kg and lean_kg > 0) else ((weight_kg or 0) * 0.75)
+    protein_g = min((protein_per_kg_lean or 2.0) * lean, 230) if lean else 0.0
+    fat_g = (kcal * 0.27) / 9.0             # 27% of energy from fat
+    carbs_g = max((kcal - protein_g * 4 - fat_g * 9) / 4.0, 0.0)
+
+    return {"kcal": round(kcal), "protein_g": round(protein_g),
+            "carbs_g": round(carbs_g), "fat_g": round(fat_g)}
+
+
+def _latest_body() -> BodyMeasure | None:
+    with Session(engine) as session:
+        return session.exec(select(BodyMeasure)
+                            .order_by(BodyMeasure.measured_at.desc())).first()
+
+
+def build_targets(tdee: float | None = None) -> dict | None:
+    """Compute the current targets from the latest weigh-in + profile config.
+    Returns {"targets": {...}, "basis": {...}} or None if there's no BMR yet."""
+    b = _latest_body()
+    p = profilemod.load()
+    cfg = profilemod.nutrition_cfg()
+    bmr = b.bmr if b else None
+    weight = (b.weight_kg if b else None) or p.get("weight_kg")
+    lean = None
+    if b and b.weight_kg and b.body_fat is not None:
+        lean = b.weight_kg * (1 - b.body_fat / 100.0)
+    targets = compute_targets(bmr, lean, weight, cfg["goal"], cfg["adjust_pct"],
+                              cfg["activity_factor"], cfg["protein_per_kg_lean"], tdee)
+    if not targets:
+        return None
+    basis = {"goal": cfg["goal"], "adjust_pct": cfg["adjust_pct"], "bmr": bmr,
+             "tdee": round(tdee) if tdee else round((bmr or 0) * cfg["activity_factor"]),
+             "tdee_source": "misurato" if tdee else "stima (BMR×fattore)",
+             "lean_kg": round(lean, 1) if lean else None,
+             "protein_per_kg_lean": cfg["protein_per_kg_lean"]}
+    return {"targets": targets, "basis": basis}
+
+
+async def push_targets(targets: dict) -> bool:
+    """Write the kcal/macro targets into planmydinner's planner rules."""
+    if not is_configured():
+        return False
+    base = settings.planmydinner_url.rstrip("/")
+    prof = settings.planmydinner_profile
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.put(f"{base}/planner/rules/{prof}",
+                                    json={"nutrition_targets": targets})
+        if resp.status_code == 200:
+            logger.info("Pushed nutrition targets to planmydinner: %s", targets)
+            return True
+        logger.warning("planmydinner rejected targets (%s): %s",
+                       resp.status_code, resp.text[:200])
+    except httpx.HTTPError as e:
+        logger.warning("Failed pushing targets to planmydinner: %s", e)
+    return False
 
 
 async def _get(client: httpx.AsyncClient, base: str, path: str, params: dict):
