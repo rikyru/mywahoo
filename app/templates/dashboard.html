@@ -49,6 +49,11 @@
     <div id="healthGlance"><p class="muted">Caricamento da Google Health…</p></div>
   </div>
 
+  <div class="card glance-card" id="nutritionGlanceCard" style="display:none">
+    <div class="card-head"><h3>Nutrizione oggi</h3><span class="muted">planmydinner</span></div>
+    <div id="nutritionGlance"></div>
+  </div>
+
   <div class="card glance-card">
     <div class="card-head"><h3>In programma</h3><a class="muted" href="/plans">Piani →</a></div>
     {% for u in upcoming %}
@@ -351,6 +356,33 @@ document.getElementById("coachForm").addEventListener("submit", async (e) => {
     host.innerHTML = `<p class="muted">Dati salute non disponibili: ${esc(e.message)}
       <br><a href="/health">Apri Salute</a></p>`;
   }
+})();
+
+// Nutrizione oggi vs obiettivo (da planmydinner)
+(async () => {
+  const card = document.getElementById("nutritionGlanceCard");
+  const host = document.getElementById("nutritionGlance");
+  try {
+    const d = await (await fetch("/api/nutrition/today")).json();
+    if (!d || !d.target_kcal) return;             // non configurato / nessun obiettivo
+    card.style.display = "";
+    const eaten = d.nutrition ? Math.round(d.nutrition.kcal) : 0;
+    const rem = d.remaining != null ? Math.round(d.remaining) : null;
+    const pct = Math.min(100, d.target_kcal ? eaten / d.target_kcal * 100 : 0);
+    const over = eaten > d.target_kcal * 1.05;
+    const parts = [
+      `<div class="glance-state">🎯 ${Math.round(d.target_kcal)} <small>kcal obiettivo</small>
+        <span class="glance-score ${over ? 'gm-warn' : 'gm-good'}">${eaten}</span></div>`,
+      `<div style="height:6px;background:#ffffff14;border-radius:4px;margin:6px 0;overflow:hidden">
+        <div style="height:100%;width:${pct}%;background:${over ? '#d62828' : '#2a9d8f'}"></div></div>`,
+    ];
+    if (rem != null) parts.push(`<p class="muted">${rem >= 0 ? 'Restano ' + rem : (-rem) + ' oltre'} kcal${d.training_note ? ' · ' + esc(d.training_note) : ''}</p>`);
+    if (d.nutrition) parts.push(`<div class="glance-metrics">
+        <div><span class="gm-value">${Math.round(d.nutrition.protein_g)}<small>g</small></span><span class="gm-label">proteine</span></div>
+        <div><span class="gm-value">${Math.round(d.nutrition.carbs_g)}<small>g</small></span><span class="gm-label">carbo</span></div>
+        <div><span class="gm-value">${Math.round(d.nutrition.fat_g)}<small>g</small></span><span class="gm-label">grassi</span></div></div>`);
+    host.innerHTML = parts.join("");
+  } catch (e) { /* planmydinner non raggiungibile: card nascosta */ }
 })();
 
 const data = {{ charts_json | safe }};

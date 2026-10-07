@@ -218,6 +218,27 @@ async def push_targets(targets: dict, allow_upscale: bool = True,
     return False
 
 
+async def today_nutrition() -> dict | None:
+    """Oggi vs obiettivo da planmydinner (per la card dashboard di OpenFit):
+    {target_kcal, nutrition, training_note, remaining}. None se non configurato."""
+    if not is_configured():
+        return None
+    base = settings.planmydinner_url.rstrip("/")
+    prof = settings.planmydinner_profile
+    today = date.today().isoformat()
+    async with httpx.AsyncClient(timeout=10) as client:
+        j = await _get(client, base, "/integration/summary",
+                       {"profile_id": prof, "start_date": today, "end_date": today})
+    if not j:
+        return None
+    day = (j.get("days") or [{}])[0]
+    target = day.get("target_kcal") or (j.get("targets") or {}).get("kcal")
+    nut = day.get("nutrition")
+    remaining = (target - nut["kcal"]) if (target and nut) else None
+    return {"target_kcal": target, "nutrition": nut,
+            "training_note": day.get("training_note"), "remaining": remaining}
+
+
 async def _get(client: httpx.AsyncClient, base: str, path: str, params: dict):
     try:
         resp = await client.get(base + path, params=params)

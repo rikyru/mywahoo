@@ -1624,6 +1624,13 @@ async def api_nutrition_targets():
     return JSONResponse(res)
 
 
+@app.get("/api/nutrition/today", dependencies=[Depends(require_auth)])
+async def api_nutrition_today():
+    """Nutrizione di oggi vs obiettivo (da planmydinner) per la card dashboard."""
+    data = await nutrition.today_nutrition()
+    return JSONResponse(data or {})
+
+
 @app.post("/nutrition/push-targets", dependencies=[Depends(require_auth)])
 async def nutrition_push_targets():
     """Compute the targets and write them into planmydinner's planner rules."""
