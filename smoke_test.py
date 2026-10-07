@@ -256,6 +256,23 @@ with TestClient(app) as client:
     assert r.status_code == 200 and "targets" in r.json(), r.text
     print("nutrition targets preview endpoint + measured fallback OK")
 
+    # periodizzazione: un allenamento pianificato domani alza il target di quel giorno
+    from datetime import datetime as _dtp, date as _datep, time as _timep, timedelta as _td
+    from app.db import PlanSession as _PS, TrainingPlan as _TP
+    with Session(engine) as s:
+        tp = _TP(title="P", goal="")
+        s.add(tp); s.commit(); s.refresh(tp)
+        tomorrow = _dtp.combine(_datep.today() + _td(days=1), _timep(12, 0))
+        s.add(_PS(plan_id=tp.id, order=0, day_label="Dom", date=tomorrow,
+                  title="Giro", sport="Bici", duration_min=120, done=False))
+        s.commit()
+    daily = nutrition.periodized_daily(2000)
+    iso = (_datep.today() + _td(days=1)).isoformat()
+    assert iso in daily, daily
+    assert daily[iso]["kcal"] > 2000              # +kcal dell'allenamento
+    assert "Bici" in daily[iso]["training_note"]
+    print("nutrition periodization (training day = more kcal) OK")
+
     r = client.get("/segments")
     assert r.status_code == 200 and "Segmenti ricorrenti" in r.text
     print("segments page renders OK")

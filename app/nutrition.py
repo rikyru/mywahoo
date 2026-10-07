@@ -10,14 +10,14 @@ no meal-quality index, so quality is left to the AI to judge from the macro spli
 protein-per-kg and the in-plan vs free/mensa ratio.
 """
 import logging
-from datetime import date
+from datetime import date, datetime, time, timedelta
 
 import httpx
 from sqlmodel import Session, select
 
 from . import profile as profilemod
 from .config import settings
-from .db import BodyMeasure, engine
+from .db import BodyMeasure, PlanSession, engine
 
 logger = logging.getLogger(__name__)
 
@@ -114,19 +114,68 @@ async def build_targets_auto() -> dict | None:
     return build_targets(tdee)
 
 
+# Stima kcal bruciate per minuto, per sport, usata per la periodizzazione:
+# nei giorni con allenamento pianificato il target del giorno sale di conseguenza.
+_KCAL_PER_MIN = {
+    "bici": 9.0, "ciclismo": 9.0, "mtb": 9.0, "corsa": 10.0, "running": 10.0,
+    "nuoto": 9.0, "camminata": 5.0, "trekking": 6.0, "escursione": 6.0,
+    "forza": 6.0, "palestra": 6.0, "corpo libero": 6.0, "yoga": 3.0,
+}
+
+
+def _session_kcal(sport: str, minutes: int | None) -> float:
+    return (minutes or 0) * _KCAL_PER_MIN.get((sport or "").strip().lower(), 7.0)
+
+
+def periodized_daily(base_kcal: float, days: int = 7) -> dict:
+    """Target per-giorno per i prossimi `days`: ai giorni con sessione pianificata
+    (non ancora fatta) somma le kcal stimate dell'allenamento al target base.
+    Mappa {data ISO: {kcal, training_note}}; i giorni senza allenamento sono
+    omessi (useranno il target piatto)."""
+    start = date.today()
+    end = start + timedelta(days=days - 1)
+    lo = datetime.combine(start, time.min)
+    hi = datetime.combine(end, time.max)
+    with Session(engine) as s:
+        rows = s.exec(select(PlanSession).where(
+            PlanSession.date != None,  # noqa: E711
+            PlanSession.date >= lo, PlanSession.date <= hi,
+            PlanSession.done == False)).all()  # noqa: E712
+    by_date: dict = {}
+    for ps in rows:
+        iso = ps.date.date().isoformat()
+        by_date.setdefault(iso, []).append(ps)
+    out: dict = {}
+    for iso, sessions in by_date.items():
+        extra = sum(_session_kcal(p.sport, p.duration_min) for p in sessions)
+        if extra <= 0:
+            continue
+        note = " + ".join(f"{p.sport} {p.duration_min}′" for p in sessions if p.duration_min)
+        entry = {"kcal": round(base_kcal + extra)}
+        if note:
+            entry["training_note"] = note
+        out[iso] = entry
+    return out
+
+
 async def recompute_and_push() -> bool:
     """Recompute targets (per the configured TDEE basis) and push them. Used
     both by the settings button and automatically after each weigh-in."""
     res = await build_targets_auto()
     if not res:
         return False
-    # In a cut, portions may only shrink: never inflate the meal plan to chase
-    # a higher kcal goal than the base plan provides.
-    allow_upscale = profilemod.nutrition_cfg().get("goal") != "cut"
-    return await push_targets(res["targets"], allow_upscale=allow_upscale)
+    # Periodizzazione: più kcal nei giorni di allenamento pianificato.
+    daily = periodized_daily(res["targets"]["kcal"])
+    # In a cut, portions may only shrink — MA nei giorni di allenamento la
+    # periodizzazione deve poter aumentare le porzioni (carburante guadagnato),
+    # quindi se ci sono bump consentiamo l'upscale.
+    cut = profilemod.nutrition_cfg().get("goal") == "cut"
+    allow_upscale = (not cut) or bool(daily)
+    return await push_targets(res["targets"], allow_upscale=allow_upscale, daily=daily)
 
 
-async def push_targets(targets: dict, allow_upscale: bool = True) -> bool:
+async def push_targets(targets: dict, allow_upscale: bool = True,
+                       daily: dict | None = None) -> bool:
     """Send the kcal/macro targets to planmydinner.
 
     Prefers the dedicated integration endpoint (POST /integration/apply-targets),
@@ -134,16 +183,19 @@ async def push_targets(targets: dict, allow_upscale: bool = True) -> bool:
     Falls back to writing the raw planner rules on older planmydinner builds that
     don't expose the endpoint yet, so the push works across the transition.
     `allow_upscale` is False in a cut: portions may only shrink, never grow.
+    `daily` (optional): per-date targets for periodization (training days).
     """
     if not is_configured():
         return False
     base = settings.planmydinner_url.rstrip("/")
     prof = settings.planmydinner_profile
+    body = {**targets, "allow_upscale": allow_upscale}
+    if daily:
+        body["daily"] = daily
     try:
         async with httpx.AsyncClient(timeout=20) as client:
             resp = await client.post(f"{base}/integration/apply-targets",
-                                     params={"profile_id": prof},
-                                     json={**targets, "allow_upscale": allow_upscale})
+                                     params={"profile_id": prof}, json=body)
             if resp.status_code == 200:
                 logger.info("Applied nutrition targets via planmydinner integration: %s",
                             targets)

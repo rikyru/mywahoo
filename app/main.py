@@ -1633,12 +1633,13 @@ async def nutrition_push_targets():
     if not res:
         return JSONResponse({"error": "Serve una pesata con BMR (sali sulla bilancia)"},
                             status_code=400)
-    allow_upscale = res["basis"].get("goal") != "cut"
-    ok = await nutrition.push_targets(res["targets"], allow_upscale=allow_upscale)
+    daily = nutrition.periodized_daily(res["targets"]["kcal"])
+    allow_upscale = (res["basis"].get("goal") != "cut") or bool(daily)
+    ok = await nutrition.push_targets(res["targets"], allow_upscale=allow_upscale, daily=daily)
     if not ok:
         return JSONResponse({"error": "planmydinner ha rifiutato o non risponde"},
                             status_code=502)
-    return JSONResponse({"status": "ok", **res})
+    return JSONResponse({"status": "ok", "daily_days": len(daily), **res})
 
 
 @app.post("/settings/profile/sync", dependencies=[Depends(require_auth)])
