@@ -655,6 +655,34 @@ with TestClient(app) as client:
     assert _slbl("Yoga") == "Yoga" and _slbl("") == "Altro"   # unknown kept as-is
     print("sport label: one canonical name per family OK")
 
+    # --- prompt caching: cached-token parsing + Anthropic cache breakpoint ---
+    from app.anthropic_client import _extract_text, _build_request
+    from app.db import get_setting as _get, set_setting as _set
+    # cached input tokens are read from each provider's usage shape
+    _, _ti, _, _tc = _extract_text(
+        {"choices": [{"message": {"content": "ok"}}],
+         "usage": {"prompt_tokens": 1000, "completion_tokens": 40,
+                   "prompt_tokens_details": {"cached_tokens": 800}}}, "openai")
+    assert _ti == 1000 and _tc == 800
+    _, _, _, _tc2 = _extract_text(
+        {"content": [{"type": "text", "text": "ok"}],
+         "usage": {"input_tokens": 1000, "output_tokens": 40,
+                   "cache_read_input_tokens": 900}}, "anthropic")
+    assert _tc2 == 900
+    # Anthropic: cache=True turns the system into a cache-breakpoint block; a
+    # one-shot call keeps it a plain string (no cache-write premium)
+    _op, _om = _get("ai_provider"), _get("ai_model")
+    _set("ai_provider", "anthropic"); _set("ai_model", "claude-x")
+    try:
+        _, _pl, _, _, _ = _build_request("SYS", [{"role": "user", "content": "q"}], cache=True)
+        assert isinstance(_pl["system"], list)
+        assert _pl["system"][0]["cache_control"]["type"] == "ephemeral"
+        _, _pl0, _, _, _ = _build_request("SYS", [{"role": "user", "content": "q"}])
+        assert _pl0["system"] == "SYS"
+    finally:
+        _set("ai_provider", _op); _set("ai_model", _om)
+    print("prompt caching: cached tokens parsed, Anthropic breakpoint set OK")
+
     # --- a deleted workout stays deleted (any source), and Wahoo won't re-add it ---
     from app.db import IgnoredImport as _Ign2
     import app.wahoo as wahoo

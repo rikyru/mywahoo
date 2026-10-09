@@ -130,8 +130,17 @@ def _provider_key(provider: str) -> str:
     return settings.openai_api_key if provider == "openai" else settings.anthropic_api_key
 
 
-def _build_request(system: str, messages: list) -> tuple[str, dict, dict, str, str]:
-    """Return (url, payload, headers, label, provider) for the active provider."""
+def _build_request(system: str, messages: list,
+                   cache: bool = False) -> tuple[str, dict, dict, str, str]:
+    """Return (url, payload, headers, label, provider) for the active provider.
+
+    `cache=True` marks the (large, stable) system prefix as cacheable. OpenAI
+    caches identical prompt prefixes automatically, so the flag only drives the
+    Anthropic `cache_control` breakpoint — which is why it's set just for the chat
+    callers (the system carries the whole window and repeats turn after turn):
+    a one-shot call would otherwise pay Anthropic's cache-write premium for a
+    block that never gets re-read.
+    """
     provider, model = effective_provider(), effective_model()
     if provider == "openai":
         payload = {
@@ -145,27 +154,38 @@ def _build_request(system: str, messages: list) -> tuple[str, dict, dict, str, s
         headers = {"authorization": f"Bearer {settings.openai_api_key}",
                    "content-type": "application/json"}
         return OPENAI_API_URL, payload, headers, "OpenAI", provider
+    # Anthropic: the system can be a list of text blocks, the last of which carries
+    # a cache breakpoint so the whole prefix up to it is served from cache on the
+    # next turn (default 5-min TTL).
+    system_field = ([{"type": "text", "text": system,
+                      "cache_control": {"type": "ephemeral"}}] if cache else system)
     payload = {
         "model": model,
         "max_tokens": MAX_TOKENS,
-        "system": system,
+        "system": system_field,
         "messages": messages,
     }
     headers = {"x-api-key": settings.anthropic_api_key,
                "anthropic-version": ANTHROPIC_VERSION, "content-type": "application/json"}
+    if cache:  # harmless once prompt caching is GA, avoids a 400 on older accounts
+        headers["anthropic-beta"] = "prompt-caching-2024-07-31"
     return API_URL, payload, headers, "Anthropic", provider
 
 
-def _extract_text(data: dict, provider: str) -> tuple[str, int | None, int | None]:
-    """Return (text, input_tokens, output_tokens) from the provider response."""
+def _extract_text(data: dict, provider: str) -> tuple[str, int | None, int | None, int]:
+    """Return (text, input_tokens, output_tokens, cached_input_tokens)."""
     usage = data.get("usage", {})
     if provider == "openai":
         choices = data.get("choices", [])
         text = (choices[0].get("message", {}).get("content") or "") if choices else ""
-        return text, usage.get("prompt_tokens"), usage.get("completion_tokens")
+        cached = (usage.get("prompt_tokens_details") or {}).get("cached_tokens") or 0
+        return text, usage.get("prompt_tokens"), usage.get("completion_tokens"), cached
     text = "".join(b.get("text", "") for b in data.get("content", [])
                    if b.get("type") == "text")
-    return text, usage.get("input_tokens"), usage.get("output_tokens")
+    # Anthropic bills cache reads at ~10% and writes at ~125%; count reads as the
+    # tokens we DIDN'T pay full price for this turn.
+    cached = usage.get("cache_read_input_tokens") or 0
+    return text, usage.get("input_tokens"), usage.get("output_tokens"), cached
 
 
 async def _call_claude(system: str, user_content: str) -> str:
@@ -173,9 +193,9 @@ async def _call_claude(system: str, user_content: str) -> str:
     return await _call_messages(system, [{"role": "user", "content": user_content}])
 
 
-async def _call_messages(system: str, messages: list) -> str:
+async def _call_messages(system: str, messages: list, cache: bool = False) -> str:
     """Call the AI API with a full message list, retrying on transient errors."""
-    url, payload, headers, label, provider = _build_request(system, messages)
+    url, payload, headers, label, provider = _build_request(system, messages, cache)
 
     last_error = "unknown"
     for attempt in range(MAX_RETRIES + 1):
@@ -193,10 +213,14 @@ async def _call_messages(system: str, messages: list) -> str:
 
         if resp.status_code == 200:
             data = resp.json()
-            text, tok_in, tok_out = _extract_text(data, provider)
+            text, tok_in, tok_out, tok_cached = _extract_text(data, provider)
             if not text:
                 raise AnthropicError(f"Risposta vuota dall'API {label}")
-            logger.info("AI analysis ok (%s): %s in / %s out tokens", label, tok_in, tok_out)
+            cached_note = ""
+            if tok_in and tok_cached:
+                cached_note = f" ({tok_cached} da cache, {round(100 * tok_cached / tok_in)}% dell'input)"
+            logger.info("AI analysis ok (%s): %s in / %s out tokens%s",
+                        label, tok_in, tok_out, cached_note)
             return text
 
         # Transient: rate limit / overloaded / server error -> backoff and retry
@@ -352,7 +376,7 @@ async def chat_plan_session(ctx: dict, history: list[dict]) -> dict:
     import re
     system = (PLAN_CHAT_SYSTEM_PROMPT + "\n\nCONTESTO (JSON):\n"
               + json.dumps(ctx, ensure_ascii=False, default=str))
-    raw = await _call_messages(system, history)
+    raw = await _call_messages(system, history, cache=True)
     m = re.search(r"\{.*\}", raw, re.S)
     if not m:
         return {"risposta": raw.strip(), "proposta": None}
@@ -403,7 +427,7 @@ async def chat_plan(ctx: dict, history: list[dict]) -> dict:
     import re
     system = (PLAN_EDIT_SYSTEM_PROMPT + "\n\nCONTESTO (JSON):\n"
               + json.dumps(ctx, ensure_ascii=False, default=str))
-    raw = await _call_messages(system, history)
+    raw = await _call_messages(system, history, cache=True)
     m = re.search(r"\{.*\}", raw, re.S)
     if not m:
         return {"risposta": raw.strip(), "azioni": []}
@@ -608,7 +632,7 @@ async def chat_health(overview: dict, workouts: list[dict] | None,
     payload = _health_payload(overview, workouts, nutrition)
     system = (CHAT_SYSTEM_PROMPT + "\n\nDATI DEL PERIODO (JSON):\n"
               + json.dumps(payload, ensure_ascii=False, default=str))
-    return await _call_messages(system, history)
+    return await _call_messages(system, history, cache=True)
 
 
 COACH_CHAT_SYSTEM_PROMPT = """\
@@ -643,7 +667,7 @@ async def coach_chat(overview: dict, workouts: list[dict] | None, history: list[
         payload["forma_attuale"] = form
     system = (COACH_CHAT_SYSTEM_PROMPT + "\n\nDATI DEL PERIODO (JSON):\n"
               + json.dumps(payload, ensure_ascii=False, default=str))
-    raw = await _call_messages(system, history)
+    raw = await _call_messages(system, history, cache=True)
     m = re.search(r"\{.*\}", raw, re.S)
     if not m:
         return {"risposta": raw.strip(), "piano_richiesto": None}
