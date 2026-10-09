@@ -1132,6 +1132,16 @@ def plans_page(request: Request):
         "error": request.query_params.get("err")})
 
 
+_BG_TASKS: set = set()   # tiene vivi i task fire-and-forget finché non finiscono
+
+
+def _fire_and_forget(coro) -> None:
+    import asyncio
+    task = asyncio.create_task(coro)
+    _BG_TASKS.add(task)
+    task.add_done_callback(_BG_TASKS.discard)
+
+
 async def _generate_and_store_plan(goal: str, n_days: int, start_d) -> int | None:
     """Ask the AI for a plan and persist it as TrainingPlan + PlanSessions.
     Returns the plan id, or None if the AI gave nothing usable."""
@@ -1153,7 +1163,12 @@ async def _generate_and_store_plan(goal: str, n_days: int, start_d) -> int | Non
                 duration_min=int(s.get("durata_min") or 0),
                 description=str(s.get("description", ""))))
         session.commit()
-        return plan.id
+        pid = plan.id
+    # Nuovi allenamenti in programma → riallinea i target per-giorno
+    # (periodizzazione) su planmydinner, best-effort in background.
+    if nutrition.is_configured():
+        _fire_and_forget(nutrition.recompute_and_push())
+    return pid
 
 
 @app.post("/plans/generate", dependencies=[Depends(require_auth)])
