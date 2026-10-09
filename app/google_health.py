@@ -314,6 +314,14 @@ def _same_activity(a_start, a_end, a_sport, b_start, b_end, b_sport) -> bool:
     return bool(a_end and b_end and a_start < b_end and b_start < a_end)
 
 
+def _same_plan_day(imp_start, imp_sport, w_start, w_sport) -> bool:
+    """A real imported activity and a plan-completion manual workout are the same
+    session when they fall on the same local day and share a sport family — the
+    manual row's placeholder time can't be trusted for a time-window match."""
+    return (_same_sport(imp_sport, w_sport)
+            and imp_start.date() == w_start.date())
+
+
 def _overlap_s(w_start, w_dur_s: int, e_start, e_end) -> float:
     """Seconds of overlap between a workout [start, start+dur] and an exercise
     interval [e_start, e_end]. A zero-duration workout overlaps if its start
@@ -474,11 +482,17 @@ async def enrich_workouts(max_pages: int = 8) -> int:
 
     from sqlmodel import select
 
-    from .db import IgnoredImport, Workout
+    from .db import IgnoredImport, PlanSession, Workout
 
     with Session(engine) as session:
         all_workouts = list(session.exec(select(Workout)))
         ignored = {r.id for r in session.exec(select(IgnoredImport))}
+        # Manual workouts that stand in for a completed plan session: they carry a
+        # placeholder start time (noon / the scheduled hour), so the real activity
+        # imported from Google won't time-match them. They're collapsed by same
+        # local day + sport family instead (see _plan_twin below).
+        plan_wids = {ps.workout_id for ps in session.exec(select(PlanSession))
+                     if ps.workout_id}
     candidates = [w for w in all_workouts if not w.has_fit]
     oldest_needed = (min((w.start_date for w in candidates), default=dt.utcnow())
                      - timedelta(hours=1))
@@ -542,8 +556,11 @@ async def enrich_workouts(max_pages: int = 8) -> int:
     for imp in imported:
         twin = next((w for w in all_workouts
                      if w.id != imp.id and not _is_imported(w)
-                     and _same_activity(imp.start_date, _wk_end(imp), imp.sport,
-                                        w.start_date, _wk_end(w), w.sport)), None)
+                     and (_same_activity(imp.start_date, _wk_end(imp), imp.sport,
+                                         w.start_date, _wk_end(w), w.sport)
+                          or (w.id in plan_wids
+                              and _same_plan_day(imp.start_date, imp.sport,
+                                                 w.start_date, w.sport)))), None)
         if twin:
             merge_fields = ("distance_m", "ascent_m", "avg_hr", "max_hr", "avg_power",
                             "calories", "avg_speed_ms")
@@ -565,22 +582,37 @@ async def enrich_workouts(max_pages: int = 8) -> int:
                         session.add(IgnoredImport(id=imp.id))
                     session.delete(row)
                 session.commit()
+            ignored.add(imp.id)  # keep phase-3 from re-importing the same exercise
             all_workouts = [w for w in all_workouts if w.id != imp.id]
             candidates = [w for w in candidates if w.id != imp.id]
             logger.info("Merged+removed Google import %s into Wahoo %s", imp.id, twin.id)
 
-    # 2. Field-by-field fill of data-less Wahoo workouts
+    # 2. Field-by-field fill of data-less Wahoo workouts. A plan-completion manual
+    # workout (placeholder time) is filled from the same-day same-sport exercise
+    # even outside the time window, so its real distance/HR/duration land on it.
     for w in candidates:
         match = next(
             (e for e in exercises
              if _matches_sport(w.sport, e["type"])
-             and _near_dup(e["start"], w.start_date, e["type"], w.sport)),
+             and (_near_dup(e["start"], w.start_date, e["type"], w.sport)
+                  or (w.id in plan_wids
+                      and e["start"].date() == w.start_date.date()))),
             None)
         if match is None:
             continue
+        # Plan-completion row matched off-window: adopt the exercise's real start
+        # so the list shows when the session actually happened and the HR stream
+        # (fetched around w.start_date below) covers the right span.
+        plan_fill = (w.id in plan_wids
+                     and not _near_dup(match["start"], w.start_date,
+                                       match["type"], w.sport))
         with Session(engine) as session:
             workout = session.get(Workout, w.id)
             changed = False
+            if plan_fill and match["start"]:
+                workout.start_date = match["start"]
+                w.start_date = match["start"]  # in-memory copy for the stream window
+                changed = True
             for field in ("distance_m", "avg_hr", "calories", "ascent_m", "avg_speed_ms"):
                 if not getattr(workout, field) and match[field]:
                     setattr(workout, field, match[field])
@@ -632,6 +664,8 @@ async def enrich_workouts(max_pages: int = 8) -> int:
         # (e.g. walk then ride) is still kept.
         if any(_same_activity(e["start"], e["end"], sport,
                               w.start_date, _wk_end(w), w.sport)
+               or (w.id in plan_wids
+                   and _same_plan_day(e["start"], sport, w.start_date, w.sport))
                for w in all_workouts):
             continue
         new = Workout(

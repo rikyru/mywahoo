@@ -969,6 +969,39 @@ with _Sess(_eng) as _s:
     assert _s.get(_Wk, 9004) is None          # background walk (0.9 km) skipped
 print("import grace + walk threshold: watch-only & real walk in, noise out OK")
 
+# --- plan-completion dedupe: a manual "done" session + its real Google import ---
+# Marking a plan session done creates a manual workout at a placeholder noon time;
+# the real swim imported from Google lands in the evening, so a time-window match
+# misses it. It must still collapse by same local day + sport family (keeping the
+# plan-linked manual row, not a second "Swimming" twin).
+from app.db import PlanSession as _PS, TrainingPlan as _TP
+_day = (_dtg.utcnow() - _tdg(days=2)).replace(hour=0, minute=0, second=0, microsecond=0)
+with _Sess(_eng) as _s:
+    _s.add(_Wk(id=7701, name="Nuoto master", sport="Nuoto", manual=True,
+               start_date=_day + _tdg(hours=12), duration_s=3600, moving_s=3600,
+               distance_m=0.0))
+    _tp = _TP(title="Piano test"); _s.add(_tp); _s.commit(); _s.refresh(_tp)
+    _s.add(_PS(plan_id=_tp.id, title="Nuoto master", sport="Nuoto",
+               duration_min=60, date=_day + _tdg(hours=12), done=True, workout_id=7701))
+    _s.commit()
+# Google delivers the same swim in the evening with the real data.
+_swim = [_ex_point(7702, "SWIMMING", _day + _tdg(hours=20), 3600, hr=134, dist_m=2.3)]
+async def _fake_swim(page_size=25, page_token=None, filter_=None):
+    return {"dataPoints": [] if page_token else _swim}
+_gh.list_exercises, _rl = _fake_swim, _gh.list_exercises
+_gh._attach_hr_stream, _ra = _noop_hr, _gh._attach_hr_stream
+try:
+    _aio3.run(_gh.enrich_workouts())
+finally:
+    _gh.list_exercises, _gh._attach_hr_stream = _rl, _ra
+with _Sess(_eng) as _s:
+    assert _s.get(_Wk, 7702) is None            # no second "Swimming" row imported
+    _kept = _s.get(_Wk, 7701)
+    assert _kept is not None and _kept.sport == "Nuoto"   # plan row kept
+    assert abs((_kept.distance_m or 0) - 2300) < 1        # real distance absorbed
+    assert _kept.avg_hr == 134                             # real HR absorbed
+print("plan-completion dedupe: evening import folds into noon plan session OK")
+
 # --- sleep: a daytime nap must not take a night's place, but must be counted ---
 from app.google_health import _parse_sleep_point, _split_sleep
 
