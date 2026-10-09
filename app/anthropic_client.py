@@ -193,10 +193,9 @@ async def _call_claude(system: str, user_content: str) -> str:
     return await _call_messages(system, [{"role": "user", "content": user_content}])
 
 
-async def _call_messages(system: str, messages: list, cache: bool = False) -> str:
-    """Call the AI API with a full message list, retrying on transient errors."""
-    url, payload, headers, label, provider = _build_request(system, messages, cache)
-
+async def _post(url: str, payload: dict, headers: dict, label: str) -> dict:
+    """POST to an AI API with retry/backoff; return the parsed JSON response.
+    Raises AnthropicError on a non-retryable error or after exhausting retries."""
     last_error = "unknown"
     for attempt in range(MAX_RETRIES + 1):
         try:
@@ -212,16 +211,7 @@ async def _call_messages(system: str, messages: list, cache: bool = False) -> st
             continue
 
         if resp.status_code == 200:
-            data = resp.json()
-            text, tok_in, tok_out, tok_cached = _extract_text(data, provider)
-            if not text:
-                raise AnthropicError(f"Risposta vuota dall'API {label}")
-            cached_note = ""
-            if tok_in and tok_cached:
-                cached_note = f" ({tok_cached} da cache, {round(100 * tok_cached / tok_in)}% dell'input)"
-            logger.info("AI analysis ok (%s): %s in / %s out tokens%s",
-                        label, tok_in, tok_out, cached_note)
-            return text
+            return resp.json()
 
         # Transient: rate limit / overloaded / server error -> backoff and retry
         if resp.status_code in (429, 529) or resp.status_code >= 500:
@@ -242,6 +232,134 @@ async def _call_messages(system: str, messages: list, cache: bool = False) -> st
         raise AnthropicError(f"Errore API {label} (HTTP {resp.status_code}): {err_msg}")
 
     raise AnthropicError(f"Analisi non disponibile: {last_error}. Riprova tra qualche minuto.")
+
+
+def _log_usage(label: str, data: dict, provider: str) -> None:
+    _, tok_in, tok_out, tok_cached = _extract_text(data, provider)
+    cached_note = ""
+    if tok_in and tok_cached:
+        cached_note = f" ({tok_cached} da cache, {round(100 * tok_cached / tok_in)}% dell'input)"
+    logger.info("AI call ok (%s): %s in / %s out tokens%s", label, tok_in, tok_out, cached_note)
+
+
+async def _call_messages(system: str, messages: list, cache: bool = False) -> str:
+    """Call the AI API with a full message list, retrying on transient errors."""
+    url, payload, headers, label, provider = _build_request(system, messages, cache)
+    data = await _post(url, payload, headers, label)
+    text, _, _, _ = _extract_text(data, provider)
+    if not text:
+        raise AnthropicError(f"Risposta vuota dall'API {label}")
+    _log_usage(label, data, provider)
+    return text
+
+
+def _run_tool(executor, name: str, args: dict) -> str:
+    try:
+        result = executor(name, args)
+    except Exception as e:  # a tool error must not abort the whole answer
+        logger.warning("Tool %s failed: %s", name, e)
+        return f"errore nell'esecuzione del tool: {e}"
+    return result if isinstance(result, str) else _dumps(result)
+
+
+async def _openai_tools(system, messages, tools, executor, model, max_rounds) -> str:
+    oai_tools = [{"type": "function", "function": {
+        "name": t["name"], "description": t["description"],
+        "parameters": t["parameters"]}} for t in tools]
+    headers = {"authorization": f"Bearer {settings.openai_api_key}",
+               "content-type": "application/json"}
+    msgs = [{"role": "system", "content": system}] + [dict(m) for m in messages]
+
+    def _payload(with_tools: bool) -> dict:
+        p = {"model": model, "max_completion_tokens": MAX_TOKENS, "messages": msgs}
+        if with_tools:
+            p["tools"] = oai_tools
+        if model.startswith(OPENAI_REASONING_PREFIXES):
+            p["reasoning_effort"] = "low"
+        return p
+
+    for _ in range(max_rounds):
+        data = await _post(OPENAI_API_URL, _payload(True), headers, "OpenAI")
+        _log_usage("OpenAI", data, "openai")
+        choice = (data.get("choices") or [{}])[0].get("message") or {}
+        tcs = choice.get("tool_calls")
+        if not tcs:
+            return choice.get("content") or ""
+        msgs.append({"role": "assistant", "content": choice.get("content"),
+                     "tool_calls": tcs})
+        for tc in tcs:
+            fn = tc.get("function") or {}
+            try:
+                args = json.loads(fn.get("arguments") or "{}")
+            except json.JSONDecodeError:
+                args = {}
+            msgs.append({"role": "tool", "tool_call_id": tc.get("id"),
+                         "content": _run_tool(executor, fn.get("name") or "", args)})
+    # out of rounds: one last answer without offering tools
+    data = await _post(OPENAI_API_URL, _payload(False), headers, "OpenAI")
+    return ((data.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
+
+
+async def _anthropic_tools(system, messages, tools, executor, model, cache, max_rounds) -> str:
+    an_tools = [{"name": t["name"], "description": t["description"],
+                 "input_schema": t["parameters"]} for t in tools]
+    system_field = ([{"type": "text", "text": system,
+                      "cache_control": {"type": "ephemeral"}}] if cache else system)
+    headers = {"x-api-key": settings.anthropic_api_key,
+               "anthropic-version": ANTHROPIC_VERSION, "content-type": "application/json"}
+    if cache:
+        headers["anthropic-beta"] = "prompt-caching-2024-07-31"
+    msgs = [dict(m) for m in messages]
+
+    def _payload(with_tools: bool) -> dict:
+        p = {"model": model, "max_tokens": MAX_TOKENS, "system": system_field,
+             "messages": msgs}
+        if with_tools:
+            p["tools"] = an_tools
+        return p
+
+    for _ in range(max_rounds):
+        data = await _post(API_URL, _payload(True), headers, "Anthropic")
+        _log_usage("Anthropic", data, "anthropic")
+        content = data.get("content") or []
+        tool_uses = [b for b in content if b.get("type") == "tool_use"]
+        if not tool_uses:
+            return "".join(b.get("text", "") for b in content if b.get("type") == "text")
+        msgs.append({"role": "assistant", "content": content})
+        msgs.append({"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": tu.get("id"),
+             "content": _run_tool(executor, tu.get("name") or "", tu.get("input") or {})}
+            for tu in tool_uses]})
+    data = await _post(API_URL, _payload(False), headers, "Anthropic")
+    return "".join(b.get("text", "") for b in (data.get("content") or [])
+                   if b.get("type") == "text")
+
+
+async def _call_with_tools(system: str, messages: list, tools: list, executor,
+                           cache: bool = False, fallback_system: str | None = None,
+                           max_rounds: int = 4) -> str:
+    """Grounded Q&A where the model pulls full-resolution detail ON DEMAND via
+    `tools` instead of getting everything up front — so the base prompt stays
+    small and the window can grow without bloating it.
+
+    `tools`: provider-agnostic [{name, description, parameters(JSON schema)}].
+    `executor(name, args)->str|obj`: runs a tool, result fed back to the model.
+    On ANY failure (model ignores tools, provider rejects the param, parse error)
+    falls back to a plain call with `fallback_system` (the full context), so the
+    chat never degrades below the non-tool behaviour."""
+    provider, model = effective_provider(), effective_model()
+    try:
+        if provider == "openai":
+            text = await _openai_tools(system, messages, tools, executor, model, max_rounds)
+        else:
+            text = await _anthropic_tools(system, messages, tools, executor, model,
+                                          cache, max_rounds)
+        if text:
+            return text
+        raise AnthropicError("risposta vuota dal loop tool")
+    except Exception as e:
+        logger.warning("Tool loop fallback (%s): %s", provider, e)
+        return await _call_messages(fallback_system or system, messages, cache=cache)
 
 
 async def analyze_workout(summary_row: dict, stream_stats: dict) -> str:
@@ -526,8 +644,10 @@ def _table(rows: list[dict], columns: list[str]) -> dict:
     return {"colonne": cols, "righe": [[r.get(c) for c in cols] for r in rows]}
 
 
-def _activity_log(workouts: list[dict] | None) -> list[dict]:
-    """Compact per-activity view for correlating training load with recovery."""
+def _activity_log(workouts: list[dict] | None, with_notes: bool = True) -> list[dict]:
+    """Compact per-activity view for correlating training load with recovery.
+    `with_notes=False` drops the free-text «cosa_ha_fatto» (the bulkiest field):
+    the tool-use chat leaves it out of the base prompt and fetches it on demand."""
     out = []
     for w in workouts or []:
         d = w.get("start_date")
@@ -544,7 +664,7 @@ def _activity_log(workouts: list[dict] | None) -> list[dict]:
                 row[dst] = round(w[src], 1)
         # What the user actually did (home/bodyweight sessions have no HR/power:
         # the description is the only signal about the real load).
-        if w.get("notes"):
+        if with_notes and w.get("notes"):
             row["cosa_ha_fatto"] = str(w["notes"])[:600]
         out.append(row)
     out.sort(key=lambda r: r["data"])
@@ -552,7 +672,7 @@ def _activity_log(workouts: list[dict] | None) -> list[dict]:
 
 
 def _health_payload(overview: dict, workouts: list[dict] | None,
-                    nutrition: dict | None = None) -> dict:
+                    nutrition: dict | None = None, with_notes: bool = True) -> dict:
     """Compact view of the health window (latest + trend + min/avg/max + sleep in
     hours + activity log), shared by the summary and the chat assistant."""
     def stats(series: list) -> dict:
@@ -593,7 +713,7 @@ def _health_payload(overview: dict, workouts: list[dict] | None,
     out = {"indice_di_forma": overview.get("score"),
            "metriche_vitali": metrics, "composizione_corporea": body,
            "sonno": sleep,
-           "attivita_fisiche": _table(_activity_log(workouts),
+           "attivita_fisiche": _table(_activity_log(workouts, with_notes),
                                       ["data", "sport", "durata_min", "nome",
                                        "distanza_km", "fc_media", "potenza_media",
                                        "tss", "cosa_ha_fatto"])}
@@ -648,13 +768,54 @@ anomali persistenti, suggerisci cautela o un controllo medico. Durate del sonno
 sempre in ore e minuti (es. "6h30")."""
 
 
+_DETAIL_TOOL_NOTE = ("\n\nIl campo «cosa_ha_fatto» (descrizione testuale delle "
+    "sessioni) NON è incluso qui per risparmiare spazio: quando una domanda "
+    "riguarda cosa l'atleta ha svolto in una sessione, chiama il tool "
+    "dettaglio_attivita(data) per leggerlo al dettaglio pieno.")
+
+
+def _detail_tools(workouts: list[dict] | None):
+    """A tool returning the full detail (incl. the free-text «cosa_ha_fatto») of a
+    day's activities, read from the IN-MEMORY list already fetched — so the base
+    prompt can omit the bulky notes and the model fetches them only on demand.
+    Returns (tools_spec, executor)."""
+    def _exec(name: str, args: dict):
+        if name != "dettaglio_attivita":
+            return "tool sconosciuto"
+        day = str(args.get("data") or "")[:10]
+        rows = [w for w in (workouts or []) if str(w.get("start_date"))[:10] == day]
+        if not rows:
+            return "nessuna attività registrata quel giorno"
+        return [{"sport": w.get("sport"), "nome": w.get("name"),
+                 "durata_min": round((w.get("moving_s") or 0) / 60),
+                 "distanza_km": round(w["distance_m"] / 1000, 1) if w.get("distance_m") else None,
+                 "fc_media": round(w["avg_hr"]) if w.get("avg_hr") else None,
+                 "cosa_ha_fatto": str(w["notes"])[:1500] if w.get("notes") else None}
+                for w in rows]
+
+    tools = [{"name": "dettaglio_attivita",
+              "description": "Dettaglio completo delle attività di un giorno, inclusa "
+                             "la descrizione testuale di cosa è stato fatto (essenziale "
+                             "per le sessioni a casa/corpo libero senza FC o potenza).",
+              "parameters": {"type": "object",
+                             "properties": {"data": {"type": "string",
+                                            "description": "Giorno YYYY-MM-DD"}},
+                             "required": ["data"]}}]
+    return tools, _exec
+
+
 async def chat_health(overview: dict, workouts: list[dict] | None,
                       history: list[dict], nutrition: dict | None = None) -> str:
-    """Answer a follow-up question grounded in the health-window data."""
-    payload = _health_payload(overview, workouts, nutrition)
-    system = (CHAT_SYSTEM_PROMPT + "\n\nDATI DEL PERIODO (JSON):\n"
-              + _dumps(payload))
-    return await _call_messages(system, history, cache=True)
+    """Answer a follow-up question grounded in the health-window data. The base
+    prompt carries a compact context (no per-session notes); the model pulls the
+    full detail on demand via the dettaglio_attivita tool."""
+    compact = _health_payload(overview, workouts, nutrition, with_notes=False)
+    full = _health_payload(overview, workouts, nutrition)
+    tools, ex = _detail_tools(workouts)
+    base = CHAT_SYSTEM_PROMPT + _DETAIL_TOOL_NOTE + "\n\nDATI DEL PERIODO (JSON):\n"
+    fallback = CHAT_SYSTEM_PROMPT + "\n\nDATI DEL PERIODO (JSON):\n" + _dumps(full)
+    return await _call_with_tools(base + _dumps(compact), history, tools, ex,
+                                  cache=True, fallback_system=fallback)
 
 
 COACH_CHAT_SYSTEM_PROMPT = """\
@@ -684,12 +845,15 @@ async def coach_chat(overview: dict, workouts: list[dict] | None, history: list[
     {"risposta": str, "piano_richiesto": {obiettivo, giorni}|None} — the latter
     lets the caller generate + save a real plan."""
     import re
-    payload = _health_payload(overview, workouts, nutrition)
+    compact = _health_payload(overview, workouts, nutrition, with_notes=False)
+    full = _health_payload(overview, workouts, nutrition)
     if form:
-        payload["forma_attuale"] = form
-    system = (COACH_CHAT_SYSTEM_PROMPT + "\n\nDATI DEL PERIODO (JSON):\n"
-              + _dumps(payload))
-    raw = await _call_messages(system, history, cache=True)
+        compact["forma_attuale"] = full["forma_attuale"] = form
+    tools, ex = _detail_tools(workouts)
+    base = COACH_CHAT_SYSTEM_PROMPT + _DETAIL_TOOL_NOTE + "\n\nDATI DEL PERIODO (JSON):\n"
+    fallback = COACH_CHAT_SYSTEM_PROMPT + "\n\nDATI DEL PERIODO (JSON):\n" + _dumps(full)
+    raw = await _call_with_tools(base + _dumps(compact), history, tools, ex,
+                                 cache=True, fallback_system=fallback)
     m = re.search(r"\{.*\}", raw, re.S)
     if not m:
         return {"risposta": raw.strip(), "piano_richiesto": None}

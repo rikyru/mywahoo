@@ -683,6 +683,73 @@ with TestClient(app) as client:
         _set("ai_provider", _op); _set("ai_model", _om)
     print("prompt caching: cached tokens parsed, Anthropic breakpoint set OK")
 
+    # --- tool-use loop (Fase B): detail-on-demand, both providers, with fallback ---
+    import asyncio as _aiot
+    import app.anthropic_client as _acmod
+    _tool_spec = [{"name": "dettaglio_attivita", "description": "d",
+                   "parameters": {"type": "object",
+                                  "properties": {"data": {"type": "string"}},
+                                  "required": ["data"]}}]
+    _seen = {"args": None}
+    def _tool_exec(name, args):
+        _seen["args"] = (name, args)
+        return "FATTO: 2000m misti"
+    # each provider: round 1 asks for the tool, round 2 gives the final answer
+    _oai_seq = [
+        {"choices": [{"message": {"content": None, "tool_calls": [
+            {"id": "c1", "function": {"name": "dettaglio_attivita",
+                                      "arguments": '{"data":"2026-05-20"}'}}]}}],
+         "usage": {"prompt_tokens": 10, "completion_tokens": 2}},
+        {"choices": [{"message": {"content": "Hai nuotato 2000m misti."}}],
+         "usage": {"prompt_tokens": 12, "completion_tokens": 5}}]
+    _an_seq = [
+        {"stop_reason": "tool_use", "content": [
+            {"type": "tool_use", "id": "t1", "name": "dettaglio_attivita",
+             "input": {"data": "2026-05-20"}}],
+         "usage": {"input_tokens": 10, "output_tokens": 2}},
+        {"stop_reason": "end_turn",
+         "content": [{"type": "text", "text": "Hai nuotato 2000m misti."}],
+         "usage": {"input_tokens": 12, "output_tokens": 5}}]
+
+    def _fake_post(seq):
+        it = iter(seq)
+        async def _fp(url, payload, headers, label):
+            return next(it)
+        return _fp
+
+    _orig_post = _acmod._post
+    _opr, _omo = _get("ai_provider"), _get("ai_model")
+    try:
+        _set("ai_provider", "openai"); _set("ai_model", "gpt-x")
+        _acmod._post = _fake_post(_oai_seq)
+        _out = _aiot.run(_acmod._call_with_tools(
+            "SYS", [{"role": "user", "content": "cosa ho fatto?"}], _tool_spec, _tool_exec))
+        assert _out == "Hai nuotato 2000m misti.", _out
+        assert _seen["args"] == ("dettaglio_attivita", {"data": "2026-05-20"}), _seen
+
+        _seen["args"] = None
+        _set("ai_provider", "anthropic"); _set("ai_model", "claude-x")
+        _acmod._post = _fake_post(_an_seq)
+        _out = _aiot.run(_acmod._call_with_tools(
+            "SYS", [{"role": "user", "content": "q"}], _tool_spec, _tool_exec, cache=True))
+        assert _out == "Hai nuotato 2000m misti." and _seen["args"][1] == {"data": "2026-05-20"}
+
+        # fallback: tools path raises -> plain full-context call is used instead
+        async def _post_fallback(url, payload, headers, label):
+            if "tools" in payload:
+                raise RuntimeError("tools non supportati")
+            return {"content": [{"type": "text", "text": "risposta piena"}],
+                    "usage": {"input_tokens": 1, "output_tokens": 1}}
+        _acmod._post = _post_fallback
+        _out = _aiot.run(_acmod._call_with_tools(
+            "SYS-COMPACT", [{"role": "user", "content": "q"}], _tool_spec, _tool_exec,
+            cache=True, fallback_system="SYS-FULL"))
+        assert _out == "risposta piena", _out
+    finally:
+        _acmod._post = _orig_post
+        _set("ai_provider", _opr); _set("ai_model", _omo)
+    print("tool-use loop: openai + anthropic round-trip + fallback OK")
+
     # --- a deleted workout stays deleted (any source), and Wahoo won't re-add it ---
     from app.db import IgnoredImport as _Ign2
     import app.wahoo as wahoo
