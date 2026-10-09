@@ -606,6 +606,45 @@ with TestClient(app) as client:
         assert s.get(_W, 912) is not None                        # both kept, untouched
     print("merge dismiss: pair kept separate, not re-proposed OK")
 
+    # --- plan-session reconcile: auto-fold the real recording into the placeholder,
+    # even when the placeholder was already partly enriched (the case the UI merge
+    # suggestion refuses) and regardless of the real row's source (Wahoo/Google) ---
+    from app.main import reconcile_plan_duplicates
+    from app.db import TrainingPlan as _TP, PlanSession as _PS
+    _d = datetime(2026, 5, 20, 0, 0)
+    with Session(engine) as s:
+        _tp = _TP(title="Piano nuoto"); s.add(_tp); s.commit(); s.refresh(_tp)
+        # plan session marked done -> manual placeholder, ALREADY carrying partial
+        # data (so _can_merge would bail), noon placeholder time, plan link
+        s.add(_W(id=5201, name="Nuoto master", sport="Nuoto", manual=True,
+                 notes="2000m misti", start_date=_d.replace(hour=12),
+                 moving_s=3600, duration_s=3600, distance_m=2300.0, avg_hr=133))
+        s.add(_PS(plan_id=_tp.id, title="Nuoto master", sport="Nuoto",
+                  duration_min=60, date=_d.replace(hour=12), done=True, workout_id=5201))
+        # the SAME swim delivered as a separate row at the real evening hour, with a
+        # Wahoo-style "Swimming" family label and richer data
+        s.add(_W(id=5202, name="Nuotata serale", sport="Swimming", manual=False,
+                 start_date=_d.replace(hour=20), moving_s=3700, duration_s=3700,
+                 distance_m=2300.0, avg_hr=134, max_hr=152, calories=640))
+        # an unrelated same-day run that must NOT be folded into the swim session
+        s.add(_W(id=5203, name="Corsetta", sport="Running", manual=False,
+                 start_date=_d.replace(hour=7), distance_m=5000, avg_hr=150))
+        s.commit()
+    _fused = reconcile_plan_duplicates()
+    assert _fused >= 1, _fused
+    with Session(engine) as s:
+        assert s.get(_W, 5202) is None            # duplicate swim folded away
+        assert s.get(_W, 5203) is not None        # unrelated run untouched
+        _keep = s.get(_W, 5201)
+        assert _keep is not None and _keep.manual and _keep.sport == "Nuoto"  # plan row kept
+        assert _keep.notes == "2000m misti"       # description survives
+        assert _keep.avg_hr == 134 and _keep.calories == 640   # real data adopted
+        assert _keep.start_date.hour == 20        # real evening time, not noon
+        _linked = s.exec(select(_PS).where(_PS.workout_id == 5201)).first()
+        assert _linked is not None and _linked.done  # plan link intact (id preserved)
+        assert reconcile_plan_duplicates() == 0    # idempotent, nothing left
+    print("plan reconcile: evening recording folded into plan session, run kept OK")
+
     # --- a deleted workout stays deleted (any source), and Wahoo won't re-add it ---
     from app.db import IgnoredImport as _Ign2
     import app.wahoo as wahoo

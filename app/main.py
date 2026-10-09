@@ -1776,6 +1776,10 @@ async def _process_webhook(payload: dict) -> None:
                 await google_health.enrich_workouts(max_pages=1)
             except google_health.GoogleHealthError as e:
                 logger.warning("Google Health enrichment skipped: %s", e)
+        try:
+            reconcile_plan_duplicates()
+        except Exception as e:
+            logger.warning("Plan duplicate reconcile failed: %s", e)
     except Exception:
         logger.exception("Webhook background processing failed")
 
@@ -2303,6 +2307,12 @@ async def sync(full: str = Form(default="")):
         except google_health.GoogleHealthError as e:
             logger.warning("Google Health enrichment skipped: %s", e)
             msg += " (arricchimento Google saltato: ricollega da /login/google)"
+    try:
+        fused = reconcile_plan_duplicates()  # runs even if Google is down
+        if fused:
+            msg += f", {fused} doppioni del piano uniti"
+    except Exception as e:
+        logger.warning("Plan duplicate reconcile failed: %s", e)
     return RedirectResponse(f"/?{urlencode({'msg': msg})}", status_code=303)
 
 
@@ -2421,6 +2431,51 @@ def _merge_workouts(session, keep: Workout, absorb: Workout) -> None:
     session.delete(absorb)
     session.add(keep)
     session.commit()
+
+
+def reconcile_plan_duplicates() -> int:
+    """Collapse duplicate rows of a completed plan session into its placeholder.
+
+    Marking a plan session done stamps a manual workout with a placeholder time
+    (noon / the scheduled hour). The same activity recorded for real — a Wahoo
+    third-party stub, a Google import, an uploaded FIT — lands as a SEPARATE row
+    at the real hour, so a time-window match misses it and the list shows two
+    activities. Fold every same-day, compatible-sport recording into the plan
+    placeholder, which keeps its id so the plan link and description survive.
+
+    Unlike the UI merge suggestion (`_merge_candidate`), this runs automatically
+    on every sync and does not require the placeholder to still be empty — a plan
+    row already enriched with partial data still absorbs the real recording. Pairs
+    the user chose to keep separate (`_nomerge_key`) are respected. Returns the
+    number of rows folded in.
+    """
+    merged = 0
+    with Session(engine) as session:
+        plan_wids = {ps.workout_id for ps in session.exec(
+            select(PlanSession).where(PlanSession.workout_id != None)).all()  # noqa: E711
+            if ps.workout_id}
+        for ps in session.exec(select(PlanSession).where(
+                PlanSession.workout_id != None)).all():  # noqa: E711
+            keep = session.get(Workout, ps.workout_id)
+            if not keep or not keep.start_date:
+                continue
+            day_lo = datetime.combine(keep.start_date.date(), time.min)
+            day_hi = datetime.combine(keep.start_date.date(), time.max)
+            dups = [x for x in session.exec(select(Workout).where(
+                        Workout.start_date >= day_lo, Workout.start_date <= day_hi)).all()
+                    # another real recording of the same session: not the placeholder
+                    # itself, not a second plan placeholder, same sport family, and
+                    # not a pair the user explicitly split
+                    if x.id != keep.id and x.id not in plan_wids
+                    and not x.manual
+                    and google_health._sameday_sport_ok(keep.sport, x.sport)
+                    and not get_setting(_nomerge_key(keep.id, x.id))]
+            for x in dups:
+                _merge_workouts(session, keep, x)  # commits; keep keeps its id
+                merged += 1
+                logger.info("Plan dedupe: folded %s into plan workout %s (%s)",
+                            x.id, keep.id, keep.sport)
+    return merged
 
 
 @app.post("/workout/{keep_id}/merge", dependencies=[Depends(require_auth)])
