@@ -215,7 +215,7 @@
       <tr>
         <td>{{ w.start_date.strftime("%d/%m/%Y") }}</td>
         <td><a href="/workout/{{ w.id }}">{{ w.name }}</a></td>
-        <td><span class="tag">{{ w.sport }}</span></td>
+        <td><span class="tag">{{ w.sport | sport_label }}</span></td>
         <td>{{ "%.1f"|format(w.distance_m / 1000) }} km</td>
         <td>{{ w.moving_s | duration }}</td>
         <td>{{ fmt_speed(w) }}</td>

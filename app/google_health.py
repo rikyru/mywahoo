@@ -227,8 +227,8 @@ MATCH_TOLERANCE_S = 25 * 60
 # Import label per sport family (workouts Google has but Wahoo never delivered).
 # "strength" groups bodyweight/circuit/functional work — all one thing for the
 # athlete ("Corpo libero"), so Circuit Training and Corpo libero merge & dedup.
-FAMILY_LABEL = {"swim": "Swimming", "bike": "Cycling", "run": "Running",
-                "walk": "Walking", "strength": "Corpo libero"}
+FAMILY_LABEL = {"swim": "Nuoto", "bike": "Ciclismo", "run": "Corsa",
+                "walk": "Camminata", "strength": "Corpo libero"}
 
 
 def _sport_family(label: str) -> str | None:

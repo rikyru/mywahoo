@@ -27,7 +27,7 @@ doppione, elimina quella di troppo (di solito quella senza FIT/meno completa).</
       <tr>
         <td>{{ w.start_date.strftime("%d/%m/%Y %H:%M") }}</td>
         <td><a href="/workout/{{ w.id }}">{{ w.name }}</a></td>
-        <td><span class="tag">{{ w.sport }}</span></td>
+        <td><span class="tag">{{ w.sport | sport_label }}</span></td>
         <td>{{ "%.1f"|format(w.distance_m / 1000) }} km</td>
         <td>{{ w.avg_hr and ("%.0f"|format(w.avg_hr)) or "-" }}</td>
         <td>{{ "✓" if w.has_fit else "—" }}</td>

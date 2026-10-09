@@ -645,6 +645,16 @@ with TestClient(app) as client:
         assert reconcile_plan_duplicates() == 0    # idempotent, nothing left
     print("plan reconcile: evening recording folded into plan session, run kept OK")
 
+    # --- one display label per sport family: Nuoto/Swimming never shown as two ---
+    from app.main import sport_label as _slbl
+    assert _slbl("Nuoto") == "Nuoto" and _slbl("Swimming") == "Nuoto"
+    assert _slbl("SWIMMING_POOL") == "Nuoto" and _slbl("lap_swimming") == "Nuoto"
+    assert _slbl("Cycling") == "Ciclismo" and _slbl("Mountain Biking") == "Ciclismo"
+    assert _slbl("Running") == "Corsa" and _slbl("Walking") == "Camminata"
+    assert _slbl("Corpo libero") == "Corpo libero" and _slbl("Circuit Training") == "Corpo libero"
+    assert _slbl("Yoga") == "Yoga" and _slbl("") == "Altro"   # unknown kept as-is
+    print("sport label: one canonical name per family OK")
+
     # --- a deleted workout stays deleted (any source), and Wahoo won't re-add it ---
     from app.db import IgnoredImport as _Ign2
     import app.wahoo as wahoo

@@ -123,9 +123,25 @@ def sport_icon(sport: str) -> str:
     return "🔵"
 
 
+# One display label per sport family, so "Nuoto" (dal piano) and "Swimming" (da
+# Google) — and the bike/run/walk/strength equivalents — never appear as two
+# different activity types in lists, filters and the type breakdown.
+_SPORT_LABEL_IT = {"swim": "Nuoto", "bike": "Ciclismo", "run": "Corsa",
+                   "walk": "Camminata", "strength": "Corpo libero"}
+
+
+def sport_label(sport: str) -> str:
+    fam = google_health._sport_family(sport or "")
+    if fam:
+        return _SPORT_LABEL_IT[fam]
+    return (sport or "").strip() or "Altro"
+
+
 templates.env.globals["fmt_speed"] = fmt_speed
 templates.env.globals["app_name"] = settings.app_name
 templates.env.globals["sport_icon"] = sport_icon
+templates.env.globals["sport_label"] = sport_label
+templates.env.filters["sport_label"] = sport_label
 def asset(name: str) -> str:
     """/static URL stamped with the file's mtime.
 
@@ -203,7 +219,7 @@ def build_chart_data(workouts: list[Workout]) -> dict:
     for w in workouts:
         iso = w.start_date.isocalendar()
         week_km[f"{iso[0]}-W{iso[1]:02d}"] += w.distance_m / 1000
-        type_count[w.sport or "Altro"] += 1
+        type_count[sport_label(w.sport)] += 1
         if w.avg_power:
             metric_points.append({"x": w.start_date.strftime("%Y-%m-%d"),
                                   "y": round(w.avg_power, 0), "kind": "power"})

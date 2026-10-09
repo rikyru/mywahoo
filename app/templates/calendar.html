@@ -28,7 +28,7 @@
       <div class="cal-daynum">{{ day }}</div>
       <div class="cal-acts">
         {% for w in days[day] %}
-        <a href="/workout/{{ w.id }}" class="cal-act" title="{{ w.name }} · {{ w.sport }}{% if w.moving_s %} · {{ w.moving_s | duration }}{% endif %}">
+        <a href="/workout/{{ w.id }}" class="cal-act" title="{{ w.name }} · {{ w.sport | sport_label }}{% if w.moving_s %} · {{ w.moving_s | duration }}{% endif %}">
           {{ sport_icon(w.sport) }}
         </a>
         {% endfor %}

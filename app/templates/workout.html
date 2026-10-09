@@ -17,7 +17,7 @@
   </div>
 </div>
 <p>
-  <span class="tag">{{ w.sport }}{% if w.sub_sport %} · {{ w.sub_sport }}{% endif %}</span>
+  <span class="tag">{{ w.sport | sport_label }}{% if w.sub_sport %} · {{ w.sub_sport }}{% endif %}</span>
   <span class="muted">{{ w.start_date.strftime("%d/%m/%Y %H:%M") }}
   {% if not w.has_fit and streams_json == 'null' %} · <em>solo summary (FIT non disponibile)</em>{% elif not w.has_fit %} · <em>dati da Google Health</em>{% endif %}</span>
 </p>
