@@ -750,6 +750,28 @@ with TestClient(app) as client:
         _set("ai_provider", _opr); _set("ai_model", _omo)
     print("tool-use loop: openai + anthropic round-trip + fallback OK")
 
+    # --- coach_chat: plan proposal flows through the proponi_piano TOOL ---
+    _cc_seq = [
+        {"choices": [{"message": {"content": None, "tool_calls": [
+            {"id": "p1", "function": {"name": "proponi_piano",
+             "arguments": '{"obiettivo":"fondo bici 3 uscite","giorni":7}'}}]}}],
+         "usage": {"prompt_tokens": 20, "completion_tokens": 3}},
+        {"choices": [{"message": {"content": "Ti propongo una settimana di fondo."}}],
+         "usage": {"prompt_tokens": 22, "completion_tokens": 8}}]
+    _opc, _omc = _get("ai_provider"), _get("ai_model")
+    try:
+        _set("ai_provider", "openai"); _set("ai_model", "gpt-x")
+        _acmod._post = _fake_post(_cc_seq)
+        _res = _aiot.run(_acmod.coach_chat(
+            {"metrics": {}, "body": {}, "sleep": [], "score": None}, [],
+            [{"role": "user", "content": "come sto? fammi un piano settimanale"}]))
+        assert _res["piano_richiesto"] == {"obiettivo": "fondo bici 3 uscite", "giorni": 7}, _res
+        assert "fondo" in _res["risposta"].lower()
+    finally:
+        _acmod._post = _orig_post
+        _set("ai_provider", _opc); _set("ai_model", _omc)
+    print("coach_chat: plan proposal via proponi_piano tool OK")
+
     # --- a deleted workout stays deleted (any source), and Wahoo won't re-add it ---
     from app.db import IgnoredImport as _Ign2
     import app.wahoo as wahoo

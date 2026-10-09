@@ -222,6 +222,7 @@
     <p class="muted">Domande sui tuoi dati del periodo (recupero, sonno, allenamenti, alimentazione).
       Ogni conversazione viene <strong>salvata</strong> — es. chiedi un piano di allenamento e lo rivedi in «Salvate».</p>
     <div id="chatLog" class="chat-log"></div>
+    <div id="chatPlan"></div>
     <form id="chatForm" class="chat-input">
       <input type="text" id="chatMsg" placeholder="Es. fammi un piano di allenamento per la prossima settimana" autocomplete="off">
       <button class="btn" type="submit">Invia</button>
@@ -275,9 +276,38 @@ function addBubble(role, text) {
   chatLog.scrollTop = chatLog.scrollHeight;
   return div;
 }
+const chatPlan = document.getElementById("chatPlan");
+// The coach can propose a plan; show a one-click button to generate + save it
+// (same endpoint as the dashboard coach).
+function renderPlanReq(pr) {
+  chatPlan.innerHTML = "";
+  if (!pr || !pr.obiettivo) return;
+  const box = document.createElement("div");
+  box.className = "chat-plan card";
+  const p = document.createElement("p");
+  p.innerHTML = "<strong>Piano proposto:</strong> " + pr.obiettivo + " · " + pr.giorni + " giorni";
+  const btn = document.createElement("button");
+  btn.className = "btn"; btn.textContent = "Genera e salva il piano";
+  btn.onclick = async () => {
+    btn.disabled = true; btn.textContent = "Genero il piano…";
+    try {
+      const r = await fetch("/analyze/plan", { method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({ goal: pr.obiettivo, giorni: pr.giorni }) });
+      const d = await r.json();
+      if (d.url) { location.href = d.url; return; }
+      btn.disabled = false; btn.textContent = "Genera e salva il piano";
+      alert(d.error || "errore nella generazione");
+    } catch (e) {
+      btn.disabled = false; btn.textContent = "Genera e salva il piano";
+    }
+  };
+  box.appendChild(p); box.appendChild(btn); chatPlan.appendChild(box);
+}
 document.getElementById("chatNew").addEventListener("click", () => {
   conversationId = null;
   chatLog.innerHTML = "";
+  chatPlan.innerHTML = "";
   chatMsg.focus();
 });
 chatForm.addEventListener("submit", async (e) => {
@@ -297,6 +327,7 @@ chatForm.addEventListener("submit", async (e) => {
     if (data.reply) {
       thinking.innerHTML = window.renderMd(data.reply);
       conversationId = data.conversation_id;
+      renderPlanReq(data.plan_request);
     } else {
       thinking.textContent = "⚠️ " + (data.error || "errore");
     }

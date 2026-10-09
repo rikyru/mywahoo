@@ -507,19 +507,25 @@ async def health_chat(request: Request):
         workouts = [w.model_dump(exclude={"raw_summary", "fit_path", "updated_at"})
                     for w in query_range(session, window["start"], window["end"], None)]
     nutri = await nutrition.fetch_nutrition(window["start"].date(), window["end"].date())
-    try:
-        reply = await anthropic_client.chat_health(data, workouts, history, nutri)
+    _, form_summary = _fitness_series()
+    try:  # one unified assistant (same brain as the dashboard coach)
+        out = await anthropic_client.coach_chat(data, workouts, history, nutri, form_summary)
     except anthropic_client.AnthropicError as e:
         return JSONResponse({"error": str(e)}, status_code=502)
 
+    reply = out.get("risposta") or ""
+    plan_req = out.get("piano_richiesto")
+    stored = reply + (f"\n\n[Piano proposto] {plan_req.get('obiettivo')} · "
+                      f"{plan_req.get('giorni')} giorni" if plan_req else "")
     with Session(engine) as session:
         session.add(ChatMessage(conversation_id=conv_id, role="user", content=msg))
-        session.add(ChatMessage(conversation_id=conv_id, role="assistant", content=reply))
+        session.add(ChatMessage(conversation_id=conv_id, role="assistant", content=stored))
         c = session.get(Conversation, conv_id)
         c.updated_at = datetime.utcnow()
         session.add(c)
         session.commit()
-    return JSONResponse({"reply": reply, "conversation_id": conv_id})
+    return JSONResponse({"reply": reply, "plan_request": plan_req,
+                         "conversation_id": conv_id})
 
 
 @app.get("/conversations", response_class=HTMLResponse, dependencies=[Depends(require_auth)])

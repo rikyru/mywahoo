@@ -753,22 +753,7 @@ async def summarize_health(overview: dict, workouts: list[dict] | None = None,
         _dumps(payload))
 
 
-CHAT_SYSTEM_PROMPT = """\
-Sei l'assistente di salute e allenamento di questo atleta. Rispondi in italiano,
-in modo conciso e concreto, USANDO i dati del periodo forniti qui sotto
-(indice di forma, metriche vitali con trend, sonno in ore, passi e calorie
-bruciate giornaliere, attività con carico, ed eventuale alimentazione: aderenza
-al piano, e kcal/macro dei PASTI TRACCIATI con proteine_g_per_kg, ed eventuale
-bilancio_energetico ingerite-vs-bruciate). Tratta le kcal come pasti tracciati, non introito totale
-(non dedurne un deficit); giudica la qualità dei pasti dai macro reali (proteine
-~1.6-2.2 g/kg per uno sportivo, equilibrio dei macro, costanza).
-Correla salute, allenamento e alimentazione quando utile. Se la domanda esce dai dati
-disponibili, dillo con onestà. Niente diagnosi mediche: per sintomi o valori
-anomali persistenti, suggerisci cautela o un controllo medico. Durate del sonno
-sempre in ore e minuti (es. "6h30")."""
-
-
-_DETAIL_TOOL_NOTE = ("\n\nIl campo «cosa_ha_fatto» (descrizione testuale delle "
+_DETAIL_TOOL_NOTE =("\n\nIl campo «cosa_ha_fatto» (descrizione testuale delle "
     "sessioni) NON è incluso qui per risparmiare spazio: quando una domanda "
     "riguarda cosa l'atleta ha svolto in una sessione, chiama il tool "
     "dettaglio_attivita(data) per leggerlo al dettaglio pieno.")
@@ -804,20 +789,6 @@ def _detail_tools(workouts: list[dict] | None):
     return tools, _exec
 
 
-async def chat_health(overview: dict, workouts: list[dict] | None,
-                      history: list[dict], nutrition: dict | None = None) -> str:
-    """Answer a follow-up question grounded in the health-window data. The base
-    prompt carries a compact context (no per-session notes); the model pulls the
-    full detail on demand via the dettaglio_attivita tool."""
-    compact = _health_payload(overview, workouts, nutrition, with_notes=False)
-    full = _health_payload(overview, workouts, nutrition)
-    tools, ex = _detail_tools(workouts)
-    base = CHAT_SYSTEM_PROMPT + _DETAIL_TOOL_NOTE + "\n\nDATI DEL PERIODO (JSON):\n"
-    fallback = CHAT_SYSTEM_PROMPT + "\n\nDATI DEL PERIODO (JSON):\n" + _dumps(full)
-    return await _call_with_tools(base + _dumps(compact), history, tools, ex,
-                                  cache=True, fallback_system=fallback)
-
-
 COACH_CHAT_SYSTEM_PROMPT = """\
 Sei il coach di questo atleta. Rispondi in italiano, conciso e concreto, USANDO i
 dati del periodo forniti sotto: allenamenti con carico, forma (CTL/ATL/TSB),
@@ -839,30 +810,84 @@ Metti "piano_richiesto" SOLO quando l'atleta vuole un piano; altrimenti null.
 Nessun altro testo."""
 
 
+COACH_TOOL_PROMPT = """\
+Sei il coach di questo atleta: l'unico assistente AI dell'app, per salute,
+allenamento e alimentazione. Rispondi in italiano, conciso e concreto, in
+Markdown, USANDO i dati del periodo forniti sotto: allenamenti con carico, forma
+(CTL/ATL/TSB), metriche di salute/recupero, sonno e alimentazione (aderenza,
+kcal/macro dei pasti tracciati). Puoi discutere allenamento, recupero e cibo
+insieme. Durate del sonno in ore e minuti. Tratta le kcal come pasti tracciati
+(non dedurne un deficit). Niente diagnosi mediche: per valori anomali persistenti
+suggerisci cautela o un controllo. Se la domanda esce dai dati, dillo con onestà.
+
+Hai due strumenti:
+- dettaglio_attivita(data): leggi cosa è stato svolto in una sessione (usalo
+  quando la domanda riguarda cosa ha fatto l'atleta in un giorno).
+- proponi_piano(obiettivo, giorni): quando l'atleta chiede un PIANO di
+  allenamento, NON scriverlo nella risposta — chiama questo strumento con
+  l'obiettivo (una frase che tiene conto di forma/recupero/storico) e i giorni
+  (7 per una settimana, ~28 per un mese). Nella risposta riassumi in una frase
+  cosa proporresti e invita a confermare."""
+
+
 async def coach_chat(overview: dict, workouts: list[dict] | None, history: list[dict],
                      nutrition: dict | None = None, form: dict | None = None) -> dict:
-    """Grounded coach chat over training + recovery + nutrition. Returns
-    {"risposta": str, "piano_richiesto": {obiettivo, giorni}|None} — the latter
-    lets the caller generate + save a real plan."""
+    """The single grounded assistant (salute + allenamento + nutrizione), used by
+    both the dashboard and the health page. Returns {"risposta": str,
+    "piano_richiesto": {obiettivo, giorni}|None}: the proposal lets the caller
+    generate + save a real plan on the user's confirmation.
+
+    Plan proposals come through the proponi_piano TOOL (robust, no rigid JSON);
+    if the provider ignores the tools, _call_with_tools falls back to the proven
+    JSON contract, which is parsed below — so behaviour never regresses."""
     import re
     compact = _health_payload(overview, workouts, nutrition, with_notes=False)
     full = _health_payload(overview, workouts, nutrition)
     if form:
         compact["forma_attuale"] = full["forma_attuale"] = form
-    tools, ex = _detail_tools(workouts)
-    base = COACH_CHAT_SYSTEM_PROMPT + _DETAIL_TOOL_NOTE + "\n\nDATI DEL PERIODO (JSON):\n"
+
+    _detail, _detail_exec = _detail_tools(workouts)
+    captured: dict = {}
+
+    def _exec(name: str, args: dict):
+        if name == "proponi_piano":
+            obj = str(args.get("obiettivo") or "").strip()
+            try:
+                g = int(args.get("giorni") or 7)
+            except (TypeError, ValueError):
+                g = 7
+            if obj:
+                captured["piano"] = {"obiettivo": obj, "giorni": max(1, min(60, g))}
+            return "Proposta registrata: riassumi in una frase e invita l'atleta a confermare."
+        return _detail_exec(name, args)
+
+    tools = _detail + [{
+        "name": "proponi_piano",
+        "description": "Proponi (senza generarlo) un piano di allenamento quando "
+                       "l'atleta ne chiede uno; l'utente lo confermerà poi.",
+        "parameters": {"type": "object", "properties": {
+            "obiettivo": {"type": "string", "description": "frase che sintetizza "
+                          "l'obiettivo tenendo conto di forma/recupero/storico"},
+            "giorni": {"type": "integer", "description": "7=settimana, ~28=mese"}},
+            "required": ["obiettivo", "giorni"]}}]
+
+    base = COACH_TOOL_PROMPT + _DETAIL_TOOL_NOTE + "\n\nDATI DEL PERIODO (JSON):\n"
     fallback = COACH_CHAT_SYSTEM_PROMPT + "\n\nDATI DEL PERIODO (JSON):\n" + _dumps(full)
-    raw = await _call_with_tools(base + _dumps(compact), history, tools, ex,
+    raw = await _call_with_tools(base + _dumps(compact), history, tools, _exec,
                                  cache=True, fallback_system=fallback)
+
+    if captured.get("piano"):                     # tool path: proposal captured
+        return {"risposta": raw.strip(), "piano_richiesto": captured["piano"]}
+    # fallback path (JSON contract) — parse if the reply is a JSON object
     m = re.search(r"\{.*\}", raw, re.S)
-    if not m:
-        return {"risposta": raw.strip(), "piano_richiesto": None}
-    try:
-        d = json.loads(m.group(0))
-    except json.JSONDecodeError:
-        return {"risposta": raw.strip(), "piano_richiesto": None}
-    return {"risposta": str(d.get("risposta") or "").strip(),
-            "piano_richiesto": d.get("piano_richiesto") or None}
+    if m:
+        try:
+            d = json.loads(m.group(0))
+            return {"risposta": str(d.get("risposta") or raw).strip(),
+                    "piano_richiesto": d.get("piano_richiesto") or None}
+        except json.JSONDecodeError:
+            pass
+    return {"risposta": raw.strip(), "piano_richiesto": None}
 
 
 async def list_openai_models() -> list[str]:
