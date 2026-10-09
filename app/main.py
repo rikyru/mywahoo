@@ -50,7 +50,7 @@ templates = Jinja2Templates(directory=BASE_DIR / "templates")
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 
 @app.on_event("startup")
-def on_startup() -> None:
+async def on_startup() -> None:
     missing = settings.validate()
     if missing:
         logger.warning("Missing required env vars: %s — the app will not work correctly",
@@ -59,6 +59,7 @@ def on_startup() -> None:
     logger.info("%s started (provider=%s, model=%s, db=%s, fits=%s)",
                 settings.app_name, settings.ai_provider, settings.ai_model,
                 settings.db_path, settings.fit_dir)
+    _fire_and_forget(_nightly_recompute_loop())   # ricalcolo target notturno
 
 
 # ---------------------------------------------------------------- helpers
@@ -1140,6 +1141,31 @@ def _fire_and_forget(coro) -> None:
     task = asyncio.create_task(coro)
     _BG_TASKS.add(task)
     task.add_done_callback(_BG_TASKS.discard)
+
+
+async def _nightly_recompute_loop() -> None:
+    """Ricalcola e ri-invia i target a planmydinner ogni notte (03:00 locali),
+    così il fabbisogno segue peso e allenamenti anche senza pesarsi o rigenerare
+    il piano. Best-effort: gli errori non fermano il loop."""
+    import asyncio
+    from datetime import datetime, timedelta
+    try:
+        from zoneinfo import ZoneInfo
+        tz = ZoneInfo(settings.timezone)
+    except Exception:
+        tz = None
+    while True:
+        now = datetime.now(tz)
+        nxt = now.replace(hour=3, minute=0, second=0, microsecond=0)
+        if nxt <= now:
+            nxt += timedelta(days=1)
+        await asyncio.sleep(max(60.0, (nxt - now).total_seconds()))
+        try:
+            if nutrition.is_configured():
+                ok = await nutrition.recompute_and_push()
+                logger.info("Nightly target recompute pushed=%s", ok)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Nightly recompute failed: %s", e)
 
 
 async def _generate_and_store_plan(goal: str, n_days: int, start_d) -> int | None:
