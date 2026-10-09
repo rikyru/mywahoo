@@ -248,13 +248,13 @@ async def analyze_workout(summary_row: dict, stream_stats: dict) -> str:
     """Generate the AI analysis for one workout: summary + aggregated stream stats."""
     body = ""
     if (who := _profile.ai_context()):
-        body += ("Atleta:\n" + json.dumps(who, ensure_ascii=False, default=str) + "\n\n")
+        body += ("Atleta:\n" + _dumps(who) + "\n\n")
     body += ("Dati di riepilogo della sessione:\n"
-             + json.dumps(summary_row, ensure_ascii=False, indent=2, default=str))
+             + _dumps(summary_row))
     if stream_stats:
         body += ("\n\nStatistiche aggregate dagli stream del file FIT "
                  "(medie per decimo di sessione, drift cardiaco):\n"
-                 + json.dumps(stream_stats, ensure_ascii=False, indent=2))
+                 + _dumps(stream_stats))
     else:
         body += "\n\nNessuno stream disponibile (solo summary)."
     return await _call_claude(SESSION_SYSTEM_PROMPT, body)
@@ -288,7 +288,7 @@ async def assess_route(route: dict, history: dict, form: dict | None,
         payload["atleta"] = who
     return await _call_claude(
         ROUTE_SYSTEM_PROMPT,
-        json.dumps(payload, ensure_ascii=False, indent=1, default=str))
+        _dumps(payload))
 
 
 FORM_SYSTEM_PROMPT = """\
@@ -312,7 +312,7 @@ async def summarize_form(summary: dict, recent_weeks: list[dict]) -> str:
     payload = {"stato_attuale": summary, "ultime_settimane": recent_weeks}
     return await _call_claude(
         FORM_SYSTEM_PROMPT,
-        json.dumps(payload, ensure_ascii=False, indent=1, default=str))
+        _dumps(payload))
 
 
 # Sport labels the app understands: they drive the calendar icon (sport_icon) and
@@ -375,7 +375,7 @@ async def chat_plan_session(ctx: dict, history: list[dict]) -> dict:
     """
     import re
     system = (PLAN_CHAT_SYSTEM_PROMPT + "\n\nCONTESTO (JSON):\n"
-              + json.dumps(ctx, ensure_ascii=False, default=str))
+              + _dumps(ctx))
     raw = await _call_messages(system, history, cache=True)
     m = re.search(r"\{.*\}", raw, re.S)
     if not m:
@@ -426,7 +426,7 @@ async def chat_plan(ctx: dict, history: list[dict]) -> dict:
     """
     import re
     system = (PLAN_EDIT_SYSTEM_PROMPT + "\n\nCONTESTO (JSON):\n"
-              + json.dumps(ctx, ensure_ascii=False, default=str))
+              + _dumps(ctx))
     raw = await _call_messages(system, history, cache=True)
     m = re.search(r"\{.*\}", raw, re.S)
     if not m:
@@ -445,7 +445,7 @@ async def generate_plan(goal: str, n_days: int, start_date: str) -> dict:
     user = (f"Obiettivo: {goal}\nGiorni disponibili: {n_days}\n"
             f"Data di inizio: {start_date}")
     if (who := _profile.ai_context()):
-        user += "\nAtleta: " + json.dumps(who, ensure_ascii=False)
+        user += "\nAtleta: " + _dumps(who)
     raw = await _call_claude(PLAN_SYSTEM_PROMPT, user)
     m = re.search(r"\{.*\}", raw, re.S)
     if not m:
@@ -478,7 +478,7 @@ async def estimate_rpe(title: str, sport: str, minutes: float, description: str,
     if profile:
         payload["atleta"] = profile
     raw = await _call_claude(RPE_SYSTEM_PROMPT,
-                             json.dumps(payload, ensure_ascii=False, default=str))
+                             _dumps(payload))
     m = re.search(r"\{.*\}", raw, re.S)
     if not m:
         return None
@@ -509,7 +509,21 @@ async def summarize_period(period_label: str, workouts: list[dict]) -> str:
         payload["atleta"] = who
     return await _call_claude(
         PERIOD_SYSTEM_PROMPT,
-        json.dumps(payload, ensure_ascii=False, indent=1, default=str))
+        _dumps(payload))
+
+
+def _dumps(obj) -> str:
+    """Compact JSON for AI prompts: no indentation, tight separators — same
+    content, fewer tokens (whitespace is billed too)."""
+    return json.dumps(obj, ensure_ascii=False, separators=(",", ":"), default=str)
+
+
+def _table(rows: list[dict], columns: list[str]) -> dict:
+    """Array-of-objects -> {"colonne", "righe"}: column names appear once, not on
+    every row, so a 30-row log costs a fraction of the tokens with no loss of
+    resolution. Columns empty across all rows are dropped."""
+    cols = [c for c in columns if any(r.get(c) is not None for r in rows)]
+    return {"colonne": cols, "righe": [[r.get(c) for c in cols] for r in rows]}
 
 
 def _activity_log(workouts: list[dict] | None) -> list[dict]:
@@ -565,17 +579,24 @@ def _health_payload(overview: dict, workouts: list[dict] | None,
         asleep = [n["asleep_min"] for n in nights]
         sleep = {"notti_disponibili": len(nights),
                  "media_durata": hm(sum(asleep) / len(asleep)),
-                 "per_notte": [{"data": n["date"], "durata": hm(n["asleep_min"]),
-                                "efficienza": n.get("efficiency")} for n in nights]}
+                 "per_notte": _table(
+                     [{"data": n["date"], "durata": hm(n["asleep_min"]),
+                       "efficienza": n.get("efficiency")} for n in nights],
+                     ["data", "durata", "efficienza"])}
         naps = overview.get("naps") or []
         if naps:
             # daytime sleep, separate from the night — extra recovery, not a night
-            sleep["pisolini"] = [{"data": n["date"], "durata": hm(n["asleep_min"])}
-                                 for n in naps]
+            sleep["pisolini"] = _table(
+                [{"data": n["date"], "durata": hm(n["asleep_min"])} for n in naps],
+                ["data", "durata"])
 
     out = {"indice_di_forma": overview.get("score"),
            "metriche_vitali": metrics, "composizione_corporea": body,
-           "sonno": sleep, "attivita_fisiche": _activity_log(workouts)}
+           "sonno": sleep,
+           "attivita_fisiche": _table(_activity_log(workouts),
+                                      ["data", "sport", "durata_min", "nome",
+                                       "distanza_km", "fc_media", "potenza_media",
+                                       "tss", "cosa_ha_fatto"])}
     if (who := _profile.ai_context()):
         out["atleta"] = who
     if nutrition:
@@ -597,7 +618,8 @@ def _health_payload(overview: dict, workouts: list[dict] | None,
                 "nota": "«ingerite» = solo PASTI TRACCIATI (di norma sottostima "
                         "l'introito reale); «bruciate» = dispendio totale (metabolismo "
                         "+ attività). Il saldo è una stima PRUDENTE, non un vero deficit.",
-                "per_giorno": rows}
+                "per_giorno": _table(rows, ["data", "ingerite_tracciate_kcal",
+                                            "bruciate_kcal", "saldo_kcal"])}
     return out
 
 
@@ -608,7 +630,7 @@ async def summarize_health(overview: dict, workouts: list[dict] | None = None,
     payload = _health_payload(overview, workouts, nutrition)
     return await _call_claude(
         HEALTH_SYSTEM_PROMPT,
-        json.dumps(payload, ensure_ascii=False, indent=1, default=str))
+        _dumps(payload))
 
 
 CHAT_SYSTEM_PROMPT = """\
@@ -631,7 +653,7 @@ async def chat_health(overview: dict, workouts: list[dict] | None,
     """Answer a follow-up question grounded in the health-window data."""
     payload = _health_payload(overview, workouts, nutrition)
     system = (CHAT_SYSTEM_PROMPT + "\n\nDATI DEL PERIODO (JSON):\n"
-              + json.dumps(payload, ensure_ascii=False, default=str))
+              + _dumps(payload))
     return await _call_messages(system, history, cache=True)
 
 
@@ -666,7 +688,7 @@ async def coach_chat(overview: dict, workouts: list[dict] | None, history: list[
     if form:
         payload["forma_attuale"] = form
     system = (COACH_CHAT_SYSTEM_PROMPT + "\n\nDATI DEL PERIODO (JSON):\n"
-              + json.dumps(payload, ensure_ascii=False, default=str))
+              + _dumps(payload))
     raw = await _call_messages(system, history, cache=True)
     m = re.search(r"\{.*\}", raw, re.S)
     if not m:

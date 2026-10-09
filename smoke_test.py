@@ -884,11 +884,26 @@ _ov = {"metrics": {"calories_burned": {"label": "Calorie bruciate", "unit": "kca
 _nut = {"alimentazione_tracciata": {"per_giorno": [
         {"data": "2026-07-15", "kcal": 1026}, {"data": "2026-07-16", "kcal": 840}]}}
 _bal = _health_payload(_ov, [], _nut)["bilancio_energetico"]
-assert len(_bal["per_giorno"]) == 2
-assert _bal["per_giorno"][0]["saldo_kcal"] == 1026 - 2019      # prudent estimate
-assert _bal["per_giorno"][0]["bruciate_kcal"] == 2019
+# per_giorno is now a compact table {colonne, righe} (lossless, fewer tokens)
+assert len(_bal["per_giorno"]["righe"]) == 2
+_r0 = dict(zip(_bal["per_giorno"]["colonne"], _bal["per_giorno"]["righe"][0]))
+assert _r0["saldo_kcal"] == 1026 - 2019                        # prudent estimate
+assert _r0["bruciate_kcal"] == 2019
 assert "prudente" in _bal["nota"].lower()                      # honest caveat present
 print("energy balance (ingerite vs bruciate) shaping OK")
+
+# dense lossless encoding: the table form holds the same data in fewer characters
+from app.anthropic_client import _table as _tbl, _dumps as _dmp
+_rows14 = [{"data": f"2026-09-{d:02d}", "sport": "Nuoto", "durata_min": 60,
+            "fc_media": 140, "tss": 55} for d in range(1, 15)]
+_cols14 = ["data", "sport", "durata_min", "fc_media", "tss"]
+_as_table = _dmp(_tbl(_rows14, _cols14))
+_as_objs = _dmp(_rows14)
+# round-trips to the same values (lossless) and is smaller
+_rt = [dict(zip(_tbl(_rows14, _cols14)["colonne"], r))
+       for r in _tbl(_rows14, _cols14)["righe"]]
+assert _rt == _rows14 and len(_as_table) < len(_as_objs)
+print(f"dense encoding: table {len(_as_table)} vs objects {len(_as_objs)} chars, lossless OK")
 
 # the chart series pairs burned (every day) with intake (only tracked days)
 from app.main import _energy_series
