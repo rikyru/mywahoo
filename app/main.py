@@ -414,11 +414,11 @@ def _girth_context() -> dict:
 
 
 @app.post("/body/manual", dependencies=[Depends(require_auth)])
-def body_manual(weight_kg: str = Form(""), body_fat: str = Form(""),
-                muscle_kg: str = Form(""), water_pct: str = Form(""),
-                visceral: str = Form(""), bmi: str = Form(""), bmr: str = Form(""),
-                bone_kg: str = Form(""), metabolic_age: str = Form(""),
-                date_: str = Form("", alias="date")):
+def body_manual(background: BackgroundTasks, weight_kg: str = Form(""),
+                body_fat: str = Form(""), muscle_kg: str = Form(""),
+                water_pct: str = Form(""), visceral: str = Form(""),
+                bmi: str = Form(""), bmr: str = Form(""), bone_kg: str = Form(""),
+                metabolic_age: str = Form(""), date_: str = Form("", alias="date")):
     """Add a body-composition reading by hand (alongside the smart-scale pushes),
     so weight and composition keep a history and trend even without the scale."""
     def num(s):
@@ -447,6 +447,9 @@ def body_manual(weight_kg: str = Form(""), body_fat: str = Form(""),
     with Session(engine) as session:
         session.add(m)
         session.commit()
+    # a new weigh-in feeds the weight->nutrition loop (recompute + push targets)
+    if nutrition.is_configured():
+        background.add_task(nutrition.recompute_and_push)
     return RedirectResponse(f"/health?{urlencode({'msg': 'Misura corporea aggiunta'})}",
                             status_code=303)
 

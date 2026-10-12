@@ -761,6 +761,30 @@ with TestClient(app) as client:
     assert r.status_code == 200 and "Record personali" in r.text
     print("personal records: longest ride + page OK")
 
+    # --- weight -> nutrition loop: the real trend corrects the kcal target ---
+    import app.nutrition as _nut
+    _orig_trend = _nut.weight_trend_kg_per_week
+    try:
+        # cut, but losing far too slowly -> eat less (negative correction, clamped)
+        _nut.weight_trend_kg_per_week = lambda days=28: {"rate": -0.1, "n": 6, "span_days": 21}
+        _corr, _meta = _nut.weight_feedback(2500, {"goal": "cut", "weight_feedback": True})
+        assert _meta and _corr == -_nut._WF_MAX_KCAL, (_corr, _meta)   # (-0.5+0.1)*1100=-440 -> -350
+        # losing too fast -> eat more
+        _nut.weight_trend_kg_per_week = lambda days=28: {"rate": -1.0, "n": 6, "span_days": 21}
+        _corr2, _ = _nut.weight_feedback(2500, {"goal": "cut"})
+        assert _corr2 > 0
+        # maintain + drifting up -> small negative nudge
+        _nut.weight_trend_kg_per_week = lambda days=28: {"rate": 0.2, "n": 6, "span_days": 21}
+        _corr3, _ = _nut.weight_feedback(2500, {"goal": "maintain"})
+        assert _corr3 < 0
+        # opt-out and no-data paths give no correction
+        assert _nut.weight_feedback(2500, {"goal": "cut", "weight_feedback": False}) == (0.0, None)
+        _nut.weight_trend_kg_per_week = lambda days=28: None
+        assert _nut.weight_feedback(2500, {"goal": "cut"}) == (0.0, None)
+    finally:
+        _nut.weight_trend_kg_per_week = _orig_trend
+    print("weight->nutrition loop: trend-based kcal correction OK")
+
     # --- exercise how-to linkifier + reference page ---
     from app import exercises as _ex
     _html = str(_ex.linkify("3x12 squat, 3x10 push up e plank laterale"))

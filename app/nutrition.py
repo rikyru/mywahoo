@@ -66,9 +66,68 @@ def _latest_body() -> BodyMeasure | None:
                             .order_by(BodyMeasure.measured_at.desc())).first()
 
 
+# Default weekly weight-change targets per goal, used to steer the feedback loop.
+_TARGET_RATE_KG_WK = {"cut": -0.5, "bulk": 0.25, "maintain": 0.0}
+_KCAL_PER_KG = 7700.0          # energy in ~1 kg of body mass
+_WF_MAX_KCAL = 350.0           # cap per-cycle correction so it can't swing wildly
+
+
+def weight_trend_kg_per_week(days: int = 28) -> dict | None:
+    """Linear fit of the weigh-ins over the last `days` → kg/week. None unless
+    there are enough readings spanning enough time to be meaningful."""
+    cutoff = datetime.utcnow() - timedelta(days=days)
+    with Session(engine) as session:
+        rows = session.exec(select(BodyMeasure)
+                            .where(BodyMeasure.measured_at >= cutoff,
+                                   BodyMeasure.weight_kg != None)  # noqa: E711
+                            .order_by(BodyMeasure.measured_at)).all()
+    pts = [(r.measured_at, r.weight_kg) for r in rows if r.weight_kg]
+    if len(pts) < 4:
+        return None
+    span = (pts[-1][0] - pts[0][0]).total_seconds() / 86400.0
+    if span < 14:
+        return None
+    x0 = pts[0][0]
+    xs = [(t - x0).total_seconds() / 86400.0 for t, _ in pts]
+    ys = [w for _, w in pts]
+    n = len(xs)
+    sx, sy = sum(xs), sum(ys)
+    denom = n * sum(v * v for v in xs) - sx * sx
+    if denom == 0:
+        return None
+    slope = (n * sum(a * b for a, b in zip(xs, ys)) - sx * sy) / denom   # kg/day
+    return {"rate": slope * 7.0, "n": n, "span_days": round(span)}
+
+
+def weight_feedback(base_tdee: float, cfg: dict) -> tuple:
+    """How much to nudge the TDEE estimate so the ACTUAL weight trend matches the
+    goal's target rate. Returns (kcal_correction, meta|None). Needs a real trend;
+    capped so it self-corrects over weeks instead of oscillating."""
+    if not cfg.get("weight_feedback", True) or not base_tdee:
+        return 0.0, None
+    tr = weight_trend_kg_per_week()
+    if not tr:
+        return 0.0, None
+    goal = cfg.get("goal", "maintain")
+    target = cfg.get("target_rate_kg_wk")
+    if target is None:
+        target = _TARGET_RATE_KG_WK.get(goal, 0.0)
+    corr = (target - tr["rate"]) * _KCAL_PER_KG / 7.0          # kcal/day
+    corr = max(-_WF_MAX_KCAL, min(_WF_MAX_KCAL, corr))
+    meta = {"rate_reale_kg_sett": round(tr["rate"], 2),
+            "rate_obiettivo_kg_sett": target, "correzione_kcal": round(corr),
+            "pesate": tr["n"], "giorni": tr["span_days"]}
+    return corr, meta
+
+
 def build_targets(tdee: float | None = None) -> dict | None:
     """Compute the current targets from the latest weigh-in + profile config.
-    Returns {"targets": {...}, "basis": {...}} or None if there's no BMR yet."""
+    Returns {"targets": {...}, "basis": {...}} or None if there's no BMR yet.
+
+    Closes the weight→nutrition loop: the measured/estimated TDEE is corrected by
+    the ACTUAL bodyweight trend, so if a cut stalls (or runs too fast) the kcal
+    target self-adjusts, and the corrected targets are what get pushed to
+    planmydinner."""
     b = _latest_body()
     p = profilemod.load()
     cfg = profilemod.nutrition_cfg()
@@ -77,13 +136,22 @@ def build_targets(tdee: float | None = None) -> dict | None:
     lean = None
     if b and b.weight_kg and b.body_fat is not None:
         lean = b.weight_kg * (1 - b.body_fat / 100.0)
+
+    base = tdee if (tdee and tdee > 0) else ((bmr or 0) * cfg["activity_factor"])
+    corr, wf_meta = weight_feedback(base, cfg) if base else (0.0, None)
+    eff_tdee = (base + corr) if base else None
+
     targets = compute_targets(bmr, lean, weight, cfg["goal"], cfg["adjust_pct"],
-                              cfg["activity_factor"], cfg["protein_per_kg_lean"], tdee)
+                              cfg["activity_factor"], cfg["protein_per_kg_lean"],
+                              tdee=eff_tdee)
     if not targets:
         return None
+    source = "misurato" if tdee else "stima (BMR×fattore)"
+    if wf_meta:
+        source += f" + trend peso ({wf_meta['correzione_kcal']:+d} kcal)"
     basis = {"goal": cfg["goal"], "adjust_pct": cfg["adjust_pct"], "bmr": bmr,
-             "tdee": round(tdee) if tdee else round((bmr or 0) * cfg["activity_factor"]),
-             "tdee_source": "misurato" if tdee else "stima (BMR×fattore)",
+             "tdee": round(eff_tdee) if eff_tdee else round((bmr or 0) * cfg["activity_factor"]),
+             "tdee_source": source, "weight_feedback": wf_meta,
              "lean_kg": round(lean, 1) if lean else None,
              "protein_per_kg_lean": cfg["protein_per_kg_lean"]}
     return {"targets": targets, "basis": basis}
