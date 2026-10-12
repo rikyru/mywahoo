@@ -709,6 +709,23 @@ with TestClient(app) as client:
         assert s.get(_TP, _tpd_id) is not None        # the plan itself survives
     print("plan session delete: one session removed, plan intact OK")
 
+    # --- manual body measurement: add, keep history, delete ---
+    r = client.post("/body/manual",
+                    data={"weight_kg": "73.21", "body_fat": "14.3", "muscle_kg": "60.1"},
+                    follow_redirects=False)
+    assert r.status_code == 303 and "msg" in r.headers["location"]
+    with Session(engine) as s:
+        _bm = s.exec(select(BodyMeasure).where(BodyMeasure.weight_kg == 73.21)).first()
+        assert _bm is not None and _bm.body_fat == 14.3
+        _bmid = _bm.id
+    r = client.post(f"/body/{_bmid}/delete", follow_redirects=False)
+    assert r.status_code == 303
+    with Session(engine) as s:
+        assert s.get(BodyMeasure, _bmid) is None
+    r = client.post("/body/manual", data={}, follow_redirects=False)  # nothing filled
+    assert r.status_code == 303 and "error" in r.headers["location"]
+    print("manual body measure: add, history, delete, empty-guard OK")
+
     # --- prompt caching: cached-token parsing + Anthropic cache breakpoint ---
     from app.anthropic_client import _extract_text, _build_request
     from app.db import get_setting as _get, set_setting as _set

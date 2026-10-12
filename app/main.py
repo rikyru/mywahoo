@@ -387,19 +387,73 @@ def _body_context() -> dict:
         rows = session.exec(select(BodyMeasure)
                             .order_by(BodyMeasure.measured_at.desc()).limit(60)).all()
     if not rows:
-        return {"body_latest": None, "body_series_json": "[]"}
+        return {"body_latest": None, "body_series_json": "[]", "body_rows": []}
+    newest_first = list(rows)
     rows = list(reversed(rows))   # oldest -> newest
     series = [{"date": r.measured_at.strftime("%Y-%m-%d"),
                "weight": r.weight_kg, "fat": r.body_fat, "muscle": r.muscle_kg}
               for r in rows]
-    return {"body_latest": rows[-1], "body_series_json": json.dumps(series)}
+    return {"body_latest": rows[-1], "body_series_json": json.dumps(series),
+            "body_rows": newest_first[:20]}
+
+
+@app.post("/body/manual", dependencies=[Depends(require_auth)])
+def body_manual(weight_kg: str = Form(""), body_fat: str = Form(""),
+                muscle_kg: str = Form(""), water_pct: str = Form(""),
+                visceral: str = Form(""), bmi: str = Form(""), bmr: str = Form(""),
+                bone_kg: str = Form(""), metabolic_age: str = Form(""),
+                date_: str = Form("", alias="date")):
+    """Add a body-composition reading by hand (alongside the smart-scale pushes),
+    so weight and composition keep a history and trend even without the scale."""
+    def num(s):
+        try:
+            return float(str(s).replace(",", ".")) if str(s).strip() != "" else None
+        except ValueError:
+            return None
+
+    d = _parse_date(date_)
+    measured = (datetime.combine(d, datetime.utcnow().time()) if d
+                else datetime.utcnow())
+    m = BodyMeasure(
+        measured_at=measured, weight_kg=num(weight_kg), body_fat=num(body_fat),
+        muscle_kg=num(muscle_kg), water_pct=num(water_pct), visceral=num(visceral),
+        bmi=num(bmi), bmr=num(bmr), bone_kg=num(bone_kg),
+        metabolic_age=num(metabolic_age))
+    if not any((m.weight_kg, m.body_fat, m.muscle_kg, m.water_pct, m.visceral,
+                m.bmi, m.bmr, m.bone_kg, m.metabolic_age)):
+        return RedirectResponse(f"/health?{urlencode({'error': 'Inserisci almeno un valore'})}",
+                                status_code=303)
+    # auto-BMI from weight + profile height when not provided
+    if m.weight_kg and not m.bmi:
+        h = profilemod.load().get("height_cm")
+        if h:
+            m.bmi = round(m.weight_kg / (float(h) / 100) ** 2, 1)
+    with Session(engine) as session:
+        session.add(m)
+        session.commit()
+    return RedirectResponse(f"/health?{urlencode({'msg': 'Misura corporea aggiunta'})}",
+                            status_code=303)
+
+
+@app.post("/body/{mid}/delete", dependencies=[Depends(require_auth)])
+def body_delete(mid: int):
+    with Session(engine) as session:
+        m = session.get(BodyMeasure, mid)
+        if m:
+            session.delete(m)
+            session.commit()
+    return RedirectResponse(f"/health?{urlencode({'msg': 'Misura eliminata'})}",
+                            status_code=303)
 
 
 @app.get("/health", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
 async def health_page(request: Request, win: str = "30", end: str = ""):
     window = resolve_window(win, end, request.query_params.get("from", ""),
                             request.query_params.get("to", ""))
-    base = {"window": window, "windows": WINDOWS, **_body_context()}   # scale shows even w/o Google
+    base = {"window": window, "windows": WINDOWS, **_body_context(),   # scale shows even w/o Google
+            "today": date.today().isoformat(),
+            "message": request.query_params.get("msg"),
+            "error": request.query_params.get("error")}
     if not google_health.is_authenticated():
         return templates.TemplateResponse(request, "health.html",
                                           {**base, "connected": False, "data": None})

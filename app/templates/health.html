@@ -7,6 +7,9 @@
   <span class="muted">dati Google Health</span>
 </div>
 
+{% if message %}<div class="alert ok">{{ message }}</div>{% endif %}
+{% if error %}<div class="alert error">{{ error }}</div>{% endif %}
+
 {% if window %}
 <div class="window-bar">
   <div class="window-sizes">
@@ -57,6 +60,54 @@
   <canvas id="bodyChart" height="90"></canvas>
 </section>
 {% endif %}
+
+<section class="card">
+  <details {% if not body_latest %}open{% endif %}>
+    <summary><strong>➕ Aggiungi misura corporea</strong> <span class="muted">· manuale, per tenere storico e tendenze</span></summary>
+    <form method="post" action="/body/manual" class="plan-edit-form" style="margin-top:12px">
+      <div class="plan-edit-row">
+        <label>Data <input type="date" name="date" value="{{ today }}"></label>
+        <label>Peso (kg) <input type="number" step="0.1" name="weight_kg"></label>
+        <label>Massa grassa (%) <input type="number" step="0.1" name="body_fat"></label>
+      </div>
+      <div class="plan-edit-row">
+        <label>Muscolo (kg) <input type="number" step="0.1" name="muscle_kg"></label>
+        <label>Acqua (%) <input type="number" step="0.1" name="water_pct"></label>
+        <label>Grasso viscerale <input type="number" step="0.1" name="visceral"></label>
+      </div>
+      <div class="plan-edit-row">
+        <label>BMI <input type="number" step="0.1" name="bmi" placeholder="auto da peso+altezza"></label>
+        <label>Metabolismo basale (kcal) <input type="number" step="1" name="bmr"></label>
+        <label>Età metabolica <input type="number" step="1" name="metabolic_age"></label>
+      </div>
+      <p class="muted">Compila i campi che hai: basta anche solo il peso.</p>
+      <button type="submit" class="btn">Salva misura</button>
+    </form>
+    {% if body_rows %}
+    <div class="table-scroll" style="margin-top:16px">
+      <table class="metrics">
+        <thead><tr><th>Data</th><th>Peso</th><th>Grasso%</th><th>Muscolo</th><th>Acqua%</th><th>Visc.</th><th>BMI</th><th></th></tr></thead>
+        <tbody>
+        {% for r in body_rows %}
+        <tr>
+          <td>{{ r.measured_at.strftime("%d/%m/%Y") }}</td>
+          <td>{{ "%.1f"|format(r.weight_kg) if r.weight_kg else "—" }}</td>
+          <td>{{ "%.1f"|format(r.body_fat) if r.body_fat else "—" }}</td>
+          <td>{{ "%.1f"|format(r.muscle_kg) if r.muscle_kg else "—" }}</td>
+          <td>{{ "%.1f"|format(r.water_pct) if r.water_pct else "—" }}</td>
+          <td>{{ "%.1f"|format(r.visceral) if r.visceral else "—" }}</td>
+          <td>{{ "%.1f"|format(r.bmi) if r.bmi else "—" }}</td>
+          <td><form method="post" action="/body/{{ r.id }}/delete"
+                    onsubmit="return confirm('Eliminare questa misura?');">
+            <button type="submit" class="btn btn-danger" title="Elimina">🗑</button></form></td>
+        </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
+  </details>
+</section>
 
 {% if vo2max %}
 <section class="card">
