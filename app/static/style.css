@@ -76,6 +76,7 @@ small { font-size: .8em; }
 .btn-secondary:hover { background: var(--card-hover); }
 .btn-danger { background: var(--bad-soft); color: var(--bad); border: 1px solid rgba(248, 113, 113, .3); }
 .btn-danger:hover { background: rgba(248, 113, 113, .2); }
+.ex-link { text-decoration: underline dotted; text-underline-offset: 2px; white-space: nowrap; }
 .btn-wahoo { display: inline-block; margin-top: 1rem; }
 
 /* ---------- alerts ---------- */

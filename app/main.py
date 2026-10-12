@@ -19,9 +19,10 @@ from sqlalchemy import func
 from sqlmodel import Session, select
 from starlette.middleware.sessions import SessionMiddleware
 
-from . import (anthropic_client, bodycomp, cycling as cyclingmod, fit as fitmod,
-               form as formmod, google_health, gpx as gpxmod, nutrition,
-               profile as profilemod, vo2max as vo2maxmod, wahoo)
+from . import (anthropic_client, bodycomp, cycling as cyclingmod,
+               exercises as exercisesmod, fit as fitmod, form as formmod,
+               google_health, gpx as gpxmod, nutrition, profile as profilemod,
+               vo2max as vo2maxmod, wahoo)
 from .config import settings, setup_logging
 from .db import (AiAnalysis, BodyMeasure, ChatMessage, ClimbEffort, Conversation,
                  CustomEffort, CustomSegment, IgnoredImport, PeriodSummary, PlanSession,
@@ -102,6 +103,7 @@ def fmt_day(d) -> str:
 
 templates.env.filters["duration"] = fmt_duration
 templates.env.filters["it_day"] = fmt_day
+templates.env.filters["exercise_links"] = exercisesmod.linkify
 def sport_icon(sport: str) -> str:
     s = (sport or "").lower()
     if any(k in s for k in ("swim", "nuot")):
@@ -444,6 +446,14 @@ def body_delete(mid: int):
             session.commit()
     return RedirectResponse(f"/health?{urlencode({'msg': 'Misura eliminata'})}",
                             status_code=303)
+
+
+@app.get("/esercizi", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
+def exercises_page(request: Request):
+    """Reference of the bodyweight exercises the AI proposes, with form cues and a
+    how-to video link each."""
+    return templates.TemplateResponse(request, "exercises.html",
+                                      {"exercises": exercisesmod.catalog()})
 
 
 @app.get("/health", response_class=HTMLResponse, dependencies=[Depends(require_auth)])

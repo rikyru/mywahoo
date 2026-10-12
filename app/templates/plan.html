@@ -54,7 +54,7 @@
     {% endif %}
   </div>
 
-  {% if s.description %}<p class="plan-session-desc">{{ s.description }}</p>{% endif %}
+  {% if s.description %}<p class="plan-session-desc">{{ s.description | exercise_links }}</p>{% endif %}
   {% if s.done and s.workout_id %}
   <p class="muted"><a href="/workout/{{ s.workout_id }}">→ Vedi allenamento registrato</a>
     {% if s.id in mergeable %}

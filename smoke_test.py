@@ -726,6 +726,17 @@ with TestClient(app) as client:
     assert r.status_code == 303 and "error" in r.headers["location"]
     print("manual body measure: add, history, delete, empty-guard OK")
 
+    # --- exercise how-to linkifier + reference page ---
+    from app import exercises as _ex
+    _html = str(_ex.linkify("3x12 squat, 3x10 push up e plank laterale"))
+    assert "youtube.com" in _html and "squat ▶" in _html
+    assert "plank laterale ▶" in _html and "plank ▶ laterale" not in _html  # longest-first
+    assert "&lt;b&gt;" in str(_ex.linkify("<b>squat</b>"))                   # input escaped
+    assert len(_ex.catalog()) >= 15
+    r = client.get("/esercizi")
+    assert r.status_code == 200 and "Squat" in r.text
+    print("exercise how-to: linkify (escaped, longest-first) + page OK")
+
     # --- prompt caching: cached-token parsing + Anthropic cache breakpoint ---
     from app.anthropic_client import _extract_text, _build_request
     from app.db import get_setting as _get, set_setting as _set
