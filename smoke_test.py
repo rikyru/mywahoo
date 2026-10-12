@@ -655,6 +655,17 @@ with TestClient(app) as client:
     assert _slbl("Yoga") == "Yoga" and _slbl("") == "Altro"   # unknown kept as-is
     print("sport label: one canonical name per family OK")
 
+    # --- VO2max estimate: Uth (HR) + ACSM (cycling) + resting-HR trend ---
+    from app import vo2max as _v
+    assert _v.uth(50, 190) == round(15.3 * 190 / 50, 1)      # 58.1
+    assert _v.uth(0, 190) is None and _v.uth(50, None) is None
+    assert _v.from_cycling_power(300, 75) == round(10.8 * 300 / 75 + 7, 1)  # 50.2
+    assert _v.from_cycling_power(None, 75) is None and _v.from_cycling_power(300, 0) is None
+    _tr = _v.trend_from_resting(
+        [{"date": "2026-10-01", "value": 52}, {"date": "2026-10-02", "value": 0}], 190)
+    assert len(_tr) == 1 and _tr[0]["date"] == "2026-10-01"   # bad resting HR dropped
+    print("vo2max estimate: Uth + ACSM + trend OK")
+
     # --- prompt caching: cached-token parsing + Anthropic cache breakpoint ---
     from app.anthropic_client import _extract_text, _build_request
     from app.db import get_setting as _get, set_setting as _set

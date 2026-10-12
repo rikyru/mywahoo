@@ -58,6 +58,26 @@
 </section>
 {% endif %}
 
+{% if vo2max %}
+<section class="card">
+  <div class="card-head">
+    <h3>VO₂max stimata <small class="muted">· stima, non il valore dell'orologio</small></h3>
+  </div>
+  <section class="kpi-row">
+    {% if vo2max.hr %}<div class="kpi"><span class="kpi-value">{{ "%.0f"|format(vo2max.hr) }}<small> ml/kg/min</small></span><span class="kpi-label">da FC riposo/max</span></div>{% endif %}
+    {% if vo2max.cycling %}<div class="kpi"><span class="kpi-value">{{ "%.0f"|format(vo2max.cycling) }}<small> ml/kg/min</small></span><span class="kpi-label">da potenza ciclismo</span></div>{% endif %}
+  </section>
+  <p class="muted">
+    {% if vo2max.hr %}Metodo FC (Uth): 15,3 × FCmax/FCriposo{% if vo2max.rest_hr and vo2max.max_hr %} ({{ vo2max.max_hr }}/{{ vo2max.rest_hr }} bpm){% endif %}.{% endif %}
+    {% if vo2max.cycling %} Ciclismo (ACSM): dai {{ vo2max.best_5min_w }} W migliori su 5′ e dal peso.{% endif %}
+    È una <strong>stima di tendenza</strong> (±10-15%): l'orologio non espone il suo VO₂max via Google, quindi conta l'andamento più del numero assoluto.
+  </p>
+  {% if vo2max.trend and vo2max.trend|length > 1 %}
+  <canvas id="vo2maxChart" height="90"></canvas>
+  {% endif %}
+</section>
+{% endif %}
+
 {% if not connected %}
   <div class="alert error">
     {% if expired %}
@@ -259,6 +279,25 @@ if (window.innerWidth < 640) Chart.defaults.font.size = 13;
 function busy(btn) {
   setTimeout(() => { btn.disabled = true; btn.textContent = "Generazione…"; }, 0);
 }
+
+{% if vo2max and vo2max.trend and vo2max.trend|length > 1 %}
+// ---- VO2max trend (Uth from the resting-HR series) ----
+(() => {
+  const el = document.getElementById("vo2maxChart");
+  if (!el) return;
+  const pts = {{ vo2max.trend | tojson }};
+  new Chart(el, {
+    type: "line",
+    data: { labels: pts.map(p => p.date),
+      datasets: [{ data: pts.map(p => p.value), borderColor: "#4c8dff",
+        backgroundColor: "rgba(76,141,255,.12)", fill: true, tension: .3,
+        pointRadius: 0, borderWidth: 2 }] },
+    options: { plugins: { legend: { display: false } },
+      scales: { x: { display: false },
+        y: { ticks: { callback: v => v + " ml/kg/min" } } } },
+  });
+})();
+{% endif %}
 
 // ---- chat assistant ----
 const CHAT_WIN = { win: "{{ window.win }}", end: "{{ window.end_d | default('') }}",

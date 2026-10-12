@@ -21,7 +21,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from . import (anthropic_client, bodycomp, cycling as cyclingmod, fit as fitmod,
                form as formmod, google_health, gpx as gpxmod, nutrition,
-               profile as profilemod, wahoo)
+               profile as profilemod, vo2max as vo2maxmod, wahoo)
 from .config import settings, setup_logging
 from .db import (AiAnalysis, BodyMeasure, ChatMessage, ClimbEffort, Conversation,
                  CustomEffort, CustomSegment, IgnoredImport, PeriodSummary, PlanSession,
@@ -422,6 +422,7 @@ async def health_page(request: Request, win: str = "30", end: str = ""):
         "nutrition": nutri,
         "stale_days": _health_stale_days(data) if window["is_current"] else None,
         "last_data": _latest_health_date(data),
+        "vo2max": _vo2max_estimate(data),
         "energy_json": json.dumps(_energy_series(data, nutri)),
         "insight_html": md.markdown(insight.content, extensions=["tables"]) if insight else None,
         "insight_date": insight.created_at if insight else None,
@@ -2293,20 +2294,50 @@ def _estimated_ftp() -> dict | None:
     mass = cyclingmod.rider_mass(profilemod.load().get("weight_kg"))
     with Session(engine) as session:
         rides = session.exec(select(Workout).where(Workout.start_date >= cutoff)).all()
-    best20 = []
+    best20, best5 = [], []
     for r in rides:
         if google_health._sport_family(r.sport) != "bike" or r.avg_power:
             continue
         s = fitmod.load_streams(r.id)
         if not s:
             continue
-        b = cyclingmod.best_rolling_avg(s["t"], cyclingmod.estimate_power_series(s, mass), 1200)
+        power = cyclingmod.estimate_power_series(s, mass)   # compute once, reuse
+        b = cyclingmod.best_rolling_avg(s["t"], power, 1200)
         if b:
             best20.append(round(b))
+        b5 = cyclingmod.best_rolling_avg(s["t"], power, 300)
+        if b5:
+            best5.append(round(b5))
     ftp = cyclingmod.estimate_ftp(best20)
-    val = {"ftp": ftp, "n_rides": len(best20)} if ftp else None
+    # best 5-min power feeds the cycling VO2max estimate (artifact-robust max)
+    peak5 = cyclingmod.robust_best(best5)
+    val = ({"ftp": ftp, "n_rides": len(best20), "best_5min": peak5}
+           if ftp or peak5 else None)
     _FTP_CACHE["v"] = {"at": datetime.utcnow(), "val": val}
     return val
+
+
+def _vo2max_estimate(overview: dict) -> dict | None:
+    """Estimated VO2max for the health page: Uth from resting/max HR (+ a trend
+    from the resting-HR series) and, when recent rides give a 5-min power, an ACSM
+    cycling estimate. The Pixel Watch's own Firstbeat value isn't exposed by the
+    Google API, so this fills the gap. None when there's nothing to anchor on."""
+    rest_anchor, max_hr, _ = _hr_anchors()
+    metrics = overview.get("metrics", {}) or {}
+    rest_series = (metrics.get("resting_hr") or {}).get("series") or []
+    rest_latest = (metrics.get("resting_hr") or {}).get("latest") or rest_anchor
+    hr_v = vo2maxmod.uth(rest_latest, max_hr)
+    trend = vo2maxmod.trend_from_resting(rest_series, max_hr)
+    cyc_v = best5 = None
+    ftp = _estimated_ftp()
+    if ftp and ftp.get("best_5min"):
+        best5 = ftp["best_5min"]
+        cyc_v = vo2maxmod.from_cycling_power(best5, profilemod.load().get("weight_kg"))
+    if not (hr_v or cyc_v):
+        return None
+    return {"hr": hr_v, "cycling": cyc_v, "best_5min_w": best5,
+            "rest_hr": round(rest_latest) if rest_latest else None,
+            "max_hr": round(max_hr) if max_hr else None, "trend": trend}
 
 
 # ---------------------------------------------------------------- actions
