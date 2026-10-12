@@ -74,6 +74,8 @@ small { font-size: .8em; }
 .btn:disabled { opacity: .55; cursor: wait; }
 .btn-secondary { background: var(--card); color: var(--text); border: 1px solid var(--border); }
 .btn-secondary:hover { background: var(--card-hover); }
+.btn-danger { background: var(--bad-soft); color: var(--bad); border: 1px solid rgba(248, 113, 113, .3); }
+.btn-danger:hover { background: rgba(248, 113, 113, .2); }
 .btn-wahoo { display: inline-block; margin-top: 1rem; }
 
 /* ---------- alerts ---------- */

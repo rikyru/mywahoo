@@ -65,6 +65,10 @@
   {% if w.avg_hr %}
   <div class="kpi"><span class="kpi-value">{{ "%.0f"|format(w.avg_hr) }}</span><span class="kpi-label">bpm medi</span></div>
   {% endif %}
+  {% if ride_vo2max %}
+  <div class="kpi" title="Stima dal costo di ossigeno di potenza/passo a FC sottomassimale (stile Garmin), non il valore dell'orologio">
+    <span class="kpi-value">{{ "%.0f"|format(ride_vo2max) }}<small> VO₂</small></span><span class="kpi-label">VO₂max stimata{% if ride_vo2max_cat %} · {{ ride_vo2max_cat }}{% endif %}</span></div>
+  {% endif %}
 </section>
 
 {% if w.notes %}

@@ -46,6 +46,32 @@ def trend_from_resting(resting_series: list | None, max_hr: float | None) -> lis
 # in use; projecting that to HRmax via the HR reserve gives VO2max — no need for a
 # maximal effort, exactly how a watch derives it from everyday activities.
 
+# Fitness classification by age & sex (lower bounds, ml/kg/min), approximating the
+# Cooper Institute norms Garmin uses: [Discreto, Buono, Eccellente, Superiore].
+# Below the first bound = Scarso; at/above the last = Superiore.
+_NORMS = {
+    "M": [(0, 29, (42, 46, 51, 56)), (30, 39, (41, 45, 50, 55)),
+          (40, 49, (38, 43, 48, 53)), (50, 59, (35, 40, 45, 50)),
+          (60, 200, (31, 36, 41, 46))],
+    "F": [(0, 29, (36, 40, 45, 50)), (30, 39, (34, 38, 43, 48)),
+          (40, 49, (31, 35, 40, 45)), (50, 59, (28, 32, 37, 42)),
+          (60, 200, (25, 30, 35, 40))],
+}
+_LABELS = ("Scarso", "Discreto", "Buono", "Eccellente", "Superiore")
+
+
+def category(vo2: float | None, age: int | None, sex: str | None) -> str | None:
+    """Qualitative rating (Scarso…Superiore) for a VO2max, by age & sex — the
+    "Excellent"-style indication Garmin shows. Age unknown → assumes ~35."""
+    if not vo2:
+        return None
+    table = _NORMS.get((sex or "M").upper()[:1], _NORMS["M"])
+    a = age if age and age > 0 else 35
+    bounds = next((b for lo, hi, b in table if lo <= a <= hi), table[-1][2])
+    idx = sum(1 for b in bounds if vo2 >= b)   # 0..4
+    return _LABELS[idx]
+
+
 def running_vo2(speed_ms: float | None) -> float | None:
     """ACSM level-running oxygen cost (ml/kg/min) at a steady speed."""
     if not speed_ms or speed_ms <= 1.5:        # slower than ~5.4 km/h: walking/noise

@@ -1604,6 +1604,20 @@ async def plan_session_chat(plan_id: int, sid: int, request: Request):
                          "conversation_id": conv_id})
 
 
+@app.post("/plans/{plan_id}/session/{sid}/delete", dependencies=[Depends(require_auth)])
+def plan_session_delete(plan_id: int, sid: int):
+    """Remove a single session from the plan, leaving the plan (and any real
+    workout already logged for it) intact."""
+    with Session(engine) as session:
+        ps = session.get(PlanSession, sid)
+        if ps and ps.plan_id == plan_id:
+            session.delete(ps)
+            session.commit()
+    return RedirectResponse(
+        f"/plans/{plan_id}?{urlencode({'msg': 'Sessione rimossa dal piano'})}",
+        status_code=303)
+
+
 @app.post("/plans/{plan_id}/session/{sid}/edit", dependencies=[Depends(require_auth)])
 def plan_session_edit(plan_id: int, sid: int, title: str = Form(""),
                       sport: str = Form(""), durata_min: str = Form("0"),
@@ -2253,11 +2267,32 @@ def workout_detail(request: Request, workout_id: int):
         climbs = cyclingmod.detect_climbs(streams)
         ftp = _estimated_ftp()
 
-    # Time in HR zones (any sport with a HR stream)
+    # Time in HR zones + this ride's VO2max estimate (any sport with a HR stream)
     hr_zones = []
+    ride_vo2max = None
     if streams and any(streams.get("hr") or []):
         rest_hr, max_hr, _ = _hr_anchors()
         hr_zones = fitmod.hr_zone_distribution(streams, rest_hr, max_hr)
+        # Workload-vs-HR VO2max for THIS session (same method as the health page):
+        # oxygen cost of the power (bike, real meter or GPS estimate) or pace (run)
+        # at submaximal HR, extrapolated to HRmax.
+        fam = google_health._sport_family(w.sport)
+        weight = profilemod.load().get("weight_kg")
+        workload = None
+        if fam == "bike":
+            real = streams.get("power") or []
+            if any(p for p in real):
+                workload = [vo2maxmod.cycling_vo2(p, weight) for p in real]
+            else:
+                mass = cyclingmod.rider_mass(weight)
+                workload = [vo2maxmod.cycling_vo2(p, weight)
+                            for p in cyclingmod.estimate_power_series(streams, mass)]
+        elif fam == "run":
+            workload = [vo2maxmod.running_vo2(v) for v in (streams.get("speed") or [])]
+        if workload:
+            hrs = streams.get("hr") or []
+            n = min(len(workload), len(hrs))
+            ride_vo2max = vo2maxmod.from_samples(workload[:n], hrs[:n], rest_hr, max_hr)
 
     can_segment = bool(streams and streams.get("latlng")
                        and any(p for p in streams["latlng"])
@@ -2276,6 +2311,7 @@ def workout_detail(request: Request, workout_id: int):
         "streams_json": streams_json,
         "merge": merge, "can_segment": can_segment, "edit_seg": edit_seg,
         "est_power": est_power, "climbs": climbs, "ftp": ftp, "hr_zones": hr_zones,
+        "ride_vo2max": ride_vo2max, "ride_vo2max_cat": _vo2max_category(ride_vo2max),
         "analysis_html": md.markdown(analysis.content, extensions=["tables"]) if analysis else None,
         "analysis_date": analysis.created_at if analysis else None,
         "message": request.query_params.get("msg"),
@@ -2339,10 +2375,23 @@ def _vo2max_estimate(overview: dict) -> dict | None:
     garmin = _estimated_vo2max_activity()   # workload-vs-HR, Garmin/Firstbeat style
     if not (hr_v or cyc_v or garmin):
         return None
+    headline = garmin or hr_v or cyc_v
     return {"garmin": garmin, "hr": hr_v, "cycling": cyc_v, "best_5min_w": best5,
-            "headline": garmin or hr_v or cyc_v,
+            "headline": headline, "categoria": _vo2max_category(headline),
             "rest_hr": round(rest_latest) if rest_latest else None,
             "max_hr": round(max_hr) if max_hr else None, "trend": trend}
+
+
+def _vo2max_category(vo2: float | None) -> str | None:
+    """Garmin-style qualitative rating (Scarso…Superiore) for a VO2max value,
+    using the athlete's age & sex from the profile."""
+    if not vo2:
+        return None
+    p = profilemod.load()
+    by = p.get("birth_year")
+    age = (date.today().year - int(by)) if by else None
+    _, _, sex = _hr_anchors()
+    return vo2maxmod.category(vo2, age, sex)
 
 
 _VO2_CACHE: dict = {}
@@ -2392,7 +2441,7 @@ def _attach_vo2max(overview: dict) -> dict:
     v = _vo2max_estimate(overview)
     if v and v.get("headline"):
         overview["vo2max_stimata"] = {
-            "ml_kg_min": v["headline"],
+            "ml_kg_min": v["headline"], "categoria": v.get("categoria"),
             "metodo": ("attività: pace/potenza vs FC, stile Garmin"
                        if v.get("garmin") else "FC riposo/max (Uth)"),
             "nota": "stima di tendenza (±10-15%), non il valore dell'orologio"}

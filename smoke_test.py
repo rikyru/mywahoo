@@ -676,7 +676,27 @@ with TestClient(app) as client:
     assert _g is not None and abs(_g - 40 * 140 / 90) < 0.5, _g
     assert _v.from_samples([40.0] * 5, [140] * 5, 50, 190) is None   # too few samples
     assert _v.from_samples([40.0] * _n, [185] * _n, 50, 190) is None  # above band
-    print("vo2max estimate: Uth + ACSM + Garmin-style (workload vs HR) OK")
+    # Garmin-style qualitative rating by age & sex
+    assert _v.category(54, 38, "M") == "Eccellente"   # like the watch's "Excellent"
+    assert _v.category(56, 38, "M") == "Superiore"
+    assert _v.category(30, 45, "F") == "Scarso"
+    assert _v.category(None, 38, "M") is None
+    print("vo2max estimate: Uth + ACSM + Garmin-style + rating OK")
+
+    # --- delete a single plan session without deleting the plan ---
+    with Session(engine) as s:
+        _tpd = _TP(title="Piano con sessioni"); s.add(_tpd); s.commit(); s.refresh(_tpd)
+        _ps1 = _PS(plan_id=_tpd.id, title="Bici", sport="Bici", duration_min=60)
+        _ps2 = _PS(plan_id=_tpd.id, title="Corsa", sport="Corsa", duration_min=40)
+        s.add(_ps1); s.add(_ps2); s.commit(); s.refresh(_ps1); s.refresh(_ps2)
+        _del_id, _keep_id, _tpd_id = _ps1.id, _ps2.id, _tpd.id
+    r = client.post(f"/plans/{_tpd_id}/session/{_del_id}/delete", follow_redirects=False)
+    assert r.status_code == 303
+    with Session(engine) as s:
+        assert s.get(_PS, _del_id) is None          # session removed
+        assert s.get(_PS, _keep_id) is not None      # the other session kept
+        assert s.get(_TP, _tpd_id) is not None        # the plan itself survives
+    print("plan session delete: one session removed, plan intact OK")
 
     # --- prompt caching: cached-token parsing + Anthropic cache breakpoint ---
     from app.anthropic_client import _extract_text, _build_request

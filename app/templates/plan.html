@@ -112,6 +112,11 @@
       </label>
       <button type="submit" class="btn btn-secondary">Salva modifiche</button>
     </form>
+    <form method="post" action="/plans/{{ plan.id }}/session/{{ s.id }}/delete"
+          class="plan-delete-form"
+          onsubmit="return confirm('Eliminare questa sessione dal piano? Il piano resta, viene rimossa solo questa.');">
+      <button type="submit" class="btn btn-danger" title="Rimuovi solo questa sessione">🗑 Elimina dal piano</button>
+    </form>
   </details>
 </section>
 {% endfor %}
