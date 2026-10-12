@@ -38,3 +38,57 @@ def trend_from_resting(resting_series: list | None, max_hr: float | None) -> lis
         if v:
             out.append({"date": p.get("date"), "value": v})
     return out
+
+
+# --- Garmin/Firstbeat-style estimate: submaximal workload vs HR, extrapolated ---
+# to HRmax. During a run/ride, the oxygen cost of the external load (pace for a
+# run, power for a ride) at a steady submaximal HR tells us the fraction of VO2max
+# in use; projecting that to HRmax via the HR reserve gives VO2max — no need for a
+# maximal effort, exactly how a watch derives it from everyday activities.
+
+def running_vo2(speed_ms: float | None) -> float | None:
+    """ACSM level-running oxygen cost (ml/kg/min) at a steady speed."""
+    if not speed_ms or speed_ms <= 1.5:        # slower than ~5.4 km/h: walking/noise
+        return None
+    return 0.2 * (speed_ms * 60.0) + 3.5       # speed_ms*60 = m/min
+
+
+def cycling_vo2(power_w: float | None, weight_kg: float | None) -> float | None:
+    """ACSM cycling oxygen cost (ml/kg/min) at a steady power."""
+    if not power_w or power_w <= 0 or not weight_kg or weight_kg <= 0:
+        return None
+    return 10.8 * power_w / weight_kg + 7.0
+
+
+def extrapolate(vo2_sub: float | None, hr: float | None,
+                rest_hr: float, max_hr: float) -> float | None:
+    """Project a submaximal (VO2, HR) point to HRmax via the HR reserve fraction:
+    VO2max ≈ VO2_sub × (HRmax − HRrest) / (HR − HRrest)."""
+    if (not vo2_sub or not hr or max_hr <= rest_hr
+            or hr <= rest_hr or hr >= max_hr):
+        return None
+    return vo2_sub * (max_hr - rest_hr) / (hr - rest_hr)
+
+
+def from_samples(workload_vo2: list, hrs: list, rest_hr: float, max_hr: float,
+                 lo: float = 0.5, hi: float = 0.9, min_samples: int = 20) -> float | None:
+    """Median VO2max over submaximal steady samples: pairs of (oxygen cost of the
+    external load, HR) kept only in the HR-reserve band [lo, hi] and within a sane
+    physiological range. None when too few samples to trust."""
+    import statistics
+    hrr = max_hr - rest_hr
+    if hrr <= 0:
+        return None
+    ests = []
+    for vo2, hr in zip(workload_vo2, hrs):
+        if not vo2 or not hr:
+            continue
+        frac = (hr - rest_hr) / hrr
+        if frac < lo or frac > hi:
+            continue
+        e = extrapolate(vo2, hr, rest_hr, max_hr)
+        if e and 20.0 <= e <= 90.0:            # physiological sanity bounds
+            ests.append(e)
+    if len(ests) < min_samples:
+        return None
+    return round(statistics.median(ests), 1)

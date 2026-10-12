@@ -664,7 +664,19 @@ with TestClient(app) as client:
     _tr = _v.trend_from_resting(
         [{"date": "2026-10-01", "value": 52}, {"date": "2026-10-02", "value": 0}], 190)
     assert len(_tr) == 1 and _tr[0]["date"] == "2026-10-01"   # bad resting HR dropped
-    print("vo2max estimate: Uth + ACSM + trend OK")
+    # Garmin/Firstbeat-style: workload oxygen cost at submaximal HR -> HRmax
+    assert _v.running_vo2(3.0) == round(0.2 * 180 + 3.5, 10)  # 39.5 ml/kg/min
+    assert _v.running_vo2(1.0) is None                        # walking: ignored
+    assert _v.cycling_vo2(250, 75) == 10.8 * 250 / 75 + 7     # 43.0
+    assert abs(_v.extrapolate(40, 140, 50, 190) - 40 * 140 / 90) < 1e-6
+    assert _v.extrapolate(40, 50, 50, 190) is None            # HR<=rest guarded
+    # 25 steady submaximal samples (HR 140 in the [0.5,0.9] HRR band) -> ~62.2
+    _n = 25
+    _g = _v.from_samples([40.0] * _n, [140] * _n, 50, 190)
+    assert _g is not None and abs(_g - 40 * 140 / 90) < 0.5, _g
+    assert _v.from_samples([40.0] * 5, [140] * 5, 50, 190) is None   # too few samples
+    assert _v.from_samples([40.0] * _n, [185] * _n, 50, 190) is None  # above band
+    print("vo2max estimate: Uth + ACSM + Garmin-style (workload vs HR) OK")
 
     # --- prompt caching: cached-token parsing + Anthropic cache breakpoint ---
     from app.anthropic_client import _extract_text, _build_request

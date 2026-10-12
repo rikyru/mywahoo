@@ -448,6 +448,7 @@ async def health_insight(request: Request, regenerate: str = Form(default=""),
     try:
         data = await google_health.fetch_health_overview(window["start"].date(),
                                                          window["end"].date())
+        _attach_vo2max(data)
         content = await anthropic_client.summarize_health(data, workouts, nutri)
     except google_health.GoogleHealthError as e:
         return RedirectResponse(f"/health?{_window_qs(window)}&{urlencode({'error': str(e)})}",
@@ -504,6 +505,7 @@ async def health_chat(request: Request):
                                                          window["end"].date())
     except google_health.GoogleHealthError:
         data = {"metrics": {}, "body": {}, "sleep": [], "score": None}
+    _attach_vo2max(data)
     with Session(engine) as session:
         workouts = [w.model_dump(exclude={"raw_summary", "fit_path", "updated_at"})
                     for w in query_range(session, window["start"], window["end"], None)]
@@ -2089,6 +2091,7 @@ async def analyze_chat(request: Request):
                                                          window["end"].date())
     except google_health.GoogleHealthError:
         data = {"metrics": {}, "body": {}, "sleep": [], "score": None}
+    _attach_vo2max(data)
     with Session(engine) as session:
         workouts = [w.model_dump(exclude={"raw_summary", "fit_path", "updated_at"})
                     for w in query_range(session, window["start"], window["end"], None)]
@@ -2333,11 +2336,67 @@ def _vo2max_estimate(overview: dict) -> dict | None:
     if ftp and ftp.get("best_5min"):
         best5 = ftp["best_5min"]
         cyc_v = vo2maxmod.from_cycling_power(best5, profilemod.load().get("weight_kg"))
-    if not (hr_v or cyc_v):
+    garmin = _estimated_vo2max_activity()   # workload-vs-HR, Garmin/Firstbeat style
+    if not (hr_v or cyc_v or garmin):
         return None
-    return {"hr": hr_v, "cycling": cyc_v, "best_5min_w": best5,
+    return {"garmin": garmin, "hr": hr_v, "cycling": cyc_v, "best_5min_w": best5,
+            "headline": garmin or hr_v or cyc_v,
             "rest_hr": round(rest_latest) if rest_latest else None,
             "max_hr": round(max_hr) if max_hr else None, "trend": trend}
+
+
+_VO2_CACHE: dict = {}
+_VO2_TTL = timedelta(hours=6)
+
+
+def _estimated_vo2max_activity() -> float | None:
+    """Garmin/Firstbeat-style VO2max from recent runs & rides: the oxygen cost of
+    the pace (run) or power (ride) at a steady submaximal HR, extrapolated to
+    HRmax through the HR reserve. Robust best of the per-activity medians.
+    Scanning streams is heavy, so the result is cached (6h)."""
+    hit = _VO2_CACHE.get("v")
+    if hit and datetime.utcnow() - hit["at"] < _VO2_TTL:
+        return hit["val"]
+    rest_hr, max_hr, _ = _hr_anchors()
+    weight = profilemod.load().get("weight_kg")
+    mass = cyclingmod.rider_mass(weight)
+    cutoff = datetime.utcnow() - timedelta(days=120)
+    with Session(engine) as session:
+        acts = session.exec(select(Workout).where(Workout.start_date >= cutoff)).all()
+    per_activity = []
+    for a in acts:
+        fam = google_health._sport_family(a.sport)
+        if fam not in ("run", "bike"):
+            continue
+        s = fitmod.load_streams(a.id)
+        if not s or not any(s.get("hr") or []):
+            continue
+        hrs = s.get("hr") or []
+        if fam == "run":
+            vo2 = [vo2maxmod.running_vo2(v) for v in (s.get("speed") or [])]
+        else:
+            vo2 = [vo2maxmod.cycling_vo2(p, weight)
+                   for p in cyclingmod.estimate_power_series(s, mass)]
+        n = min(len(vo2), len(hrs))
+        est = vo2maxmod.from_samples(vo2[:n], hrs[:n], rest_hr, max_hr)
+        if est:
+            per_activity.append(est)
+    val = cyclingmod.robust_best(per_activity) if per_activity else None
+    _VO2_CACHE["v"] = {"at": datetime.utcnow(), "val": val}
+    return val
+
+
+def _attach_vo2max(overview: dict) -> dict:
+    """Add a compact VO2max estimate to the overview so the AI can comment on it.
+    Mutates and returns `overview`."""
+    v = _vo2max_estimate(overview)
+    if v and v.get("headline"):
+        overview["vo2max_stimata"] = {
+            "ml_kg_min": v["headline"],
+            "metodo": ("attività: pace/potenza vs FC, stile Garmin"
+                       if v.get("garmin") else "FC riposo/max (Uth)"),
+            "nota": "stima di tendenza (±10-15%), non il valore dell'orologio"}
+    return overview
 
 
 # ---------------------------------------------------------------- actions

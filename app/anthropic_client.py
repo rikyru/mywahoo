@@ -719,6 +719,8 @@ def _health_payload(overview: dict, workouts: list[dict] | None,
                                        "tss", "cosa_ha_fatto"])}
     if (who := _profile.ai_context()):
         out["atleta"] = who
+    if overview.get("vo2max_stimata"):
+        out["vo2max_stimata"] = overview["vo2max_stimata"]
     if nutrition:
         out["alimentazione"] = nutrition
 

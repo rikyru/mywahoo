@@ -64,12 +64,14 @@
     <h3>VO₂max stimata <small class="muted">· stima, non il valore dell'orologio</small></h3>
   </div>
   <section class="kpi-row">
+    {% if vo2max.garmin %}<div class="kpi"><span class="kpi-value">{{ "%.0f"|format(vo2max.garmin) }}<small> ml/kg/min</small></span><span class="kpi-label">attività (pace/potenza vs FC)</span></div>{% endif %}
     {% if vo2max.hr %}<div class="kpi"><span class="kpi-value">{{ "%.0f"|format(vo2max.hr) }}<small> ml/kg/min</small></span><span class="kpi-label">da FC riposo/max</span></div>{% endif %}
-    {% if vo2max.cycling %}<div class="kpi"><span class="kpi-value">{{ "%.0f"|format(vo2max.cycling) }}<small> ml/kg/min</small></span><span class="kpi-label">da potenza ciclismo</span></div>{% endif %}
+    {% if vo2max.cycling %}<div class="kpi"><span class="kpi-value">{{ "%.0f"|format(vo2max.cycling) }}<small> ml/kg/min</small></span><span class="kpi-label">da potenza (5′)</span></div>{% endif %}
   </section>
   <p class="muted">
-    {% if vo2max.hr %}Metodo FC (Uth): 15,3 × FCmax/FCriposo{% if vo2max.rest_hr and vo2max.max_hr %} ({{ vo2max.max_hr }}/{{ vo2max.rest_hr }} bpm){% endif %}.{% endif %}
-    {% if vo2max.cycling %} Ciclismo (ACSM): dai {{ vo2max.best_5min_w }} W migliori su 5′ e dal peso.{% endif %}
+    {% if vo2max.garmin %}Metodo <strong>attività</strong> (come Garmin/Firstbeat): costo di ossigeno del passo/potenza a FC sottomassimale, estrapolato a FCmax dalle corse/uscite recenti. {% endif %}
+    {% if vo2max.hr %}FC (Uth): 15,3 × FCmax/FCriposo{% if vo2max.rest_hr and vo2max.max_hr %} ({{ vo2max.max_hr }}/{{ vo2max.rest_hr }} bpm){% endif %}. {% endif %}
+    {% if vo2max.cycling %}Ciclismo (ACSM): dai {{ vo2max.best_5min_w }} W migliori su 5′. {% endif %}
     È una <strong>stima di tendenza</strong> (±10-15%): l'orologio non espone il suo VO₂max via Google, quindi conta l'andamento più del numero assoluto.
   </p>
   {% if vo2max.trend and vo2max.trend|length > 1 %}
