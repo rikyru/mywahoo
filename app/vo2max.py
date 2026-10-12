@@ -96,6 +96,41 @@ def extrapolate(vo2_sub: float | None, hr: float | None,
     return vo2_sub * (max_hr - rest_hr) / (hr - rest_hr)
 
 
+def best_effort_vo2max(t: list, vo2_series: list, hrs: list,
+                       rest_hr: float, max_hr: float, window_s: float = 600,
+                       min_frac: float = 0.5, max_frac: float = 0.95) -> float | None:
+    """VO2max from the hardest SUSTAINED effort: the window_s-long window with the
+    highest average oxygen cost, extrapolated to HRmax by that window's AVERAGE HR.
+
+    Steady-window (not instantaneous) pairing is what makes this usable on a bike:
+    HR lags power and a ride is full of coasting/descending samples (low power,
+    HR still high) that would drag an instantaneous median far too low."""
+    n = min(len(t), len(vo2_series), len(hrs))
+    if n < 2 or max_hr <= rest_hr:
+        return None
+    best = None   # (avg_vo2, avg_hr) of the richest window
+    i = 0
+    for j in range(n):
+        while t[j] - t[i] > window_s and i < j:
+            i += 1
+        if t[j] - t[i] >= window_s * 0.9:
+            seg_v = [v for v in vo2_series[i:j + 1] if v is not None]
+            seg_h = [h for h in hrs[i:j + 1] if h]
+            if len(seg_v) >= 5 and len(seg_h) >= 5:
+                av = sum(seg_v) / len(seg_v)
+                ah = sum(seg_h) / len(seg_h)
+                if best is None or av > best[0]:
+                    best = (av, ah)
+    if not best:
+        return None
+    av, ah = best
+    frac = (ah - rest_hr) / (max_hr - rest_hr)
+    if frac < min_frac or frac > max_frac:   # window not aerobic/submaximal enough
+        return None
+    est = extrapolate(av, ah, rest_hr, max_hr)
+    return round(est, 1) if est and 20.0 <= est <= 90.0 else None
+
+
 def from_samples(workload_vo2: list, hrs: list, rest_hr: float, max_hr: float,
                  lo: float = 0.5, hi: float = 0.9, min_samples: int = 20) -> float | None:
     """Median VO2max over submaximal steady samples: pairs of (oxygen cost of the

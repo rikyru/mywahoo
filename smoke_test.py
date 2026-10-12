@@ -676,6 +676,17 @@ with TestClient(app) as client:
     assert _g is not None and abs(_g - 40 * 140 / 90) < 0.5, _g
     assert _v.from_samples([40.0] * 5, [140] * 5, 50, 190) is None   # too few samples
     assert _v.from_samples([40.0] * _n, [185] * _n, 50, 190) is None  # above band
+    # best-effort (steady-window) estimate — the robust method for cycling
+    _tt = list(range(0, 901))                         # 15 min @ 1 Hz, steady
+    _be = _v.best_effort_vo2max(_tt, [45.0] * 901, [160] * 901, 50, 190, 600)
+    assert _be is not None and abs(_be - 45 * 140 / 110) < 0.5, _be   # ~57.3
+    # coasting/soft samples don't drag it down: the hard 10-min window wins
+    _tt2 = list(range(0, 1201))
+    _be2 = _v.best_effort_vo2max(_tt2, [20.0] * 600 + [50.0] * 601,
+                                 [120] * 600 + [165] * 601, 50, 190, 600)
+    assert _be2 is not None and _be2 > 55, _be2
+    assert _v.best_effort_vo2max(list(range(60)), [45.0] * 60, [160] * 60,
+                                 50, 190, 600) is None   # too short to sustain
     # Garmin-style qualitative rating by age & sex
     assert _v.category(54, 38, "M") == "Eccellente"   # like the watch's "Excellent"
     assert _v.category(56, 38, "M") == "Superiore"

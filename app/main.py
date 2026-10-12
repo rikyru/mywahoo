@@ -2279,20 +2279,20 @@ def workout_detail(request: Request, workout_id: int):
         fam = google_health._sport_family(w.sport)
         weight = profilemod.load().get("weight_kg")
         workload = None
-        if fam == "bike":
+        if fam == "bike" and weight:
             real = streams.get("power") or []
-            if any(p for p in real):
-                workload = [vo2maxmod.cycling_vo2(p, weight) for p in real]
-            else:
-                mass = cyclingmod.rider_mass(weight)
-                workload = [vo2maxmod.cycling_vo2(p, weight)
-                            for p in cyclingmod.estimate_power_series(streams, mass)]
+            power = real if any(p for p in real) else \
+                cyclingmod.estimate_power_series(streams, cyclingmod.rider_mass(weight))
+            # coasting (0 W) counts as baseline cost so the best-effort window is the
+            # one actually pushing watts, not a descent with the HR still high
+            workload = [vo2maxmod.cycling_vo2(p, weight) or 3.5 for p in power]
         elif fam == "run":
-            workload = [vo2maxmod.running_vo2(v) for v in (streams.get("speed") or [])]
+            workload = [vo2maxmod.running_vo2(v) or 3.5 for v in (streams.get("speed") or [])]
         if workload:
+            t = streams.get("t") or []
             hrs = streams.get("hr") or []
-            n = min(len(workload), len(hrs))
-            ride_vo2max = vo2maxmod.from_samples(workload[:n], hrs[:n], rest_hr, max_hr)
+            ride_vo2max = (vo2maxmod.best_effort_vo2max(t, workload, hrs, rest_hr, max_hr, 600)
+                           or vo2maxmod.best_effort_vo2max(t, workload, hrs, rest_hr, max_hr, 300))
 
     can_segment = bool(streams and streams.get("latlng")
                        and any(p for p in streams["latlng"])
@@ -2421,13 +2421,18 @@ def _estimated_vo2max_activity() -> float | None:
         if not s or not any(s.get("hr") or []):
             continue
         hrs = s.get("hr") or []
+        t = s.get("t") or []
         if fam == "run":
-            vo2 = [vo2maxmod.running_vo2(v) for v in (s.get("speed") or [])]
+            vo2 = [vo2maxmod.running_vo2(v) or 3.5 for v in (s.get("speed") or [])]
+        elif weight:
+            real = s.get("power") or []
+            power = real if any(p for p in real) else cyclingmod.estimate_power_series(s, mass)
+            vo2 = [vo2maxmod.cycling_vo2(p, weight) or 3.5 for p in power]
         else:
-            vo2 = [vo2maxmod.cycling_vo2(p, weight)
-                   for p in cyclingmod.estimate_power_series(s, mass)]
-        n = min(len(vo2), len(hrs))
-        est = vo2maxmod.from_samples(vo2[:n], hrs[:n], rest_hr, max_hr)
+            continue
+        # hardest sustained effort of the session (10' window, then 5')
+        est = (vo2maxmod.best_effort_vo2max(t, vo2, hrs, rest_hr, max_hr, 600)
+               or vo2maxmod.best_effort_vo2max(t, vo2, hrs, rest_hr, max_hr, 300))
         if est:
             per_activity.append(est)
     val = cyclingmod.robust_best(per_activity) if per_activity else None
