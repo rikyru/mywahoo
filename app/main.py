@@ -24,10 +24,10 @@ from . import (anthropic_client, bodycomp, cycling as cyclingmod,
                google_health, gpx as gpxmod, nutrition, profile as profilemod,
                vo2max as vo2maxmod, wahoo)
 from .config import settings, setup_logging
-from .db import (AiAnalysis, BodyMeasure, ChatMessage, ClimbEffort, Conversation,
-                 CustomEffort, CustomSegment, IgnoredImport, PeriodSummary, PlanSession,
-                 RouteAssessment, TrainingPlan, Workout, WorkoutStream, engine,
-                 get_setting, init_db, set_setting)
+from .db import (AiAnalysis, BodyGirth, BodyMeasure, ChatMessage, ClimbEffort,
+                 Conversation, CustomEffort, CustomSegment, IgnoredImport,
+                 PeriodSummary, PlanSession, RouteAssessment, TrainingPlan, Workout,
+                 WorkoutStream, engine, get_setting, init_db, set_setting)
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -399,6 +399,20 @@ def _body_context() -> dict:
             "body_rows": newest_first[:20]}
 
 
+def _girth_context() -> dict:
+    """Tape-measure circumferences: recent history + a trend series for the chart."""
+    with Session(engine) as session:
+        rows = session.exec(select(BodyGirth)
+                            .order_by(BodyGirth.measured_at.desc()).limit(60)).all()
+    if not rows:
+        return {"girth_rows": [], "girth_series_json": "[]"}
+    chrono = list(reversed(rows))   # oldest -> newest
+    series = [{"date": r.measured_at.strftime("%Y-%m-%d"), "vita": r.vita_cm,
+               "fianchi": r.fianchi_cm, "coscia": r.coscia_cm, "braccio": r.braccio_cm}
+              for r in chrono]
+    return {"girth_rows": list(rows)[:20], "girth_series_json": json.dumps(series)}
+
+
 @app.post("/body/manual", dependencies=[Depends(require_auth)])
 def body_manual(weight_kg: str = Form(""), body_fat: str = Form(""),
                 muscle_kg: str = Form(""), water_pct: str = Form(""),
@@ -448,6 +462,48 @@ def body_delete(mid: int):
                             status_code=303)
 
 
+@app.post("/girth/manual", dependencies=[Depends(require_auth)])
+def girth_manual(vita_cm: str = Form(""), fianchi_cm: str = Form(""),
+                 petto_cm: str = Form(""), braccio_cm: str = Form(""),
+                 coscia_cm: str = Form(""), polpaccio_cm: str = Form(""),
+                 collo_cm: str = Form(""), note: str = Form(""),
+                 date_: str = Form("", alias="date")):
+    """Add a tape-measure reading (circumferences in cm) to track shape over time."""
+    def num(s):
+        try:
+            return float(str(s).replace(",", ".")) if str(s).strip() != "" else None
+        except ValueError:
+            return None
+
+    d = _parse_date(date_)
+    measured = (datetime.combine(d, datetime.utcnow().time()) if d
+                else datetime.utcnow())
+    g = BodyGirth(measured_at=measured, vita_cm=num(vita_cm), fianchi_cm=num(fianchi_cm),
+                  petto_cm=num(petto_cm), braccio_cm=num(braccio_cm),
+                  coscia_cm=num(coscia_cm), polpaccio_cm=num(polpaccio_cm),
+                  collo_cm=num(collo_cm), note=(note or "").strip() or None)
+    if not any((g.vita_cm, g.fianchi_cm, g.petto_cm, g.braccio_cm, g.coscia_cm,
+                g.polpaccio_cm, g.collo_cm)):
+        return RedirectResponse(f"/health?{urlencode({'error': 'Inserisci almeno una misura'})}",
+                                status_code=303)
+    with Session(engine) as session:
+        session.add(g)
+        session.commit()
+    return RedirectResponse(f"/health?{urlencode({'msg': 'Misure (metro) aggiunte'})}",
+                            status_code=303)
+
+
+@app.post("/girth/{gid}/delete", dependencies=[Depends(require_auth)])
+def girth_delete(gid: int):
+    with Session(engine) as session:
+        g = session.get(BodyGirth, gid)
+        if g:
+            session.delete(g)
+            session.commit()
+    return RedirectResponse(f"/health?{urlencode({'msg': 'Misura eliminata'})}",
+                            status_code=303)
+
+
 @app.get("/esercizi", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
 def exercises_page(request: Request):
     """Reference of the bodyweight exercises the AI proposes, with form cues and a
@@ -460,7 +516,7 @@ def exercises_page(request: Request):
 async def health_page(request: Request, win: str = "30", end: str = ""):
     window = resolve_window(win, end, request.query_params.get("from", ""),
                             request.query_params.get("to", ""))
-    base = {"window": window, "windows": WINDOWS, **_body_context(),   # scale shows even w/o Google
+    base = {"window": window, "windows": WINDOWS, **_body_context(), **_girth_context(),
             "today": date.today().isoformat(),
             "message": request.query_params.get("msg"),
             "error": request.query_params.get("error")}

@@ -232,6 +232,20 @@ class BodyMeasure(SQLModel, table=True):
     metabolic_age: Optional[float] = None      # years
 
 
+class BodyGirth(SQLModel, table=True):
+    """Tape-measure circumferences (cm), entered by hand, for tracking shape."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    measured_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+    vita_cm: Optional[float] = None            # girovita (waist)
+    fianchi_cm: Optional[float] = None         # hips
+    petto_cm: Optional[float] = None           # chest
+    braccio_cm: Optional[float] = None         # upper arm / bicep
+    coscia_cm: Optional[float] = None          # thigh
+    polpaccio_cm: Optional[float] = None       # calf
+    collo_cm: Optional[float] = None           # neck
+    note: Optional[str] = None
+
+
 class AiAnalysis(SQLModel, table=True):
     """Cached Claude analysis, one per workout."""
     workout_id: int = Field(primary_key=True, foreign_key="workout.id")

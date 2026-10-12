@@ -62,8 +62,8 @@
 {% endif %}
 
 <section class="card">
-  <details {% if not body_latest %}open{% endif %}>
-    <summary><strong>➕ Aggiungi misura corporea</strong> <span class="muted">· manuale, per tenere storico e tendenze</span></summary>
+  <details>
+    <summary><strong>➕ Aggiungi composizione</strong> <span class="muted">· peso / massa grassa / muscolo (a mano)</span></summary>
     <form method="post" action="/body/manual" class="plan-edit-form" style="margin-top:12px">
       <div class="plan-edit-row">
         <label>Data <input type="date" name="date" value="{{ today }}"></label>
@@ -98,6 +98,56 @@
           <td>{{ "%.1f"|format(r.visceral) if r.visceral else "—" }}</td>
           <td>{{ "%.1f"|format(r.bmi) if r.bmi else "—" }}</td>
           <td><form method="post" action="/body/{{ r.id }}/delete"
+                    onsubmit="return confirm('Eliminare questa misura?');">
+            <button type="submit" class="btn btn-danger" title="Elimina">🗑</button></form></td>
+        </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
+  </details>
+</section>
+
+<section class="card">
+  <details {% if not girth_rows %}open{% endif %}>
+    <summary><strong>📏 Misure col metro (cm)</strong> <span class="muted">· girovita, coscia, braccio… per seguire la forma</span></summary>
+    <form method="post" action="/girth/manual" class="plan-edit-form" style="margin-top:12px">
+      <div class="plan-edit-row">
+        <label>Data <input type="date" name="date" value="{{ today }}"></label>
+        <label>Girovita (cm) <input type="number" step="0.1" name="vita_cm"></label>
+        <label>Fianchi (cm) <input type="number" step="0.1" name="fianchi_cm"></label>
+      </div>
+      <div class="plan-edit-row">
+        <label>Petto (cm) <input type="number" step="0.1" name="petto_cm"></label>
+        <label>Braccio (cm) <input type="number" step="0.1" name="braccio_cm"></label>
+        <label>Coscia (cm) <input type="number" step="0.1" name="coscia_cm"></label>
+      </div>
+      <div class="plan-edit-row">
+        <label>Polpaccio (cm) <input type="number" step="0.1" name="polpaccio_cm"></label>
+        <label>Collo (cm) <input type="number" step="0.1" name="collo_cm"></label>
+        <label>Note <input type="text" name="note" placeholder="facoltativo"></label>
+      </div>
+      <p class="muted">In centimetri — compila solo quelle che misuri.</p>
+      <button type="submit" class="btn">Salva misure</button>
+    </form>
+    {% if girth_rows %}
+    <canvas id="girthChart" height="90" style="margin-top:14px"></canvas>
+    <div class="table-scroll" style="margin-top:12px">
+      <table class="metrics">
+        <thead><tr><th>Data</th><th>Vita</th><th>Fianchi</th><th>Petto</th><th>Braccio</th><th>Coscia</th><th>Polpaccio</th><th>Collo</th><th></th></tr></thead>
+        <tbody>
+        {% for r in girth_rows %}
+        <tr>
+          <td>{{ r.measured_at.strftime("%d/%m/%Y") }}</td>
+          <td>{{ "%.1f"|format(r.vita_cm) if r.vita_cm else "—" }}</td>
+          <td>{{ "%.1f"|format(r.fianchi_cm) if r.fianchi_cm else "—" }}</td>
+          <td>{{ "%.1f"|format(r.petto_cm) if r.petto_cm else "—" }}</td>
+          <td>{{ "%.1f"|format(r.braccio_cm) if r.braccio_cm else "—" }}</td>
+          <td>{{ "%.1f"|format(r.coscia_cm) if r.coscia_cm else "—" }}</td>
+          <td>{{ "%.1f"|format(r.polpaccio_cm) if r.polpaccio_cm else "—" }}</td>
+          <td>{{ "%.1f"|format(r.collo_cm) if r.collo_cm else "—" }}</td>
+          <td><form method="post" action="/girth/{{ r.id }}/delete"
                     onsubmit="return confirm('Eliminare questa misura?');">
             <button type="submit" class="btn btn-danger" title="Elimina">🗑</button></form></td>
         </tr>
@@ -487,6 +537,25 @@ document.querySelectorAll("canvas[data-series]").forEach(c => {
   const m = k.startsWith("body_") ? BODY[k.slice(5)] : METRICS[k];
   if (m && m.series.length) lineChart(c, m.series, COLORS[k] || "#0a6ebd");
 });
+
+// Tape-measure circumferences (cm) over time — multi-line trend
+const GIRTH = {{ girth_series_json | safe }};
+const girthCanvas = document.getElementById("girthChart");
+if (girthCanvas && GIRTH.length) {
+  const cols = [["vita", "Girovita", "#4c8dff"], ["fianchi", "Fianchi", "#34d399"],
+                ["coscia", "Coscia", "#fb923c"], ["braccio", "Braccio", "#f87171"]];
+  const dsets = cols.filter(([k]) => GIRTH.some(p => p[k] != null))
+    .map(([k, label, color]) => ({ label, data: GIRTH.map(p => p[k]),
+      borderColor: color, backgroundColor: color + "22", spanGaps: true,
+      pointRadius: 2, borderWidth: 1.6, tension: .25 }));
+  new Chart(girthCanvas, {
+    type: "line",
+    data: { labels: GIRTH.map(p => p.date.slice(5)), datasets: dsets },
+    options: { plugins: { legend: { display: true } },
+      scales: { x: { ticks: { maxTicksLimit: 8 } }, y: { beginAtZero: false } },
+      animation: false, responsive: true },
+  });
+}
 
 // wellness score history (0-100)
 const SCORE_SERIES = {{ data.score_series | default([]) | tojson }};

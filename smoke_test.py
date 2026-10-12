@@ -729,6 +729,23 @@ with TestClient(app) as client:
     assert r.status_code == 303 and "error" in r.headers["location"]
     print("manual body measure: add, history, delete, empty-guard OK")
 
+    # --- tape-measure circumferences: add, keep history, delete ---
+    from app.db import BodyGirth as _BG
+    r = client.post("/girth/manual", data={"vita_cm": "84.5", "coscia_cm": "58.0"},
+                    follow_redirects=False)
+    assert r.status_code == 303 and "msg" in r.headers["location"]
+    with Session(engine) as s:
+        _g = s.exec(select(_BG).where(_BG.vita_cm == 84.5)).first()
+        assert _g is not None and _g.coscia_cm == 58.0
+        _gid = _g.id
+    r = client.post(f"/girth/{_gid}/delete", follow_redirects=False)
+    assert r.status_code == 303
+    with Session(engine) as s:
+        assert s.get(_BG, _gid) is None
+    r = client.post("/girth/manual", data={}, follow_redirects=False)   # nothing filled
+    assert r.status_code == 303 and "error" in r.headers["location"]
+    print("tape-measure girth: add, history, delete, empty-guard OK")
+
     # --- exercise how-to linkifier + reference page ---
     from app import exercises as _ex
     _html = str(_ex.linkify("3x12 squat, 3x10 push up e plank laterale"))
