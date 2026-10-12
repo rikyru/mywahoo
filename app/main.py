@@ -2425,7 +2425,7 @@ def _vo2max_estimate(overview: dict) -> dict | None:
     from the resting-HR series) and, when recent rides give a 5-min power, an ACSM
     cycling estimate. The Pixel Watch's own Firstbeat value isn't exposed by the
     Google API, so this fills the gap. None when there's nothing to anchor on."""
-    rest_anchor, max_hr, _ = _hr_anchors()
+    rest_anchor, max_hr, max_sex = _hr_anchors()
     metrics = overview.get("metrics", {}) or {}
     rest_series = (metrics.get("resting_hr") or {}).get("series") or []
     rest_latest = (metrics.get("resting_hr") or {}).get("latest") or rest_anchor
@@ -2440,8 +2440,12 @@ def _vo2max_estimate(overview: dict) -> dict | None:
     if not (hr_v or cyc_v or garmin):
         return None
     headline = garmin or hr_v or cyc_v
+    p = profilemod.load()
+    by = p.get("birth_year")
+    age = (date.today().year - int(by)) if by else None
     return {"garmin": garmin, "hr": hr_v, "cycling": cyc_v, "best_5min_w": best5,
             "headline": headline, "categoria": _vo2max_category(headline),
+            "bands": list(vo2maxmod.bounds(age, max_sex)),
             "rest_hr": round(rest_latest) if rest_latest else None,
             "max_hr": round(max_hr) if max_hr else None, "trend": trend}
 

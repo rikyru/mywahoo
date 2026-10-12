@@ -60,6 +60,14 @@ _NORMS = {
 _LABELS = ("Scarso", "Discreto", "Buono", "Eccellente", "Superiore")
 
 
+def bounds(age: int | None, sex: str | None) -> tuple:
+    """The 4 category thresholds (Discreto, Buono, Eccellente, Superiore) for this
+    age & sex — used to colour the gauge bands. Age unknown → assumes ~35."""
+    table = _NORMS.get((sex or "M").upper()[:1], _NORMS["M"])
+    a = age if age and age > 0 else 35
+    return next((b for lo, hi, b in table if lo <= a <= hi), table[-1][2])
+
+
 def category(vo2: float | None, age: int | None, sex: str | None) -> str | None:
     """Qualitative rating (Scarso…Superiore) for a VO2max, by age & sex — the
     "Excellent"-style indication Garmin shows. Age unknown → assumes ~35."""

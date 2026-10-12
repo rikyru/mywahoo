@@ -692,7 +692,10 @@ with TestClient(app) as client:
     assert _v.category(56, 38, "M") == "Superiore"
     assert _v.category(30, 45, "F") == "Scarso"
     assert _v.category(None, 38, "M") is None
-    print("vo2max estimate: Uth + ACSM + Garmin-style + rating OK")
+    # category thresholds (for the gauge bands) by age & sex
+    assert _v.bounds(38, "M") == (41, 45, 50, 55)
+    assert _v.bounds(45, "F") == (31, 35, 40, 45)
+    print("vo2max estimate: Uth + ACSM + Garmin-style + rating + bands OK")
 
     # --- delete a single plan session without deleting the plan ---
     with Session(engine) as s:
@@ -733,9 +736,13 @@ with TestClient(app) as client:
     assert "plank laterale ▶" in _html and "plank ▶ laterale" not in _html  # longest-first
     assert "&lt;b&gt;" in str(_ex.linkify("<b>squat</b>"))                   # input escaped
     assert len(_ex.catalog()) >= 15
+    # the AI nudge lists the canonical names so what it writes gets linkified
+    assert "Squat" in _ex.NUDGE and len(_ex.canonical_names()) >= 15
+    import app.anthropic_client as _acn
+    assert "corpo libero" in _acn._exmod.NUDGE          # wired into the planner
     r = client.get("/esercizi")
     assert r.status_code == 200 and "Squat" in r.text
-    print("exercise how-to: linkify (escaped, longest-first) + page OK")
+    print("exercise how-to: linkify + page + AI nudge OK")
 
     # --- prompt caching: cached-token parsing + Anthropic cache breakpoint ---
     from app.anthropic_client import _extract_text, _build_request

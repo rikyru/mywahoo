@@ -115,6 +115,9 @@
     <h3>VO₂max stimata{% if vo2max.categoria %} <span class="tag">{{ vo2max.categoria }}</span>{% endif %}
       <small class="muted">· stima, non il valore dell'orologio</small></h3>
   </div>
+  {% if vo2max.headline and vo2max.bands %}
+  <div id="vo2Gauge" data-gauge="{{ {'value': vo2max.headline, 'bands': vo2max.bands, 'cat': vo2max.categoria} | tojson }}" style="text-align:center"></div>
+  {% endif %}
   <section class="kpi-row">
     {% if vo2max.garmin %}<div class="kpi"><span class="kpi-value">{{ "%.0f"|format(vo2max.garmin) }}<small> ml/kg/min</small></span><span class="kpi-label">attività (pace/potenza vs FC)</span></div>{% endif %}
     {% if vo2max.hr %}<div class="kpi"><span class="kpi-value">{{ "%.0f"|format(vo2max.hr) }}<small> ml/kg/min</small></span><span class="kpi-label">da FC riposo/max</span></div>{% endif %}
@@ -333,6 +336,32 @@ if (window.innerWidth < 640) Chart.defaults.font.size = 13;
 function busy(btn) {
   setTimeout(() => { btn.disabled = true; btn.textContent = "Generazione…"; }, 0);
 }
+
+// ---- VO2max gauge (Garmin-style: colored category bands + needle) ----
+(() => {
+  const host = document.getElementById("vo2Gauge");
+  if (!host) return;
+  let d; try { d = JSON.parse(host.dataset.gauge); } catch (e) { return; }
+  if (!d || !d.value || !(d.bands && d.bands.length === 4)) return;
+  const lo = 25, hi = 70, v = Math.max(lo, Math.min(hi, d.value));
+  const W = 260, H = 148, cx = 130, cy = 132, R = 100;
+  const colors = ["#f87171", "#fb923c", "#facc15", "#34d399", "#4c8dff"];
+  const edges = [lo, d.bands[0], d.bands[1], d.bands[2], d.bands[3], hi];
+  const ang = val => Math.PI * (1 - (val - lo) / (hi - lo));   // lo→180°, hi→0°
+  const pt = (val, r) => [cx + r * Math.cos(ang(val)), cy - r * Math.sin(ang(val))];
+  const arc = (a, b, r, color) => {
+    const [x1, y1] = pt(a, r), [x2, y2] = pt(b, r);
+    return `<path d="M ${x1.toFixed(1)} ${y1.toFixed(1)} A ${r} ${r} 0 0 1 ${x2.toFixed(1)} ${y2.toFixed(1)}" stroke="${color}" stroke-width="15" fill="none"/>`;
+  };
+  let svg = `<svg viewBox="0 0 ${W} ${H}" width="100%" style="max-width:300px" role="img" aria-label="VO2max ${Math.round(d.value)}">`;
+  for (let i = 0; i < 5; i++) svg += arc(edges[i], edges[i + 1], R, colors[i]);
+  const [nx, ny] = pt(v, R - 4);
+  svg += `<line x1="${cx}" y1="${cy}" x2="${nx.toFixed(1)}" y2="${ny.toFixed(1)}" stroke="#e7ecf3" stroke-width="3"/>`;
+  svg += `<circle cx="${cx}" cy="${cy}" r="5" fill="#e7ecf3"/>`;
+  svg += `<text x="${cx}" y="${cy - 30}" text-anchor="middle" font-size="34" font-weight="700" fill="#e7ecf3">${Math.round(d.value)}</text>`;
+  if (d.cat) svg += `<text x="${cx}" y="${cy - 10}" text-anchor="middle" font-size="13" fill="#8a97a9">${d.cat}</text>`;
+  host.innerHTML = svg;
+})();
 
 {% if vo2max and vo2max.trend and vo2max.trend|length > 1 %}
 // ---- VO2max trend (Uth from the resting-HR series) ----

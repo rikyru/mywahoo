@@ -61,6 +61,18 @@ _PATTERN = re.compile(
     re.IGNORECASE)
 
 
+def canonical_names() -> list[str]:
+    """The canonical exercise names, for nudging the AI to use them (so the
+    how-to linkifier recognises what it writes)."""
+    return list(_EXERCISES.keys())
+
+
+# One line to append to the planning prompts so the AI writes recognisable names.
+NUDGE = ("\n\nPer gli esercizi a corpo libero preferisci questi nomi standard "
+         "quando l'esercizio corrisponde, così l'app può mostrarne la dimostrazione: "
+         + ", ".join(_EXERCISES.keys()) + ".")
+
+
 def demo_url(name: str) -> str:
     q = re.sub(r"\s+", "+", f"{name} esecuzione corretta")
     return f"https://www.youtube.com/results?search_query={q}"

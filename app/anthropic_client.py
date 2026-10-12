@@ -9,6 +9,7 @@ import logging
 
 import httpx
 
+from . import exercises as _exmod
 from . import profile as _profile
 from .config import settings
 
@@ -492,7 +493,7 @@ async def chat_plan_session(ctx: dict, history: list[dict]) -> dict:
     UI offers to apply to the session.
     """
     import re
-    system = (PLAN_CHAT_SYSTEM_PROMPT + "\n\nCONTESTO (JSON):\n"
+    system = (PLAN_CHAT_SYSTEM_PROMPT + _exmod.NUDGE + "\n\nCONTESTO (JSON):\n"
               + _dumps(ctx))
     raw = await _call_messages(system, history, cache=True)
     m = re.search(r"\{.*\}", raw, re.S)
@@ -543,7 +544,7 @@ async def chat_plan(ctx: dict, history: list[dict]) -> dict:
     remove proposals the UI shows for confirmation before applying.
     """
     import re
-    system = (PLAN_EDIT_SYSTEM_PROMPT + "\n\nCONTESTO (JSON):\n"
+    system = (PLAN_EDIT_SYSTEM_PROMPT + _exmod.NUDGE + "\n\nCONTESTO (JSON):\n"
               + _dumps(ctx))
     raw = await _call_messages(system, history, cache=True)
     m = re.search(r"\{.*\}", raw, re.S)
@@ -564,7 +565,7 @@ async def generate_plan(goal: str, n_days: int, start_date: str) -> dict:
             f"Data di inizio: {start_date}")
     if (who := _profile.ai_context()):
         user += "\nAtleta: " + _dumps(who)
-    raw = await _call_claude(PLAN_SYSTEM_PROMPT, user)
+    raw = await _call_claude(PLAN_SYSTEM_PROMPT + _exmod.NUDGE, user)
     m = re.search(r"\{.*\}", raw, re.S)
     if not m:
         return {}
