@@ -504,6 +504,13 @@ def girth_delete(gid: int):
                             status_code=303)
 
 
+@app.get("/records", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
+def records_page(request: Request):
+    """Personal bests computed from the whole history."""
+    return templates.TemplateResponse(request, "records.html",
+                                      {"records": _personal_records()})
+
+
 @app.get("/esercizi", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
 def exercises_page(request: Request):
     """Reference of the bodyweight exercises the AI proposes, with form cues and a
@@ -2474,6 +2481,79 @@ def _estimated_ftp() -> dict | None:
            if ftp or peak5 else None)
     _FTP_CACHE["v"] = {"at": datetime.utcnow(), "val": val}
     return val
+
+
+_PR_CACHE: dict = {}
+_PR_TTL = timedelta(hours=12)
+
+
+def _personal_records() -> list[dict]:
+    """All-time personal bests: distances/duration/ascent/speed from the activity
+    fields, power peaks (20'/5'/1') from the ride streams, and best climb VAM/gain
+    from detected climbs. Each links to its workout. Cached (stream scan is heavy)."""
+    hit = _PR_CACHE.get("v")
+    if hit and datetime.utcnow() - hit["at"] < _PR_TTL:
+        return hit["val"]
+    mass = cyclingmod.rider_mass(profilemod.load().get("weight_kg"))
+    with Session(engine) as session:
+        ws = list(session.exec(select(Workout)))
+        climbs = list(session.exec(select(ClimbEffort).where(ClimbEffort.kind == "climb")))
+    fam = google_health._sport_family
+    rides = [w for w in ws if fam(w.sport) == "bike"]
+    runs = [w for w in ws if fam(w.sport) == "run"]
+    recs: list[dict] = []
+
+    def top(items):   # list[(value, workout)] -> highest
+        return max(items, key=lambda t: t[0]) if items else (None, None)
+
+    def add(label, value, w, value_str):
+        if w is not None and value:
+            recs.append({"label": label, "value": value_str,
+                         "date": w.start_date, "workout_id": w.id})
+
+    v, w = top([(x.distance_m, x) for x in rides if x.distance_m])
+    add("Uscita più lunga (bici)", v, w, f"{(v or 0) / 1000:.1f} km")
+    v, w = top([(x.distance_m, x) for x in runs if x.distance_m])
+    add("Corsa più lunga", v, w, f"{(v or 0) / 1000:.1f} km")
+    v, w = top([((x.moving_s or x.duration_s or 0), x) for x in ws])
+    add("Attività più lunga", v, w, fmt_duration(int(v or 0)))
+    v, w = top([(x.ascent_m, x) for x in ws if x.ascent_m])
+    add("Più dislivello in un'uscita", v, w, f"{(v or 0):.0f} m")
+    v, w = top([(x.avg_speed_ms, x) for x in rides
+                if x.avg_speed_ms and (x.distance_m or 0) >= 10000])
+    add("Velocità media più alta (bici ≥10 km)", v, w, f"{(v or 0) * 3.6:.1f} km/h")
+
+    # power peaks across all rides (real stream if present, else GPS estimate)
+    peaks = {1200: (0.0, None), 300: (0.0, None), 60: (0.0, None)}
+    for r in rides:
+        s = fitmod.load_streams(r.id)
+        if not s:
+            continue
+        real = s.get("power") or []
+        power = real if any(p for p in real) else cyclingmod.estimate_power_series(s, mass)
+        if not power or not any(power):
+            continue
+        for win in peaks:
+            b = cyclingmod.best_rolling_avg(s["t"], power, win)
+            if b and b > peaks[win][0]:
+                peaks[win] = (b, r)
+    for win, label in ((1200, "Miglior potenza 20′"), (300, "Miglior potenza 5′"),
+                       (60, "Miglior potenza 1′")):
+        b, r = peaks[win]
+        add(label, b, r, f"{round(b)} W")
+
+    if climbs:
+        cv = max(climbs, key=lambda c: c.vam or 0)
+        if cv.vam:
+            recs.append({"label": "Miglior VAM in salita", "value": f"{cv.vam} m/h",
+                         "date": cv.date, "workout_id": cv.workout_id})
+        cg = max(climbs, key=lambda c: c.gain_m or 0)
+        if cg.gain_m:
+            recs.append({"label": "Salita più dura (dislivello)",
+                         "value": f"{cg.gain_m:.0f} m", "date": cg.date,
+                         "workout_id": cg.workout_id})
+    _PR_CACHE["v"] = {"at": datetime.utcnow(), "val": recs}
+    return recs
 
 
 def _vo2max_estimate(overview: dict) -> dict | None:

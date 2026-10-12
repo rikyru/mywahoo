@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}Record — {{ app_name }}{% endblock %}
+{% block content %}
+
+<div class="page-head">
+  <h1>Record personali</h1>
+  <span class="muted">i tuoi migliori dallo storico</span>
+</div>
+
+{% if records %}
+<div class="charts-grid">
+  {% for r in records %}
+  <section class="card">
+    <span class="kpi-label">{{ r.label }}</span>
+    <div style="font-size:1.7rem;font-weight:700;margin:.2rem 0">{{ r.value }}</div>
+    <a class="muted" href="/workout/{{ r.workout_id }}">{{ r.date.strftime("%d/%m/%Y") }} →</a>
+  </section>
+  {% endfor %}
+</div>
+<p class="muted">Le potenze sono stimate da GPS dove manca il misuratore. Si aggiornano
+  entro qualche ora dopo nuove attività.</p>
+{% else %}
+<div class="card"><p class="muted">Ancora nessun record: servono alcune attività nello storico.</p></div>
+{% endif %}
+
+{% endblock %}

@@ -746,6 +746,21 @@ with TestClient(app) as client:
     assert r.status_code == 303 and "error" in r.headers["location"]
     print("tape-measure girth: add, history, delete, empty-guard OK")
 
+    # --- personal records from history ---
+    from app import main as _mainmod
+    from app.db import Workout as _Wpr
+    with Session(engine) as s:
+        s.add(_Wpr(id=99001, name="Granfondo", sport="Ciclismo", distance_m=123456.0,
+                   moving_s=18000, start_date=datetime(2026, 3, 1, 8, 0)))
+        s.commit()
+    _mainmod._PR_CACHE.clear()
+    _prs = _mainmod._personal_records()
+    _long = next((r for r in _prs if r["label"].startswith("Uscita più lunga")), None)
+    assert _long and _long["workout_id"] == 99001 and "123.5" in _long["value"], _long
+    r = client.get("/records")
+    assert r.status_code == 200 and "Record personali" in r.text
+    print("personal records: longest ride + page OK")
+
     # --- exercise how-to linkifier + reference page ---
     from app import exercises as _ex
     _html = str(_ex.linkify("3x12 squat, 3x10 push up e plank laterale"))
