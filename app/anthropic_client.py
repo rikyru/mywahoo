@@ -674,9 +674,35 @@ def _activity_log(workouts: list[dict] | None, with_notes: bool = True) -> list[
         # the description is the only signal about the real load).
         if with_notes and w.get("notes"):
             row["cosa_ha_fatto"] = str(w["notes"])[:600]
+        # Nuoto: sintesi compatta dei parziali (struttura/ritmo/tecnica) così
+        # anche le analisi salute/allenamento "capiscono" la seduta.
+        if w.get("laps_json"):
+            s = _swim_summary(w["laps_json"])
+            if s:
+                row["nuoto"] = s
         out.append(row)
     out.sort(key=lambda r: r["data"])
     return out
+
+
+def _swim_summary(laps_json: str) -> str | None:
+    """One compact line from a swim's splits: distance, reps, pace/100m, SWOLF."""
+    try:
+        laps = json.loads(laps_json)
+    except (ValueError, TypeError):
+        return None
+    if not laps:
+        return None
+    dist = sum(l.get("distance_m") or 0 for l in laps)
+    time = sum(l.get("time_s") or 0 for l in laps)
+    sw = [l["swolf"] for l in laps if l.get("swolf") is not None]
+    parts = [f"{round(dist)}m", f"{len(laps)} ripetute"]
+    if dist:
+        pace = time / dist * 100
+        parts.append(f"passo {int(pace // 60)}:{int(pace % 60):02d}/100m")
+    if sw:
+        parts.append(f"SWOLF {round(sum(sw) / len(sw))}")
+    return " · ".join(parts)
 
 
 def _health_payload(overview: dict, workouts: list[dict] | None,
@@ -724,7 +750,7 @@ def _health_payload(overview: dict, workouts: list[dict] | None,
            "attivita_fisiche": _table(_activity_log(workouts, with_notes),
                                       ["data", "sport", "durata_min", "nome",
                                        "distanza_km", "fc_media", "potenza_media",
-                                       "tss", "cosa_ha_fatto"])}
+                                       "tss", "nuoto", "cosa_ha_fatto"])}
     if (who := _profile.ai_context()):
         out["atleta"] = who
     if overview.get("vo2max_stimata"):

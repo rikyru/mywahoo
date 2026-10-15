@@ -1493,6 +1493,10 @@ assert _f["distance_m"] > 0 and _f["time_s"] > 0 and _f["pace_100_s"]
 assert _f["swolf"] is not None and _f["stroke"]        # pool: SWOLF + stile presenti
 assert all(lp["distance_m"] > 0 for lp in _laps)        # niente lap di riposo (0 m)
 assert _parse_laps("nonexistent.fit") == []             # robusto su file assente
-print(f"swim splits: parse_laps OK ({len(_laps)} parziali, 1° SWOLF={_f['swolf']})")
+import json as _json_sw
+from app.anthropic_client import _swim_summary as _ssum
+_sum = _ssum(_json_sw.dumps(_laps))
+assert _sum and "ripetute" in _sum and "SWOLF" in _sum    # sintesi per le analisi AI
+print(f"swim splits: parse_laps OK ({len(_laps)} parziali, 1° SWOLF={_f['swolf']}); sintesi='{_sum}'")
 
 print("\nALL SMOKE TESTS PASSED")
