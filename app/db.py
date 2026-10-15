@@ -191,6 +191,7 @@ class Workout(SQLModel, table=True):
     intensity_factor: Optional[float] = None
     has_fit: bool = False                # True once the FIT was downloaded AND parsed
     fit_path: str = ""                   # path of the stored .fit file
+    laps_json: Optional[str] = None      # JSON dei parziali (lap/length) per il nuoto
     raw_summary: str = "{}"              # raw JSON from Wahoo (webhook or API)
     manual: bool = False                 # created by the user (not imported)
     notes: str = ""                      # free-text description (manual/home workouts)
@@ -289,7 +290,7 @@ _MIGRATIONS = {
                         ("sport", "TEXT DEFAULT 'Bici'")],
     "workout": [("manual", "INTEGER DEFAULT 0"), ("notes", "TEXT DEFAULT ''"),
                 ("rpe", "REAL"), ("climbs_indexed", "INTEGER DEFAULT 0"),
-                ("best20_w", "REAL")],
+                ("best20_w", "REAL"), ("laps_json", "TEXT")],
     "plansession": [("conversation_id", "INTEGER")],
     "trainingplan": [("conversation_id", "INTEGER")],
     "climbeffort": [("kind", "TEXT DEFAULT 'climb'"), ("path_json", "TEXT DEFAULT '[]'")],

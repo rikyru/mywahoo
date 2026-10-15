@@ -2436,12 +2436,33 @@ def workout_detail(request: Request, workout_id: int):
         if s:
             edit_seg = {"id": s.id, "name": s.name,
                         "path": json.loads(s.path_json or "[]")}
+    # Parziali (nuoto e attività a giri): da laps_json, con backfill pigro dal FIT
+    laps = None
+    if w.laps_json:
+        try:
+            laps = json.loads(w.laps_json)
+        except (ValueError, TypeError):
+            laps = None
+    elif w.has_fit and w.fit_path:
+        try:
+            laps = fitmod.parse_laps(w.fit_path)
+        except Exception:
+            laps = None
+        if laps:
+            with Session(engine) as s2:
+                wk = s2.get(Workout, workout_id)
+                if wk:
+                    wk.laps_json = json.dumps(laps)
+                    s2.add(wk)
+                    s2.commit()
+
     return templates.TemplateResponse(request, "workout.html", {
         "w": w,
         "streams_json": streams_json,
         "merge": merge, "can_segment": can_segment, "edit_seg": edit_seg,
         "est_power": est_power, "climbs": climbs, "ftp": ftp, "hr_zones": hr_zones,
         "ride_vo2max": ride_vo2max, "ride_vo2max_cat": _vo2max_category(ride_vo2max),
+        "laps": laps,
         "analysis_html": md.markdown(analysis.content, extensions=["tables"]) if analysis else None,
         "analysis_date": analysis.created_at if analysis else None,
         "message": request.query_params.get("msg"),

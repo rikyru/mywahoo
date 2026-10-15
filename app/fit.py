@@ -8,6 +8,7 @@ Extracts:
 Also provides downsampling for charts and aggregated stats for the AI prompt.
 """
 import asyncio
+import json
 import logging
 from datetime import datetime, timezone
 from typing import Optional
@@ -140,6 +141,65 @@ def compute_normalized_power(power: list, t: list) -> Optional[float]:
     return round((sum(fourth_powers) / len(fourth_powers)) ** 0.25, 1)
 
 
+def parse_laps(path: str) -> list:
+    """Per-lap splits for a swim (or any lapped activity) from the FIT `lap`
+    messages, with SWOLF/stroke per lap from the `length` messages when present
+    (pool swims). Returns [] if the FIT has no usable laps."""
+    laps_raw, lengths_raw = [], []
+    try:
+        with fitdecode.FitReader(path) as fit:
+            for fr in fit:
+                if not isinstance(fr, fitdecode.FitDataMessage):
+                    continue
+                if fr.name == "lap":
+                    laps_raw.append({
+                        "start_len": _get(fr, "first_length_index"),
+                        "num_len": _get(fr, "num_active_lengths") or _get(fr, "num_lengths"),
+                        "distance_m": _get(fr, "total_distance"),
+                        "time_s": _get(fr, "total_timer_time") or _get(fr, "total_elapsed_time"),
+                        "strokes": _get(fr, "total_strokes"),
+                        "stroke": str(_get(fr, "swim_stroke") or "") or None,
+                        "avg_hr": _get(fr, "avg_heart_rate"),
+                    })
+                elif fr.name == "length":
+                    lengths_raw.append({
+                        "idx": _get(fr, "message_index"),
+                        "type": str(_get(fr, "length_type") or ""),
+                        "time_s": _get(fr, "total_timer_time") or _get(fr, "total_elapsed_time"),
+                        "strokes": _get(fr, "total_strokes"),
+                    })
+    except (fitdecode.FitError, OSError, ValueError):
+        return []
+
+    len_by_idx = {l["idx"]: l for l in lengths_raw if l["idx"] is not None}
+    out = []
+    for lp in laps_raw:
+        dist = lp["distance_m"] or 0
+        tt = lp["time_s"] or 0
+        if not dist:                     # lap di riposo/pausa (0 m): salta
+            continue
+        swolf = None
+        if lp["start_len"] is not None and lp["num_len"]:
+            vals = []
+            for k in range(int(lp["start_len"]), int(lp["start_len"]) + int(lp["num_len"])):
+                l = len_by_idx.get(k)
+                if l and l["type"] == "active" and l["time_s"] and l["strokes"] is not None:
+                    vals.append(round(l["time_s"]) + int(l["strokes"]))
+            if vals:
+                swolf = round(sum(vals) / len(vals))
+        out.append({
+            "i": len(out) + 1,
+            "distance_m": round(dist),
+            "time_s": round(tt, 1),
+            "pace_100_s": round(tt / dist * 100) if dist else None,
+            "strokes": int(lp["strokes"]) if lp["strokes"] is not None else None,
+            "stroke": lp["stroke"],
+            "avg_hr": round(lp["avg_hr"]) if lp["avg_hr"] else None,
+            "swolf": swolf,
+        })
+    return out
+
+
 def parse_and_store(workout_id: int, path: str) -> None:
     """Parse the FIT and update the Workout row + WorkoutStream table."""
     session_data, streams = parse_fit(path)
@@ -187,6 +247,11 @@ def parse_and_store(workout_id: int, path: str) -> None:
             workout.np_power = float(np_value)
         workout.has_fit = True
         workout.fit_path = path
+        try:
+            laps = parse_laps(path)
+            workout.laps_json = json.dumps(laps) if laps else None
+        except Exception:
+            logger.warning("Lap parse failed for workout %s", workout_id)
         workout.updated_at = datetime.utcnow()
         db.add(workout)
 

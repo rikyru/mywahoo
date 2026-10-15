@@ -1482,4 +1482,17 @@ assert len(stats["potenza_w"]["per_decimi_di_sessione"]) == 10
 assert "drift_cardiaco_pct" in stats
 print(f"AI stats OK (drift={stats['drift_cardiaco_pct']}%)")
 
+# --- swim splits: parse_laps on a real pool-swim FIT ---
+import os as _os
+from app.fit import parse_laps as _parse_laps
+_fx = _os.path.join(_os.path.dirname(__file__), "tests", "fixtures", "swim_pool.fit")
+_laps = _parse_laps(_fx)
+assert len(_laps) >= 10, len(_laps)
+_f = _laps[0]
+assert _f["distance_m"] > 0 and _f["time_s"] > 0 and _f["pace_100_s"]
+assert _f["swolf"] is not None and _f["stroke"]        # pool: SWOLF + stile presenti
+assert all(lp["distance_m"] > 0 for lp in _laps)        # niente lap di riposo (0 m)
+assert _parse_laps("nonexistent.fit") == []             # robusto su file assente
+print(f"swim splits: parse_laps OK ({len(_laps)} parziali, 1° SWOLF={_f['swolf']})")
+
 print("\nALL SMOKE TESTS PASSED")
