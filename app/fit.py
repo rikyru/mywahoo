@@ -167,6 +167,7 @@ def parse_laps(path: str) -> list:
                         "type": str(_get(fr, "length_type") or ""),
                         "time_s": _get(fr, "total_timer_time") or _get(fr, "total_elapsed_time"),
                         "strokes": _get(fr, "total_strokes"),
+                        "stroke": str(_get(fr, "swim_stroke") or "") or None,
                     })
     except (fitdecode.FitError, OSError, ValueError):
         return []
@@ -179,12 +180,22 @@ def parse_laps(path: str) -> list:
         if not dist:                     # lap di riposo/pausa (0 m): salta
             continue
         swolf = None
+        lap_lengths = []
         if lp["start_len"] is not None and lp["num_len"]:
             vals = []
             for k in range(int(lp["start_len"]), int(lp["start_len"]) + int(lp["num_len"])):
                 l = len_by_idx.get(k)
-                if l and l["type"] == "active" and l["time_s"] and l["strokes"] is not None:
-                    vals.append(round(l["time_s"]) + int(l["strokes"]))
+                if not l or l["type"] != "active":
+                    continue
+                sw = (round(l["time_s"]) + int(l["strokes"])) \
+                    if (l["time_s"] and l["strokes"] is not None) else None
+                if sw is not None:
+                    vals.append(sw)
+                lap_lengths.append({
+                    "time_s": round(l["time_s"], 1) if l["time_s"] else None,
+                    "strokes": int(l["strokes"]) if l["strokes"] is not None else None,
+                    "stroke": l.get("stroke"), "swolf": sw,
+                })
             if vals:
                 swolf = round(sum(vals) / len(vals))
         out.append({
@@ -196,6 +207,7 @@ def parse_laps(path: str) -> list:
             "stroke": lp["stroke"],
             "avg_hr": round(lp["avg_hr"]) if lp["avg_hr"] else None,
             "swolf": swolf,
+            "lengths": lap_lengths,
         })
     return out
 

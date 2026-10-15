@@ -1461,6 +1461,12 @@ async def plan_session_done(plan_id: int, sid: int, done_notes: str = Form(""),
         ps.workout_id = wid
         session.add(ps)
         session.commit()
+    # se la registrazione reale (Wahoo/Google/FIT) di questa sessione è già
+    # arrivata, assorbila subito nel segnaposto appena creato
+    try:
+        reconcile_plan_duplicates()
+    except Exception as e:
+        logger.warning("Reconcile after plan-done failed: %s", e)
     return RedirectResponse(
         f"/plans/{plan_id}?{urlencode({'msg': 'Sessione segnata come fatta'})}",
         status_code=303)
@@ -2456,13 +2462,29 @@ def workout_detail(request: Request, workout_id: int):
                     s2.add(wk)
                     s2.commit()
 
+    laps_summary = None
+    if laps:
+        tot_d = sum(l["distance_m"] for l in laps)
+        tot_t = sum(l["time_s"] for l in laps)
+        hrs = [l["avg_hr"] for l in laps if l["avg_hr"]]
+        sw = [l["swolf"] for l in laps if l["swolf"] is not None]
+        strk = [l["strokes"] for l in laps if l["strokes"] is not None]
+        laps_summary = {
+            "distance_m": round(tot_d),
+            "time_s": round(tot_t, 1),
+            "pace_100_s": round(tot_t / tot_d * 100) if tot_d else None,
+            "avg_hr": round(sum(hrs) / len(hrs)) if hrs else None,
+            "avg_swolf": round(sum(sw) / len(sw)) if sw else None,
+            "strokes": sum(strk) if strk else None,
+        }
+
     return templates.TemplateResponse(request, "workout.html", {
         "w": w,
         "streams_json": streams_json,
         "merge": merge, "can_segment": can_segment, "edit_seg": edit_seg,
         "est_power": est_power, "climbs": climbs, "ftp": ftp, "hr_zones": hr_zones,
         "ride_vo2max": ride_vo2max, "ride_vo2max_cat": _vo2max_category(ride_vo2max),
-        "laps": laps,
+        "laps": laps, "laps_summary": laps_summary,
         "analysis_html": md.markdown(analysis.content, extensions=["tables"]) if analysis else None,
         "analysis_date": analysis.created_at if analysis else None,
         "message": request.query_params.get("msg"),
@@ -2864,6 +2886,9 @@ def reconcile_plan_duplicates() -> int:
                     and not x.manual
                     and google_health._sameday_sport_ok(keep.sport, x.sport)
                     and not get_setting(_nomerge_key(keep.id, x.id))]
+            # fondi per ultimo ciò che ha il FIT: i suoi dati (autorevoli, coi
+            # parziali) devono prevalere sul riepilogo Wahoo/Google
+            dups.sort(key=lambda x: bool(x.has_fit))
             for x in dups:
                 _merge_workouts(session, keep, x)  # commits; keep keeps its id
                 merged += 1
@@ -2938,6 +2963,20 @@ async def upload_fit(file: UploadFile = File(...)):
     except fitmod.FitParseError as e:
         return RedirectResponse(f"/?{urlencode({'error': f'FIT non elaborabile: {e}'})}",
                                 status_code=303)
+    # Collapse a same-day plan session (and its Wahoo/Google twin) into this FIT:
+    # un FIT caricato prima che arrivassero il segnaposto del piano o la riga
+    # Wahoo resterebbe altrimenti separato.
+    try:
+        reconcile_plan_duplicates()
+        # se questo FIT è stato assorbito nel segnaposto del piano, segui l'id
+        # sopravvissuto (che ora porta lo stesso fit_path) per il redirect
+        with Session(engine) as s:
+            if s.get(Workout, wid) is None:
+                surv = s.exec(select(Workout).where(Workout.fit_path == fit_path)).first()
+                if surv:
+                    wid = surv.id
+    except Exception as e:
+        logger.warning("Reconcile after FIT upload failed: %s", e)
     logger.info("Ingested uploaded FIT -> workout %s (%s)", wid,
                 "merge-manual" if merged_manual else "match" if match else "new")
     msg = ("FIT fuso con l'allenamento del piano: dati reali e FC uniti alla "
