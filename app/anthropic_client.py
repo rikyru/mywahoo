@@ -53,7 +53,14 @@ casa / corpo libero): il campo "notes" descrive gli esercizi realmente svolti e
 tipicamente non ci sono stream, FC né potenza. In quel caso basa l'analisi sulla
 descrizione (volume, serie/ripetizioni, gruppi muscolari, densità del lavoro),
 stima lo sforzo e adatta le sezioni a un allenamento di forza/corpo libero
-invece di lamentare i dati mancanti."""
+invece di lamentare i dati mancanti.
+
+Per il NUOTO, se sono presenti i "parziali" (ripetute con distanza, passo per
+100 m, bracciate, SWOLF e stile) e "parziali_riepilogo": riconosci la struttura
+della seduta (es. 8×100 misti, piramide, nuoto continuo), commenta il RITMO e la
+sua tenuta tra le ripetute, la TECNICA/efficienza via SWOLF (più basso = meglio;
+segnala se peggiora con la fatica), l'uso degli stili, e dai suggerimenti
+specifici di nuoto. Il passo è in secondi/100 m (es. 105 = 1:45/100m)."""
 
 PERIOD_SYSTEM_PROMPT = """\
 Sei un allenatore esperto di endurance. Ti viene fornito l'elenco delle sessioni

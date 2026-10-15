@@ -2996,7 +2996,27 @@ async def analyze(workout_id: int, regenerate: str = Form(default="")):
     if cached and not regenerate:
         return RedirectResponse(f"/workout/{workout_id}", status_code=303)
 
-    row = w.model_dump(exclude={"raw_summary", "fit_path", "updated_at"})
+    row = w.model_dump(exclude={"raw_summary", "fit_path", "updated_at", "laps_json"})
+    # Parziali del nuoto: passali all'AI strutturati (ripetute + riepilogo), non
+    # la stringa JSON grezza, così può leggere ritmo/SWOLF/stile/struttura.
+    if w.laps_json:
+        try:
+            laps = json.loads(w.laps_json)
+        except (ValueError, TypeError):
+            laps = None
+        if laps:
+            row["parziali"] = [{k: lp.get(k) for k in
+                                ("i", "distance_m", "time_s", "pace_100_s",
+                                 "strokes", "stroke", "swolf", "avg_hr")} for lp in laps]
+            tot_d = sum(l["distance_m"] for l in laps)
+            tot_t = sum(l["time_s"] for l in laps)
+            sw = [l["swolf"] for l in laps if l.get("swolf") is not None]
+            row["parziali_riepilogo"] = {
+                "distanza_m": round(tot_d), "tempo_s": round(tot_t),
+                "passo_100_s": round(tot_t / tot_d * 100) if tot_d else None,
+                "swolf_medio": round(sum(sw) / len(sw)) if sw else None,
+                "n_ripetute": len(laps),
+            }
     stats = {}
     streams = fitmod.load_streams(workout_id)
     if streams:
