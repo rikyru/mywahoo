@@ -12,7 +12,7 @@
 </div>
 <p class="muted">{{ conv.created_at.strftime("%d/%m/%Y %H:%M") }}</p>
 
-<section class="card chat-thread">
+<section class="card chat-thread" id="chatThread">
   {% for m in messages %}
   <div class="chat-msg chat-{{ m.role }}">
     {% if m.html %}<div class="ai-analysis">{{ m.html | safe }}</div>{% else %}{{ m.content }}{% endif %}
@@ -20,5 +20,49 @@
   {% endfor %}
 </section>
 
-<p><a class="btn" href="/health">Continua a chiedere</a></p>
+<form id="chatForm" class="chat-input" autocomplete="off">
+  <input id="chatMsg" type="text" placeholder="Continua a chiedere…" required>
+  <button class="btn" type="submit">Invia</button>
+</form>
+
+<script>
+const CONV_ID = {{ conv.id }};
+const chatForm = document.getElementById("chatForm");
+const chatMsg = document.getElementById("chatMsg");
+const chatThread = document.getElementById("chatThread");
+
+function addBubble(role, text) {
+  const div = document.createElement("div");
+  div.className = "chat-msg chat-" + role;
+  if (role === "assistant") div.innerHTML = window.renderMd(text);
+  else div.textContent = text;
+  chatThread.appendChild(div);
+  div.scrollIntoView({ block: "nearest" });
+  return div;
+}
+
+chatForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const text = chatMsg.value.trim();
+  if (!text) return;
+  chatMsg.value = "";
+  addBubble("user", text);
+  const thinking = addBubble("assistant", "…");
+  chatMsg.disabled = true;
+  try {
+    const r = await fetch("/health/chat", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message: text, conversation_id: CONV_ID }),
+    });
+    const data = await r.json();
+    if (data.reply) thinking.innerHTML = window.renderMd(data.reply);
+    else thinking.textContent = "⚠️ " + (data.error || "errore");
+  } catch (err) {
+    thinking.textContent = "⚠️ errore di rete";
+  } finally {
+    chatMsg.disabled = false;
+    chatMsg.focus();
+  }
+});
+</script>
 {% endblock %}
