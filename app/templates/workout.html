@@ -188,7 +188,7 @@
 <section class="card">
   <div class="card-head">
     <h3>Potenza stimata <small class="muted">· da GPS, senza sensore</small></h3>
-    {% if ftp and ftp.ftp %}<span class="tag" title="Miglior 20 min stimato × 0.95, ultimi 4 mesi ({{ ftp.n_rides }} giri)">FTP stimato ~{{ ftp.ftp }} W</span>{% endif %}
+    {% if ftp and ftp.ftp %}<span class="tag" title="Miglior 20 min stimato (robusto) × 0.95, ultimi 4 mesi ({{ ftp.n_rides }} giri); scartate le uscite oltre 6 W/kg">FTP stimato ~{{ ftp.ftp }} W{% if ftp.wkg %} · {{ "%.1f"|format(ftp.wkg) }} W/kg{% endif %}</span>{% endif %}
   </div>
   <section class="kpi-row">
     <div class="kpi"><span class="kpi-value">{{ est_power.avg }}</span><span class="kpi-label">W medi (in moto)</span></div>

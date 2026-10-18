@@ -976,6 +976,9 @@ def form_page(request: Request, months: str = "6"):
         "series_json": json.dumps(shown),
         "ftp_series_json": json.dumps(ftp_series),
         "ftp_now": ftp_series[-1]["ftp"] if ftp_series else None,
+        "ftp_now_wkg": (round(ftp_series[-1]["ftp"]
+                        / (profilemod.load().get("weight_kg") or cyclingmod.DEFAULT_RIDER_KG), 2)
+                        if ftp_series else None),
         "insight_html": md.markdown(insight.content, extensions=["tables"]) if insight else None,
         "insight_date": insight.created_at if insight else None,
         "error": request.query_params.get("error"),
@@ -2504,7 +2507,9 @@ def _estimated_ftp() -> dict | None:
     if hit and datetime.utcnow() - hit["at"] < _FTP_TTL:
         return hit["val"]
     cutoff = datetime.utcnow() - timedelta(days=120)
+    weight = profilemod.load().get("weight_kg") or cyclingmod.DEFAULT_RIDER_KG
     mass = cyclingmod.rider_mass(profilemod.load().get("weight_kg"))
+    ceiling = weight * cyclingmod.FTP_WKG_CEILING   # 20' oltre ~6 W/kg senza powermeter: non credibile
     with Session(engine) as session:
         rides = session.exec(select(Workout).where(Workout.start_date >= cutoff)).all()
     best20, best5 = [], []
@@ -2516,15 +2521,18 @@ def _estimated_ftp() -> dict | None:
             continue
         power = cyclingmod.estimate_power_series(s, mass)   # compute once, reuse
         b = cyclingmod.best_rolling_avg(s["t"], power, 1200)
-        if b:
+        if b and round(b) <= ceiling:          # scarta le uscite fisiologicamente implausibili
             best20.append(round(b))
         b5 = cyclingmod.best_rolling_avg(s["t"], power, 300)
         if b5:
             best5.append(round(b5))
-    ftp = cyclingmod.estimate_ftp(best20)
+    # miglior 20' robusto (ignora un picco isolato) × 0.95, come il grafico eFTP
+    best20_robust = cyclingmod.robust_best(best20)
+    ftp = round(best20_robust * 0.95) if best20_robust else None
+    wkg = round(ftp / weight, 2) if ftp else None
     # best 5-min power feeds the cycling VO2max estimate (artifact-robust max)
     peak5 = cyclingmod.robust_best(best5)
-    val = ({"ftp": ftp, "n_rides": len(best20), "best_5min": peak5}
+    val = ({"ftp": ftp, "wkg": wkg, "n_rides": len(best20), "best_5min": peak5}
            if ftp or peak5 else None)
     _FTP_CACHE["v"] = {"at": datetime.utcnow(), "val": val}
     return val
