@@ -42,7 +42,7 @@ SPORT_RPE = (
     (("corsa", "run", "jog"), 7.0),
     (("nuoto", "swim"), 6.5),
     (("forza", "strength", "pesi", "weight", "corpo libero", "calisthen", "circuit"), 6.0),
-    (("bici", "cycl", "bike", "spinning", "mtb"), 6.0),
+    (("bici", "cicl", "cycl", "bike", "spinning", "mtb", "gravel"), 6.0),
 )
 DEFAULT_RPE = 5.0
 

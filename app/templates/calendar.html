@@ -33,7 +33,7 @@
         </a>
         {% endfor %}
         {% for ps in planned[day] %}
-        <a href="/plans/{{ ps.plan_id }}" class="cal-act cal-planned" title="Pianificato: {{ ps.title }} · {{ ps.sport }}{% if ps.duration_min %} · {{ ps.duration_min }} min{% endif %}">
+        <a href="/plans/{{ ps.plan_id }}" class="cal-act cal-planned" title="Pianificato: {{ ps.title }} · {{ ps.sport | sport_label }}{% if ps.duration_min %} · {{ ps.duration_min }} min{% endif %}">
           {{ sport_icon(ps.sport) }}
         </a>
         {% endfor %}

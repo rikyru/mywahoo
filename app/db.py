@@ -35,7 +35,7 @@ class RouteAssessment(SQLModel, table=True):
     """A planned route (GPX, e.g. from Komoot) with its AI feasibility verdict."""
     id: Optional[int] = Field(default=None, primary_key=True)
     name: str = ""
-    sport: str = "Bici"        # Bici | Escursione | Corsa
+    sport: str = "Ciclismo"    # Ciclismo | Escursione | Corsa
     distance_km: float = 0.0
     ascent_m: float = 0.0
     max_gradient: Optional[float] = None
@@ -307,6 +307,12 @@ def _migrate() -> None:
             for name, decl in cols:
                 if name not in existing:
                     conn.exec_driver_sql(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
+        # one label per sport: plans/routes used to say "Bici" where activities
+        # say "Ciclismo" (idempotent, cheap: runs on every start)
+        for table in ("plansession", "routeassessment"):
+            if {r[1] for r in conn.exec_driver_sql(f"PRAGMA table_info({table})")}:
+                conn.exec_driver_sql(
+                    f"UPDATE {table} SET sport = 'Ciclismo' WHERE sport = 'Bici'")
         conn.commit()
 
 

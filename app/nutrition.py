@@ -15,6 +15,7 @@ from datetime import date, datetime, time, timedelta
 import httpx
 from sqlmodel import Session, select
 
+from . import google_health
 from . import profile as profilemod
 from .config import settings
 from .db import BodyMeasure, PlanSession, engine
@@ -192,7 +193,10 @@ _KCAL_PER_MIN = {
 
 
 def _session_kcal(sport: str, minutes: int | None) -> float:
-    return (minutes or 0) * _KCAL_PER_MIN.get((sport or "").strip().lower(), 7.0)
+    s = (sport or "").strip().lower()
+    rate = (_KCAL_PER_MIN.get(s)
+            or _KCAL_PER_MIN.get(google_health.canonical_sport(s).lower(), 7.0))
+    return (minutes or 0) * rate
 
 
 def periodized_daily(base_kcal: float, days: int = 7) -> dict:

@@ -125,18 +125,11 @@ def sport_icon(sport: str) -> str:
     return "🔵"
 
 
-# One display label per sport family, so "Nuoto" (dal piano) and "Swimming" (da
-# Google) — and the bike/run/walk/strength equivalents — never appear as two
-# different activity types in lists, filters and the type breakdown.
-_SPORT_LABEL_IT = {"swim": "Nuoto", "bike": "Ciclismo", "run": "Corsa",
-                   "walk": "Camminata", "strength": "Corpo libero"}
-
-
+# One display label per sport family, so "Bici" (dal piano), "Cycling" (dal FIT)
+# and "Ciclismo" (da Google) — and the swim/run/walk/strength equivalents — never
+# appear as different activity types in lists, filters and the type breakdown.
 def sport_label(sport: str) -> str:
-    fam = google_health._sport_family(sport or "")
-    if fam:
-        return _SPORT_LABEL_IT[fam]
-    return (sport or "").strip() or "Altro"
+    return google_health.canonical_sport(sport) or "Altro"
 
 
 templates.env.globals["fmt_speed"] = fmt_speed
@@ -205,9 +198,16 @@ def resolve_window(win: str, end_s: str, from_s: str, to_s: str) -> dict:
 def query_range(session: Session, start: datetime, end: datetime,
                 sport: str | None) -> list[Workout]:
     stmt = select(Workout).where(Workout.start_date >= start, Workout.start_date <= end)
-    if sport:
-        stmt = stmt.where(Workout.sport == sport)
-    return list(session.exec(stmt.order_by(Workout.start_date.desc())))
+    ws = list(session.exec(stmt.order_by(Workout.start_date.desc())))
+    if sport:   # by canonical label: "Ciclismo" also picks up "Cycling"/"Bici"
+        want = sport_label(sport)
+        ws = [w for w in ws if sport_label(w.sport) == want]
+    return ws
+
+
+def _sport_options(session: Session) -> list[str]:
+    """Distinct activity types, one per sport family (for filters/datalists)."""
+    return sorted({sport_label(s) for s in session.exec(select(Workout.sport).distinct()) if s})
 
 
 def build_chart_data(workouts: list[Workout]) -> dict:
@@ -704,10 +704,11 @@ def conversation_delete(cid: int):
 # ---------------------------------------------------------------- routes (GPX)
 
 # sport chosen at upload -> (label shown, sport family, min km to exclude noise)
-SPORT_CHOICES = {"bici": ("Bici", "bike", 15.0),
+SPORT_CHOICES = {"bici": ("Ciclismo", "bike", 15.0),
                  "escursione": ("Escursione", "walk", 3.0),
                  "corsa": ("Corsa", "run", 3.0)}
 SPORT_FAMILY = {label: fam for label, fam, _ in SPORT_CHOICES.values()}
+SPORT_FAMILY["Bici"] = "bike"   # label of routes uploaded before the rename
 
 
 def _activity_history(family: str) -> dict:
@@ -1205,7 +1206,7 @@ def calendar_page(request: Request, month: str = ""):
 @app.get("/workout/new", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
 def workout_new(request: Request):
     with Session(engine) as session:
-        sports = sorted({s for s in session.exec(select(Workout.sport).distinct()) if s})
+        sports = _sport_options(session)
     return templates.TemplateResponse(request, "workout_new.html", {
         "sports": sports, "today": date.today().isoformat()})
 
@@ -1235,7 +1236,7 @@ def _create_manual_workout(name, sport, start, duration_min, notes="",
     mins = duration_min or 0
     with Session(engine) as session:
         w = Workout(id=wid, name=(name or "").strip() or "Allenamento",
-                    sport=(sport or "").strip() or "Allenamento",
+                    sport=google_health.canonical_sport(sport) or "Allenamento",
                     start_date=start, manual=True, notes=(notes or "").strip(),
                     duration_s=int(mins * 60), moving_s=int(mins * 60),
                     distance_m=(distance_km * 1000) if distance_km else 0.0,
@@ -1340,7 +1341,7 @@ async def _generate_and_store_plan(goal: str, n_days: int, start_d) -> int | Non
             session.add(PlanSession(
                 plan_id=plan.id, order=i, day_label=str(s.get("day", ""))[:40],
                 date=datetime.combine(sd, time(12, 0)) if sd else None,
-                title=str(s.get("title", ""))[:200], sport=str(s.get("sport", ""))[:60],
+                title=str(s.get("title", ""))[:200], sport=google_health.canonical_sport(str(s.get("sport", "")))[:60],
                 duration_min=int(s.get("durata_min") or 0),
                 description=str(s.get("description", ""))))
         session.commit()
@@ -1628,7 +1629,7 @@ def plan_apply(plan_id: int, actions: str = Form(...)):
                 session.add(PlanSession(
                     plan_id=plan_id, order=next_order, day_label=str(a.get("day", ""))[:40],
                     date=datetime.combine(d, time(12, 0)) if d else None,
-                    title=str(a.get("title", ""))[:200], sport=str(a.get("sport", ""))[:60],
+                    title=str(a.get("title", ""))[:200], sport=google_health.canonical_sport(str(a.get("sport", "")))[:60],
                     duration_min=int(a.get("durata_min") or 0),
                     description=str(a.get("description", ""))))
                 next_order += 1
@@ -1641,7 +1642,7 @@ def plan_apply(plan_id: int, actions: str = Form(...)):
                 if "title" in a:
                     ps.title = str(a["title"])[:200]
                 if "sport" in a:
-                    ps.sport = str(a["sport"])[:60]
+                    ps.sport = google_health.canonical_sport(str(a["sport"]))[:60]
                 if "durata_min" in a:
                     try:
                         ps.duration_min = max(0, int(a["durata_min"]))
@@ -1762,7 +1763,7 @@ def plan_session_edit(plan_id: int, sid: int, title: str = Form(""),
         ps = session.get(PlanSession, sid)
         if ps and ps.plan_id == plan_id:
             ps.title = title.strip() or ps.title
-            ps.sport = sport.strip()
+            ps.sport = google_health.canonical_sport(sport)
             try:
                 ps.duration_min = max(0, int(durata_min))
             except ValueError:
@@ -2121,9 +2122,9 @@ def dashboard(request: Request, win: str = "30", end: str = "",
     window = resolve_window(win, end, request.query_params.get("from", ""),
                             request.query_params.get("to", ""))
     with Session(engine) as session:
+        sport = sport_label(sport) if sport else ""
         workouts = query_range(session, window["start"], window["end"], sport or None)
-        all_sports = sorted({s for s in session.exec(
-            select(Workout.sport).distinct()) if s})
+        all_sports = _sport_options(session)
 
     total_km = sum(w.distance_m for w in workouts) / 1000
     total_time = sum(w.moving_s for w in workouts)
@@ -2337,7 +2338,7 @@ def workout_edit_form(request: Request, workout_id: int):
         w = session.get(Workout, workout_id)
         if not w:
             raise HTTPException(404, "Attività non trovata")
-        sports = sorted({s for s in session.exec(select(Workout.sport).distinct()) if s})
+        sports = _sport_options(session)
     return templates.TemplateResponse(request, "workout_edit.html", {
         "w": w, "sports": sports, "default_rpe": formmod.sport_rpe(w.sport)})
 
@@ -2359,7 +2360,7 @@ def workout_edit(workout_id: int, name: str = Form(""), sport: str = Form(""),
         if not w:
             raise HTTPException(404, "Attività non trovata")
         w.name = name.strip() or w.name
-        w.sport = sport.strip() or w.sport
+        w.sport = google_health.canonical_sport(sport) or w.sport
         if (km := num(distance_km)) is not None:
             w.distance_m = km * 1000
         if (asc := num(ascent_m)) is not None:

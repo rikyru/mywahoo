@@ -237,9 +237,9 @@ def _sport_family(label: str) -> str | None:
     s = (label or "").lower()
     if any(k in s for k in ("swim", "nuot")):
         return "swim"
-    if any(k in s for k in ("bik", "cycl", "ciclis", "spin")):
+    if any(k in s for k in ("bik", "bici", "cycl", "ciclis", "spin", "mtb", "gravel")):
         return "bike"
-    if any(k in s for k in ("run", "cors")):
+    if any(k in s for k in ("run", "cors", "treadmill", "tapis")):
         return "run"
     if any(k in s for k in ("walk", "hik", "cammin", "escurs", "trek")):
         return "walk"
@@ -249,6 +249,12 @@ def _sport_family(label: str) -> str | None:
                             "bootcamp", "weightlift", "wod")):
         return "strength"
     return None
+
+
+def canonical_sport(label: str) -> str:
+    """The one label the app stores and shows per sport family ("Bici",
+    "Cycling", "Biking", "Ciclismo" -> "Ciclismo"); unknown labels pass through."""
+    return FAMILY_LABEL.get(_sport_family(label)) or (label or "").strip()
 
 
 def _same_sport(a: str, b: str) -> bool:

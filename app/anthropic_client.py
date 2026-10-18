@@ -388,7 +388,7 @@ async def analyze_workout(summary_row: dict, stream_stats: dict) -> str:
 
 ROUTE_SYSTEM_PROMPT = """\
 Sei un allenatore di endurance. Devi valutare la FATTIBILITÀ di un percorso
-pianificato per QUESTO atleta nello SPORT indicato (es. Bici, Escursione, Corsa),
+pianificato per QUESTO atleta nello SPORT indicato (es. Ciclismo, Escursione, Corsa),
 dato: i dati del percorso (distanza, dislivello, pendenza massima, % oltre
 6%/10%, salita più lunga), il suo STORICO nello stesso sport (distanza/dislivello
 tipici e massimi, dislivello per km, durata) e, se presente, la FORMA attuale
@@ -406,7 +406,7 @@ Sii onesto se è oltre il suo solito. Non inventare dati mancanti."""
 
 
 async def assess_route(route: dict, history: dict, form: dict | None,
-                       sport: str = "Bici") -> str:
+                       sport: str = "Ciclismo") -> str:
     payload = {"sport": sport, "percorso": route, "storico": history}
     if form:
         payload["forma_attuale"] = form
@@ -444,7 +444,7 @@ async def summarize_form(summary: dict, recent_weeks: list[dict]) -> str:
 # Sport labels the app understands: they drive the calendar icon (sport_icon) and
 # the per-sport intensity fallback (form.sport_rpe), so the AI must not invent its
 # own ("Home workout" would land on the generic icon and a wrong default RPE).
-SPORT_VOCAB = ("Bici, Corsa, Nuoto, Camminata, Escursione, Corpo libero, Forza, "
+SPORT_VOCAB = ("Ciclismo, Corsa, Nuoto, Camminata, Escursione, Corpo libero, Forza, "
                "HIIT, Yoga, Riposo")
 
 WORKOUT_STRUCTURE_PROMPT = """\
