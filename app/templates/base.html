@@ -17,35 +17,75 @@
 <body>
   <header class="topbar">
     <a href="/" class="brand">🏃 {{ app_name }}</a>
-    <nav>
+    <nav id="topnav">
       <a href="/">Dashboard</a>
-      <a href="/calendar">Calendario</a>
-      <a href="/plans">Piani</a>
-      <a href="/esercizi">Esercizi</a>
+
+      <div class="nav-group">
+        <button type="button" class="nav-top" aria-haspopup="true" aria-expanded="false">Allenamento <span class="caret">▾</span></button>
+        <div class="nav-menu">
+          <a href="/calendar">Calendario</a>
+          <a href="/plans">Piani</a>
+          <a href="/esercizi">Esercizi</a>
+        </div>
+      </div>
+
+      <div class="nav-group">
+        <button type="button" class="nav-top" aria-haspopup="true" aria-expanded="false">Analisi <span class="caret">▾</span></button>
+        <div class="nav-menu">
+          <a href="/form">Forma</a>
+          <a href="/progress">Progressi</a>
+          <a href="/records">Record</a>
+          <a href="/segments">Salite</a>
+          <a href="/routes">Percorsi</a>
+        </div>
+      </div>
+
       <a href="/health">Salute</a>
-      <a href="/form">Forma</a>
-      <a href="/records">Record</a>
-      <a href="/segments">Salite</a>
-      <a href="/progress">Progressi</a>
-      <a href="/routes">Percorsi</a>
       <a href="/conversations">Conversazioni</a>
-      <a href="/duplicates">Duplicati</a>
-      <a href="/settings">Impostazioni</a>
-      <a href="/logout" class="muted">Esci</a>
+
+      <div class="nav-group nav-group-end">
+        <button type="button" class="nav-top" aria-haspopup="true" aria-expanded="false" title="Altro">⚙ <span class="caret">▾</span></button>
+        <div class="nav-menu nav-menu-right">
+          <a href="/duplicates">Duplicati</a>
+          <a href="/settings">Impostazioni</a>
+          <a href="/logout" class="muted">Esci</a>
+        </div>
+      </div>
     </nav>
   </header>
   <main class="container">
     {% block content %}{% endblock %}
   </main>
   <script>
-    // highlight the current section in the nav
+    // highlight the current section (link + its parent group) and wire dropdowns
     (function () {
       const path = location.pathname;
-      document.querySelectorAll(".topbar nav a").forEach(a => {
+      document.querySelectorAll("#topnav a").forEach(a => {
         const href = a.getAttribute("href");
-        if (href === path || (href !== "/" && path.startsWith(href))) a.classList.add("active");
-        else if (href === "/" && path === "/") a.classList.add("active");
+        const match = (href === "/" && path === "/")
+          || (href !== "/" && href !== "/logout" && path.startsWith(href));
+        if (!match) return;
+        a.classList.add("active");
+        const grp = a.closest(".nav-group");
+        if (grp) grp.querySelector(".nav-top").classList.add("active");
       });
+
+      const groups = Array.from(document.querySelectorAll("#topnav .nav-group"));
+      const closeAll = () => groups.forEach(g => {
+        g.classList.remove("open");
+        g.querySelector(".nav-top").setAttribute("aria-expanded", "false");
+      });
+      groups.forEach(g => {
+        const btn = g.querySelector(".nav-top");
+        btn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          const wasOpen = g.classList.contains("open");
+          closeAll();
+          if (!wasOpen) { g.classList.add("open"); btn.setAttribute("aria-expanded", "true"); }
+        });
+      });
+      document.addEventListener("click", closeAll);
+      document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeAll(); });
     })();
   </script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>

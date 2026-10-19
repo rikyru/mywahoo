@@ -57,6 +57,32 @@ small { font-size: .8em; }
 .topbar nav a:hover { color: var(--text); background: var(--card); text-decoration: none; }
 .topbar nav a.active { color: var(--accent); background: var(--accent-soft); }
 
+/* nav dropdown groups */
+.topbar nav .nav-group { position: relative; }
+.topbar nav .nav-top {
+  color: var(--muted); padding: .4rem .7rem; border-radius: var(--radius-sm);
+  font-size: .92rem; font-weight: 500; font-family: inherit;
+  background: none; border: 0; cursor: pointer;
+  display: inline-flex; align-items: center; gap: .3rem;
+  transition: background .15s, color .15s;
+}
+.topbar nav .nav-top:hover { color: var(--text); background: var(--card); }
+.topbar nav .nav-top.active { color: var(--accent); background: var(--accent-soft); }
+.topbar nav .nav-top .caret { font-size: .7em; opacity: .75; transition: transform .15s; }
+.topbar nav .nav-group.open .nav-top .caret { transform: rotate(180deg); }
+.topbar nav .nav-menu {
+  position: absolute; top: calc(100% + .4rem); left: 0; min-width: 172px;
+  display: none; flex-direction: column; gap: .1rem; padding: .35rem;
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); box-shadow: var(--shadow); z-index: 30;
+}
+.topbar nav .nav-menu-right { left: auto; right: 0; }
+.topbar nav .nav-group.open .nav-menu { display: flex; }
+.topbar nav .nav-menu a { white-space: nowrap; }
+@media (hover: hover) and (min-width: 641px) {
+  .topbar nav .nav-group:hover .nav-menu { display: flex; }
+}
+
 .container { max-width: 1140px; margin: 0 auto; padding: 1.6rem 1.4rem 3rem; }
 
 .page-head { display: flex; justify-content: space-between; align-items: center;
@@ -418,10 +444,9 @@ a.chip:hover { background: var(--card-hover); text-decoration: none; }
 
   .topbar { padding: .65rem .9rem; }
   .topbar .brand { font-size: 1.1rem; }
-  .topbar nav { flex-wrap: nowrap; overflow-x: auto; -webkit-overflow-scrolling: touch;
-                gap: .1rem; }
-  .topbar nav::-webkit-scrollbar { display: none; }
-  .topbar nav a { padding: .5rem .65rem; font-size: .98rem; white-space: nowrap; }
+  /* few top-level items now: wrap instead of scrolling, so dropdowns aren't clipped */
+  .topbar nav { flex-wrap: wrap; gap: .15rem; }
+  .topbar nav a, .topbar nav .nav-top { padding: .5rem .65rem; font-size: .98rem; white-space: nowrap; }
 
   .page-head { gap: .7rem; }
   .sync-buttons { flex-wrap: wrap; gap: .5rem; }
