@@ -22,7 +22,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from . import (anthropic_client, bodycomp, cycling as cyclingmod,
                exercises as exercisesmod, fit as fitmod, form as formmod,
                google_health, gpx as gpxmod, nutrition, profile as profilemod,
-               vo2max as vo2maxmod, wahoo)
+               progress as progressmod, vo2max as vo2maxmod, wahoo)
 from .config import settings, setup_logging
 from .db import (AiAnalysis, BodyGirth, BodyMeasure, ChatMessage, ClimbEffort,
                  Conversation, CustomEffort, CustomSegment, IgnoredImport,
@@ -1078,6 +1078,149 @@ def segments_page(request: Request):
         "segments": segments, "custom_segments": custom_segments, "n_efforts": len(items),
         "message": request.query_params.get("msg"),
         "error": request.query_params.get("error")})
+
+
+def _bike_progress(today) -> dict:
+    """Season-over-season cycling progress data: repeated-climb/segment PR board,
+    this-vs-last overlays (aligned by day-of-season), and 'a oggi' volumes.
+    Shared by the /progress page and the AI season report."""
+    import statistics
+    _ensure_climbs_indexed()
+    with Session(engine) as session:
+        bikes = [w for w in session.exec(select(Workout).order_by(Workout.start_date))
+                 if google_health._sport_family(w.sport) == "bike"]
+        climb_effs = session.exec(select(ClimbEffort).order_by(ClimbEffort.date)).all()
+        customs = session.exec(select(CustomSegment)).all()
+        custom_effs = session.exec(select(CustomEffort).order_by(CustomEffort.date)).all()
+
+    # --- PR board: recurring climbs (matched by GPS) + user-defined segments
+    climb_items = [{"start_ll": [e.start_lat, e.start_lng], "top_ll": [e.top_lat, e.top_lng],
+                    "kind": e.kind, "date": e.date, "time_s": e.time_s, "vam": e.vam,
+                    "avg_hr": e.avg_hr, "speed_kmh": e.speed_kmh, "gain_m": e.gain_m,
+                    "length_m": e.length_m, "avg_grade": e.avg_grade} for e in climb_effs]
+    segments = []
+    for cl in cyclingmod.cluster_segments(climb_items):
+        if not cl or cl[0].get("kind") != "climb":
+            continue  # a descent isn't a fitness signal
+        cmp = progressmod.segment_compare(cl, today)
+        if not cmp or cmp["n_efforts"] < 2:
+            continue
+        segments.append({
+            "name": f"Salita {round(statistics.median(x['gain_m'] for x in cl))} m · "
+                    f"{round(statistics.median(x['avg_grade'] for x in cl), 1)}%",
+            "length_km": round(statistics.median(x["length_m"] for x in cl) / 1000, 1),
+            "type": "climb", **cmp})
+    by_seg = defaultdict(list)
+    for e in custom_effs:
+        by_seg[e.segment_id].append({"date": e.date, "time_s": e.time_s,
+                                     "avg_hr": e.avg_hr, "speed_kmh": e.speed_kmh})
+    for seg in customs:
+        cmp = progressmod.segment_compare(by_seg.get(seg.id, []), today)
+        if not cmp or cmp["n_efforts"] < 2:
+            continue
+        segments.append({"name": seg.name or f"Segmento {round(seg.length_m / 1000, 1)} km",
+                         "length_km": round(seg.length_m / 1000, 1), "type": "custom", **cmp})
+    # a year-over-year comparison first, then PRs this season, then most ridden
+    segments.sort(key=lambda s: (s["time_delta_pct"] is None,
+                                 not s["is_pr_this_season"], -s["n_efforts"]))
+
+    # --- overlays: this season vs last, aligned by day-of-season
+    eftp_pts = [{"date": w.start_date, "value": round(w.best20_w * 0.95)}
+                for w in bikes if w.best20_w]
+    series, _ = _fitness_series()
+    ctl_pts = [{"date": p["date"], "value": p["ctl"]} for p in series]
+    vol_pts = [{"date": w.start_date, "value": (w.moving_s or 0) / 3600} for w in bikes]
+    # efficiency: the best climb of each ride, VAM per heart-beat (cheap, honest-ish)
+    eff_by_ride = defaultdict(list)
+    for e in climb_effs:
+        if e.kind == "climb" and e.vam and e.avg_hr:
+            eff_by_ride[e.workout_id].append((e.vam, e.avg_hr))
+    bike_date = {w.id: w.start_date for w in bikes}
+    eff_pts = []
+    for wid, lst in eff_by_ride.items():
+        if wid in bike_date:
+            vam, hr = max(lst)
+            eff_pts.append({"date": bike_date[wid], "value": round(vam / hr, 2)})
+
+    overlays = {"eftp": progressmod.align_by_season(eftp_pts, today),
+                "ctl": progressmod.align_by_season(ctl_pts, today),
+                "efficiency": progressmod.align_by_season(eff_pts, today),
+                "volume": progressmod.cumulative_by_season(vol_pts, today)}
+    vol = progressmod.season_volume(
+        [{"date": w.start_date, "moving_s": w.moving_s, "distance_m": w.distance_m,
+          "ascent_m": w.ascent_m} for w in bikes], today)
+    return {"segments": segments, "overlays": overlays, "vol": vol,
+            "ftp": _estimated_ftp(), "n_bikes": len(bikes)}
+
+
+@app.get("/progress", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
+def progress_page(request: Request):
+    """Progressi bici: confronto stagione vs stagione precedente."""
+    today = date.today()
+    cur = progressmod.season_year(today)
+    data = _bike_progress(today)
+    with Session(engine) as session:
+        report = session.get(PeriodSummary, f"season:{cur}")
+    return templates.TemplateResponse(request, "progress.html", {
+        "today": today.isoformat(), "cur": cur, "prev": cur - 1,
+        "segments": data["segments"], "overlays_json": json.dumps(data["overlays"]),
+        "vol": data["vol"], "ftp": data["ftp"], "n_bikes": data["n_bikes"],
+        "report_html": md.markdown(report.content, extensions=["tables"]) if report else None,
+        "report_date": report.created_at if report else None,
+        "error": request.query_params.get("error")})
+
+
+def _season_report_payload(data: dict, cur: int) -> dict:
+    """Compact, AI-ready view of the progress data (keeps the prompt small)."""
+    def trend(line: list[dict]):
+        if not line or len(line) < 2:
+            return None
+        return {"inizio": line[0]["value"], "ora": line[-1]["value"],
+                "delta_pct": progressmod._pct(line[-1]["value"], line[0]["value"])}
+    ov = data["overlays"]
+    segs = [{"nome": s["name"], "km": s["length_km"], "tipo": s["type"],
+             "tempo_quest_anno_s": (s["this"] or {}).get("time_s"),
+             "tempo_anno_scorso_s": (s["last"] or {}).get("time_s"),
+             "vam_quest_anno": (s["this"] or {}).get("vam"),
+             "vam_anno_scorso": (s["last"] or {}).get("vam"),
+             "fc_quest_anno": (s["this"] or {}).get("avg_hr"),
+             "fc_anno_scorso": (s["last"] or {}).get("avg_hr"),
+             "delta_tempo_pct": s["time_delta_pct"], "delta_fc": s["hr_delta"],
+             "giudizio": s["verdict"]}
+            for s in data["segments"][:8] if s["time_delta_pct"] is not None]
+    return {"stagione": cur, "a_oggi_vs_anno_scorso": data["vol"],
+            "ftp_stimato": data["ftp"],
+            "salite_segmenti_confronto": segs,
+            "efficienza_vam_per_fc": trend(ov["efficiency"].get(cur)),
+            "eftp_stagione": trend(ov["eftp"].get(cur)),
+            "nota": "potenza/eFTP STIMATI (niente misuratore): pesa di più salite/segmenti ed efficienza"}
+
+
+@app.post("/progress/report", dependencies=[Depends(require_auth)])
+async def progress_report():
+    """Generate (and cache) the AI season-over-season report."""
+    today = date.today()
+    cur = progressmod.season_year(today)
+    key = f"season:{cur}"
+    data = _bike_progress(today)
+    if not data["segments"] and not (data["vol"]["rides"]["this"]):
+        return JSONResponse({"error": "Non ci sono abbastanza uscite in bici di questa stagione."},
+                            status_code=400)
+    try:
+        content = await anthropic_client.season_report(_season_report_payload(data, cur))
+    except anthropic_client.AnthropicError as e:
+        return JSONResponse({"error": str(e)}, status_code=502)
+    with Session(engine) as session:
+        existing = session.get(PeriodSummary, key)
+        if existing:
+            existing.content = content
+            existing.created_at = datetime.utcnow()
+            session.add(existing)
+        else:
+            session.add(PeriodSummary(key=key, content=content,
+                                      model=anthropic_client.effective_model()))
+        session.commit()
+    return JSONResponse({"html": md.markdown(content, extensions=["tables"])})
 
 
 @app.post("/workout/{workout_id}/segment/create", dependencies=[Depends(require_auth)])

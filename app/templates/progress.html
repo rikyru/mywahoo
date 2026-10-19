@@ -1,0 +1,190 @@
+{% extends "base.html" %}
+{% block title %}Progressi bici — {{ app_name }}{% endblock %}
+{% block head %}
+<style>
+  .progress-note { font-size: .9rem; line-height: 1.45; }
+  .seg-list { display: flex; flex-direction: column; gap: .6rem; }
+  .seg-row { border: 1px solid var(--border); border-radius: 10px; padding: .7rem .8rem; }
+  .seg-name { font-weight: 600; display: flex; align-items: center; gap: .4rem; flex-wrap: wrap; }
+  .seg-name small { font-weight: 400; }
+  .seg-cmp { width: 100%; border-collapse: collapse; margin: .5rem 0 .3rem; font-size: .92rem; }
+  .seg-cmp th, .seg-cmp td { text-align: right; padding: .15rem .3rem; }
+  .seg-cmp th:first-child, .seg-cmp td:first-child { text-align: left; color: var(--muted); }
+  .seg-cmp thead th, .seg-cmp tr:first-child th { color: var(--muted); font-weight: 500; }
+  .seg-cmp .row-prev td { color: var(--muted); }
+  .badge { display: inline-block; font-size: .8rem; padding: .12rem .5rem; border-radius: 999px; }
+  .badge-good { background: rgba(52,211,153,.18); color: #34d399; }
+  .badge-bad { background: rgba(239,100,100,.16); color: #ef6464; }
+  .badge-neutral { background: var(--bg-elev); color: var(--muted); }
+  .tag-pr { background: rgba(255,196,0,.18); color: #f0b400; }
+  .chart-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1rem; }
+  .chart-card h4 { margin: 0 0 .4rem; font-size: 1rem; }
+  .chart-card .muted { font-size: .82rem; }
+</style>
+{% endblock %}
+{% block content %}
+
+{% macro mmss(s) -%}
+{%- if s and s >= 3600 -%}{{ s // 3600 }}:{{ '%02d'|format((s % 3600) // 60) }}:{{ '%02d'|format(s % 60) }}
+{%- elif s -%}{{ s // 60 }}:{{ '%02d'|format(s % 60) }}
+{%- else -%}–{%- endif -%}
+{%- endmacro %}
+
+<div class="page-head">
+  <h1>Progressi bici</h1>
+  <span class="muted">stagione {{ cur }} vs {{ prev }} · allo stesso punto dell'anno</span>
+</div>
+
+{% if error %}<div class="alert error">{{ error }}</div>{% endif %}
+
+{% if n_bikes == 0 %}
+<div class="card"><p class="muted">Nessuna uscita in bici ancora: qui vedrai il confronto con la stagione scorsa appena accumuli qualche giro.</p></div>
+{% else %}
+
+<div class="card progress-note muted">
+  Senza misuratore la potenza è <strong>stimata</strong> dalla fisica: eFTP e watt sono indicativi (li sporcano vento e scia).
+  Il segnale più onesto di progresso è il confronto sulle <strong>stesse salite/segmenti</strong> (tempo, VAM e a che FC) e
+  l'<strong>efficienza</strong> (VAM per battito): più veloce a FC uguale o più bassa = migliorato davvero; più veloce ma a FC più alta = hai solo spinto di più.
+</div>
+
+<section class="kpi-row">
+  <div class="kpi">
+    <span class="kpi-value">{% if ftp and ftp.ftp %}{{ ftp.ftp }} W{% else %}–{% endif %}</span>
+    <span class="kpi-label">eFTP stimato{% if ftp and ftp.wkg %} · {{ '%.1f'|format(ftp.wkg) }} W/kg{% endif %}</span>
+  </div>
+  {% for key, lbl, unit in [('hours','Ore','h'),('km','Distanza','km'),('elev','Dislivello','m'),('rides','Uscite','')] %}
+  {% set m = vol[key] %}
+  <div class="kpi">
+    <span class="kpi-value">{{ m.this }}{% if unit %} {{ unit }}{% endif %}</span>
+    <span class="kpi-label">{{ lbl }} a oggi</span>
+    {% if m.delta_pct is not none %}
+    <span class="trend {{ 'good' if m.delta_pct > 0 else ('bad' if m.delta_pct < 0 else 'neutral') }}">
+      {{ '▲' if m.delta_pct > 0 else ('▼' if m.delta_pct < 0 else '') }} {{ m.delta_pct }}% vs {{ prev }} ({{ m.last }})</span>
+    {% else %}<span class="trend neutral">— niente {{ prev }}</span>{% endif %}
+  </div>
+  {% endfor %}
+</section>
+
+<section class="card">
+  <h3>Salite &amp; segmenti ripetuti — {{ cur }} vs {{ prev }}</h3>
+  {% if not segments %}
+  <p class="muted">Nessuna salita o segmento percorso almeno due volte. Ripeti gli stessi percorsi (o creali dalla pagina <a href="/segments">Salite</a>) e qui comparirà il confronto diretto, il modo più onesto di vedere i progressi senza misuratore.</p>
+  {% else %}
+  <div class="seg-list">
+    {% for s in segments %}
+    <div class="seg-row">
+      <div class="seg-name">
+        {{ '⛰️' if s.type == 'climb' else '📍' }} {{ s.name }}
+        <small class="muted">· {{ s.length_km }} km · {{ s.n_efforts }} volte</small>
+        {% if s.is_pr_this_season %}<span class="badge tag-pr">PR {{ cur }}</span>{% endif %}
+      </div>
+      <table class="seg-cmp">
+        <tr><th></th><th>Tempo</th><th>VAM</th><th>FC</th></tr>
+        <tr>
+          <td>{{ cur }}</td>
+          <td>{% if s.this %}{{ mmss(s.this.time_s) }}{% else %}–{% endif %}</td>
+          <td>{% if s.this and s.this.vam %}{{ s.this.vam }}{% else %}–{% endif %}</td>
+          <td>{% if s.this and s.this.avg_hr %}{{ s.this.avg_hr }}{% else %}–{% endif %}</td>
+        </tr>
+        <tr class="row-prev">
+          <td>{{ prev }}</td>
+          <td>{% if s.last %}{{ mmss(s.last.time_s) }}{% else %}–{% endif %}</td>
+          <td>{% if s.last and s.last.vam %}{{ s.last.vam }}{% else %}–{% endif %}</td>
+          <td>{% if s.last and s.last.avg_hr %}{{ s.last.avg_hr }}{% else %}–{% endif %}</td>
+        </tr>
+      </table>
+      {% if s.verdict %}
+      <span class="badge badge-{{ 'good' if s.verdict in ['migliorato','più veloce'] else ('bad' if s.verdict == 'più lento' else 'neutral') }}">
+        {{ s.verdict }}{% if s.time_delta_pct is not none %} · tempo {{ '%+.1f'|format(s.time_delta_pct) }}%{% endif %}{% if s.hr_delta is not none %} · FC {{ '%+d'|format(s.hr_delta) }}{% endif %}
+      </span>
+      {% else %}<span class="muted" style="font-size:.85rem">solo {{ cur }} — serve un passaggio anche l'anno scorso per confrontare</span>{% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+</section>
+
+<section class="card">
+  <h3>Andamento — questa stagione vs la scorsa</h3>
+  <p class="muted" style="font-size:.85rem">Allineati per giorno di stagione: la linea piena è il {{ cur }}, quella tratteggiata il {{ prev }}.</p>
+  <div class="chart-grid">
+    <div class="chart-card"><h4>eFTP stimato</h4><canvas id="eftpChart" height="150"></canvas>
+      <p class="muted">Miglior 20′ stimato ×0.95 per uscita. Indicativo (stimato).</p></div>
+    <div class="chart-card"><h4>Efficienza in salita</h4><canvas id="effChart" height="150"></canvas>
+      <p class="muted">VAM per battito (miglior salita di ogni uscita): sale = più metri di dislivello per battito.</p></div>
+    <div class="chart-card"><h4>Fitness (CTL)</h4><canvas id="ctlChart" height="150"></canvas>
+      <p class="muted">Carico cronico stimato dalla FC: la base di forma costruita.</p></div>
+    <div class="chart-card"><h4>Volume cumulato</h4><canvas id="volChart" height="150"></canvas>
+      <p class="muted">Ore in bici accumulate dall'inizio della stagione.</p></div>
+  </div>
+</section>
+
+<section class="card">
+  <div class="card-head">
+    <h3>Report di stagione (AI)</h3>
+    <button id="genReport" class="btn">{{ 'Rigenera' if report_html else 'Genera report' }}</button>
+  </div>
+  <div id="reportBox" class="ai-analysis">{% if report_html %}{{ report_html | safe }}{% else %}<p class="muted">Una sintesi di come stai andando rispetto a un anno fa, pescando da salite, efficienza, volumi ed eFTP.</p>{% endif %}</div>
+  {% if report_date %}<p class="muted" id="reportDate">Aggiornato il {{ report_date.strftime('%d/%m/%Y %H:%M') }}</p>{% endif %}
+</section>
+
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+{% if n_bikes > 0 %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<script>
+const OV = {{ overlays_json | safe }};
+const CUR = {{ cur }}, PREV = {{ prev }};
+function monthLabel(doy) {
+  const d = new Date(2025, 0, 1); d.setDate(doy);
+  return d.toLocaleDateString("it-IT", { month: "short" });
+}
+function overlayChart(canvasId, metric, yTitle) {
+  const c = document.getElementById(canvasId);
+  if (!c) return;
+  const data = OV[metric] || {};
+  const cur = data[CUR] || [], prev = data[PREV] || [];
+  if (!cur.length && !prev.length) { c.closest(".chart-card").style.display = "none"; return; }
+  new Chart(c, {
+    type: "line",
+    data: { datasets: [
+      { label: "" + PREV, data: prev.map(p => ({ x: p.doy, y: p.value })),
+        borderColor: "#8a97a9", borderDash: [5, 4], pointRadius: 0, borderWidth: 1.6, tension: .2 },
+      { label: "" + CUR, data: cur.map(p => ({ x: p.doy, y: p.value })),
+        borderColor: "#4c8dff", backgroundColor: "rgba(76,141,255,.12)", fill: true,
+        pointRadius: 0, borderWidth: 2.4, tension: .2 },
+    ] },
+    options: { parsing: false,
+      plugins: { legend: { position: "bottom" } },
+      scales: { x: { type: "linear", min: 1, max: 366,
+                     ticks: { maxTicksLimit: 8, callback: (v) => monthLabel(v) } },
+                y: { title: { display: true, text: yTitle } } },
+      animation: false, responsive: true },
+  });
+}
+overlayChart("eftpChart", "eftp", "watt");
+overlayChart("effChart", "efficiency", "VAM/battito");
+overlayChart("ctlChart", "ctl", "CTL");
+overlayChart("volChart", "volume", "ore cumulate");
+
+const genBtn = document.getElementById("genReport");
+if (genBtn) genBtn.addEventListener("click", async () => {
+  const box = document.getElementById("reportBox");
+  genBtn.disabled = true;
+  box.innerHTML = '<p class="muted">Sto analizzando la stagione…</p>';
+  try {
+    const r = await fetch("/progress/report", { method: "POST" });
+    const d = await r.json();
+    box.innerHTML = d.html ? d.html : '<p class="alert error">' + (d.error || "errore") + "</p>";
+    if (d.html) genBtn.textContent = "Rigenera";
+  } catch (err) {
+    box.innerHTML = '<p class="alert error">errore di rete</p>';
+  } finally {
+    genBtn.disabled = false;
+  }
+});
+</script>
+{% endif %}
+{% endblock %}
