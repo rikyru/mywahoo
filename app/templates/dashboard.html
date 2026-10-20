@@ -319,11 +319,12 @@ document.getElementById("coachForm").addEventListener("submit", async (e) => {
   } catch (ex) { thinking.textContent = "⚠️ errore di rete"; }
   finally { btn.disabled = false; coachMsg.focus(); }
 });
+// shared HTML-escaper for the async glance cards below (health + nutrition)
+const esc = s => String(s).replace(/[<>&]/g, c => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c]));
 // Health card: fetched after render — Google Health takes seconds and must not
 // hold up the page.
 (async () => {
   const host = document.getElementById("healthGlance");
-  const esc = s => String(s).replace(/[<>&]/g, c => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c]));
   try {
     const r = await fetch("/api/health/summary");
     const d = await r.json();
