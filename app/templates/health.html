@@ -297,6 +297,41 @@
   </section>
   {% endif %}
 
+  {# ---- consumato vs obiettivo periodizzato, per giorno ---- #}
+  {% if nutrition and nutrition.alimentazione_tracciata and nutrition.alimentazione_tracciata.per_giorno %}
+  {% set at = nutrition.alimentazione_tracciata %}
+  <section class="card">
+    <h3>Consumato vs obiettivo <small class="muted">· per giorno · obiettivo periodizzato</small></h3>
+    {% if at.bilancio_vs_obiettivo %}{% set b = at.bilancio_vs_obiettivo %}
+    <section class="kpi-row">
+      <div class="kpi"><span class="kpi-value">{{ '%+d'|format(b.saldo_medio_kcal) }}</span><span class="kpi-label">saldo medio kcal/g</span></div>
+      <div class="kpi"><span class="kpi-value">{{ b.giorni_sotto_obiettivo }}</span><span class="kpi-label">giorni sotto</span></div>
+      <div class="kpi"><span class="kpi-value">{{ b.giorni_sopra_obiettivo }}</span><span class="kpi-label">giorni sopra</span></div>
+      <div class="kpi"><span class="kpi-value">{{ b.giorni_allenamento }}</span><span class="kpi-label">giorni allenamento</span></div>
+    </section>
+    {% endif %}
+    <div class="nutri-table-wrap">
+      <table class="nutri-table">
+        <thead><tr><th>Giorno</th><th>Allenamento</th><th>Consumato</th><th>Obiettivo</th><th>Saldo</th></tr></thead>
+        <tbody>
+        {% for r in (at.per_giorno[-14:] | reverse) %}
+          <tr>
+            <td>{{ r.data[5:] }}</td>
+            <td class="nutri-act">{{ r.allenamento or '—' }}</td>
+            <td>{% if r.kcal is not none %}{{ r.kcal | round | int }}{% else %}–{% endif %}</td>
+            <td>{% if r.obiettivo_kcal is not none %}{{ r.obiettivo_kcal | round | int }}{% else %}–{% endif %}</td>
+            {% if r.saldo_vs_obiettivo is not none %}
+            <td class="{{ 'bal-under' if r.saldo_vs_obiettivo < -150 else ('bal-over' if r.saldo_vs_obiettivo > 150 else 'bal-ok') }}">{{ '%+d'|format(r.saldo_vs_obiettivo | round | int) }}</td>
+            {% else %}<td>–</td>{% endif %}
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <p class="muted">Obiettivo = target giornaliero <strong>periodizzato</strong> (sale nei giorni di allenamento). Saldo = consumato − obiettivo: <span class="bal-under">negativo</span> = sotto (occhio a fuel nei giorni intensi, ma può anche essere pasti non registrati), <span class="bal-over">positivo</span> = sopra.</p>
+  </section>
+  {% endif %}
+
   {# ---- energy balance: intake vs expenditure ---- #}
   {% if energy_json and energy_json != '[]' %}
   <section class="card">

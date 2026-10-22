@@ -85,6 +85,20 @@ small { font-size: .8em; }
 
 .container { max-width: 1140px; margin: 0 auto; padding: 1.6rem 1.4rem 3rem; }
 
+/* nutrition: consumed-vs-target per-day table */
+.nutri-table-wrap { overflow-x: auto; margin: .4rem 0; }
+.nutri-table { width: 100%; border-collapse: collapse; font-size: .9rem; }
+.nutri-table th, .nutri-table td { padding: .35rem .5rem; text-align: right; white-space: nowrap;
+  border-bottom: 1px solid var(--border-soft); }
+.nutri-table th { color: var(--muted); font-weight: 500; }
+.nutri-table th:first-child, .nutri-table td:first-child { text-align: left; }
+.nutri-table th:nth-child(2), .nutri-table td.nutri-act { text-align: left; }
+.nutri-table td.nutri-act { color: var(--muted); font-size: .82rem; max-width: 320px;
+  overflow: hidden; text-overflow: ellipsis; }
+.bal-under { color: #e0683c; font-weight: 600; }
+.bal-over { color: #e0a93c; font-weight: 600; }
+.bal-ok { color: #2a9d8f; font-weight: 600; }
+
 .page-head { display: flex; justify-content: space-between; align-items: center;
              gap: 1rem; flex-wrap: wrap; margin-bottom: .4rem; }
 .sync-buttons { display: flex; gap: .5rem; }
