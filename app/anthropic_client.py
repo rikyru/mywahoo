@@ -283,7 +283,11 @@ async def _openai_tools(system, messages, tools, executor, model, max_rounds) ->
         if with_tools:
             p["tools"] = oai_tools
         if model.startswith(OPENAI_REASONING_PREFIXES):
-            p["reasoning_effort"] = "low"
+            # gpt-5.x on /v1/chat/completions rejects function tools combined with
+            # reasoning_effort (HTTP 400, "set reasoning_effort to 'none'"): every
+            # tool call failed and fell back to the full-payload JSON path.
+            p["reasoning_effort"] = ("none" if with_tools and model.startswith("gpt-5.")
+                                     else "low")
         return p
 
     for _ in range(max_rounds):
@@ -675,29 +679,31 @@ Rispondi SOLO con JSON valido, senza testo attorno né code fence:
 Includi TUTTE le key ricevute."""
 
 
-PROGRAM_CHAT_PROMPT = """\
-Sei l'allenatore che gestisce il PROGRAMMA a lungo termine dell'atleta. Può
-segnalarti imprevisti e cambi ("sabato salto", "sono via dal 23/12 al 7/01",
-"ho comprato i rulli", "giovedì le gambe le faccio venerdì") o farti domande.
-Traduci le richieste in AZIONI: dopo averle applicate il programma si ricalcola da
-solo (budget di carico, sedute successive), quindi NON riprogrammare tu le sedute.
-
+PROGRAM_ACTIONS_DOC = """\
+L'atleta segue un PROGRAMMA adattivo (vedi "programma" nei dati): settimana tipo,
+assenze, sessioni dei prossimi giorni con id. Quando chiede di cambiare qualcosa
+("sabato salto", "sono via dal 23/12 al 7/01", "ho comprato i rulli", "oggi piove
+e ho solo 30 minuti") proponi le AZIONI giuste con lo strumento modifica_programma:
+l'atleta le conferma con un bottone, poi il programma si ricalcola da solo (budget
+di carico, sedute successive). Non riprogrammare tu la settimana.
 Azioni possibili (usa solo queste):
  {"tipo": "assenza", "start": "YYYY-MM-DD", "end": "YYYY-MM-DD", "note": "...",
   "allowed": ["sport ancora possibili; lista vuota = nessun allenamento"]}
  {"tipo": "rimuovi_assenza", "index": intero}
  {"tipo": "salta", "session_id": intero}
+ {"tipo": "modifica_seduta", "session_id": intero, "title": "...", "description": "...",
+  "duration_min": intero, "rpe": numero}   (adatta UNA seduta: piove, poco tempo,
+   stanchezza… Scrivi il contenuto completo sostitutivo, a carico equivalente salvo
+   richiesta diversa, con le stesse routine fisse e solo l'attrezzatura disponibile)
  {"tipo": "slot", "slot_id": "...", "enabled": bool, "days": [0-6], "duration": int,
-  "focus": "...", "indoor": bool}   (metti solo i campi che cambiano)
+  "focus": "...", "indoor": bool}   (cambia la settimana tipo in modo PERMANENTE:
+   metti solo i campi che cambiano; per un cambio di una volta usa salta/modifica_seduta)
  {"tipo": "attrezzatura", "aggiungi": ["..."], "rimuovi": ["..."]}
  {"tipo": "fine", "date": "YYYY-MM-DD"}
  {"tipo": "nota", "testo": "..."}   (aggiunge alle note del programma)
-Risolvi i giorni relativi rispetto a OGGI. Non toccare sedute già fatte. Se
-l'atleta salta una seduta di uno slot "pick: one" (es. bici sab o dom) basta
-"salta": il motore la sposta da solo all'altro giorno.
-Rispondi SOLO con JSON valido, senza testo attorno né code fence:
-{"risposta": "risposta conversazionale in Markdown, concisa", "azioni": [...]}
-"azioni" vuota se stai solo rispondendo a una domanda."""
+Risolvi i giorni relativi rispetto a OGGI. Non toccare sedute già fatte. Se l'atleta
+salta una seduta di uno slot "pick: one" (es. bici sab o dom) basta "salta": il
+motore la sposta da solo all'altro giorno."""
 
 
 async def program_prefill(notes: str, athlete: dict | None = None) -> dict | None:
@@ -714,17 +720,6 @@ async def fill_program_sessions(ctx: dict) -> list[dict]:
     d = _json_object(raw) or {}
     out = d.get("sessioni")
     return out if isinstance(out, list) else []
-
-
-async def chat_program(ctx: dict, history: list[dict]) -> dict:
-    """Conversazione sul programma -> {"risposta", "azioni"} da confermare in UI."""
-    system = PROGRAM_CHAT_PROMPT + "\n\nCONTESTO (JSON):\n" + _dumps(ctx)
-    raw = await _call_messages(system, history, cache=True)
-    d = _json_object(raw)
-    if not d:
-        return {"risposta": raw.strip(), "azioni": []}
-    azioni = d.get("azioni") if isinstance(d.get("azioni"), list) else []
-    return {"risposta": str(d.get("risposta") or "").strip(), "azioni": azioni}
 
 
 async def generate_plan(goal: str, n_days: int, start_date: str) -> dict:
@@ -1018,34 +1013,56 @@ insieme. Durate del sonno in ore e minuti. Tratta le kcal come pasti tracciati
 (non dedurne un deficit). Niente diagnosi mediche: per valori anomali persistenti
 suggerisci cautela o un controllo. Se la domanda esce dai dati, dillo con onestà.
 
-Hai due strumenti:
+Strumenti:
 - dettaglio_attivita(data): leggi cosa è stato svolto in una sessione (usalo
-  quando la domanda riguarda cosa ha fatto l'atleta in un giorno).
+  quando la domanda riguarda cosa ha fatto l'atleta in un giorno)."""
+
+_PLAN_TOOL_NOTE = """
 - proponi_piano(obiettivo, giorni): quando l'atleta chiede un PIANO di
   allenamento, NON scriverlo nella risposta — chiama questo strumento con
   l'obiettivo (una frase che tiene conto di forma/recupero/storico) e i giorni
   (7 per una settimana, ~28 per un mese). Nella risposta riassumi in una frase
   cosa proporresti e invita a confermare."""
 
+_PROGRAM_TOOL_NOTE = """
+- modifica_programma(azioni): per ogni cambio al programma. Nella risposta
+  riassumi in una frase cosa cambierà e invita a confermare con il bottone.
+
+""" + PROGRAM_ACTIONS_DOC
+
+_PROGRAM_FALLBACK = """\
+Sei il coach di questo atleta. Rispondi in italiano, conciso e concreto, USANDO i
+dati forniti sotto (allenamenti, forma, recupero, sonno, alimentazione, programma).
+
+""" + PROGRAM_ACTIONS_DOC + """
+
+Rispondi SOLO con JSON valido, senza testo attorno né code fence:
+{"risposta": "risposta conversazionale in Markdown", "azioni": [...]}
+"azioni" vuota se stai solo rispondendo."""
+
 
 async def coach_chat(overview: dict, workouts: list[dict] | None, history: list[dict],
-                     nutrition: dict | None = None, form: dict | None = None) -> dict:
+                     nutrition: dict | None = None, form: dict | None = None,
+                     program: dict | None = None) -> dict:
     """The single grounded assistant (salute + allenamento + nutrizione), used by
-    both the dashboard and the health page. Returns {"risposta": str,
-    "piano_richiesto": {obiettivo, giorni}|None}: the proposal lets the caller
-    generate + save a real plan on the user's confirmation.
+    the dashboard, the health page and the program page. Returns {"risposta",
+    "piano_richiesto", "azioni"}.
 
-    Plan proposals come through the proponi_piano TOOL (robust, no rigid JSON);
-    if the provider ignores the tools, _call_with_tools falls back to the proven
-    JSON contract, which is parsed below — so behaviour never regresses."""
+    With an active `program` the coach can change it: actions come through the
+    modifica_programma TOOL and are confirmed by the user before being applied.
+    Without one it can propose a classic plan (proponi_piano). If the provider
+    ignores the tools, _call_with_tools falls back to a JSON contract parsed
+    below, so behaviour never regresses."""
     import re
     compact = _health_payload(overview, workouts, nutrition, with_notes=False)
     full = _health_payload(overview, workouts, nutrition)
     if form:
         compact["forma_attuale"] = full["forma_attuale"] = form
+    if program:
+        compact["programma"] = full["programma"] = program
 
     _detail, _detail_exec = _detail_tools(workouts)
-    captured: dict = {}
+    captured: dict = {"azioni": []}
 
     def _exec(name: str, args: dict):
         if name == "proponi_piano":
@@ -1057,35 +1074,56 @@ async def coach_chat(overview: dict, workouts: list[dict] | None, history: list[
             if obj:
                 captured["piano"] = {"obiettivo": obj, "giorni": max(1, min(60, g))}
             return "Proposta registrata: riassumi in una frase e invita l'atleta a confermare."
+        if name == "modifica_programma":
+            azioni = args.get("azioni")
+            captured["azioni"].extend(a for a in (azioni if isinstance(azioni, list) else [])
+                                      if isinstance(a, dict) and a.get("tipo"))
+            return ("Azioni registrate: riassumi in una frase cosa cambierà e invita "
+                    "l'atleta a confermare con il bottone.")
         return _detail_exec(name, args)
 
-    tools = _detail + [{
-        "name": "proponi_piano",
-        "description": "Proponi (senza generarlo) un piano di allenamento quando "
-                       "l'atleta ne chiede uno; l'utente lo confermerà poi.",
-        "parameters": {"type": "object", "properties": {
-            "obiettivo": {"type": "string", "description": "frase che sintetizza "
-                          "l'obiettivo tenendo conto di forma/recupero/storico"},
-            "giorni": {"type": "integer", "description": "7=settimana, ~28=mese"}},
-            "required": ["obiettivo", "giorni"]}}]
-
-    base = COACH_TOOL_PROMPT + _DETAIL_TOOL_NOTE + "\n\nDATI DEL PERIODO (JSON):\n"
-    fallback = COACH_CHAT_SYSTEM_PROMPT + "\n\nDATI DEL PERIODO (JSON):\n" + _dumps(full)
+    if program:
+        tools = _detail + [{
+            "name": "modifica_programma",
+            "description": "Proponi modifiche al programma dell'atleta (assenze, "
+                           "sedute saltate o adattate, settimana tipo); l'atleta le confermerà.",
+            "parameters": {"type": "object", "properties": {
+                "azioni": {"type": "array", "items": {"type": "object"},
+                           "description": "azioni nel formato descritto nel prompt"}},
+                "required": ["azioni"]}}]
+        base = COACH_TOOL_PROMPT + _PROGRAM_TOOL_NOTE
+        fallback = _PROGRAM_FALLBACK + "\n\nDATI (JSON):\n" + _dumps(full)
+    else:
+        tools = _detail + [{
+            "name": "proponi_piano",
+            "description": "Proponi (senza generarlo) un piano di allenamento quando "
+                           "l'atleta ne chiede uno; l'utente lo confermerà poi.",
+            "parameters": {"type": "object", "properties": {
+                "obiettivo": {"type": "string", "description": "frase che sintetizza "
+                              "l'obiettivo tenendo conto di forma/recupero/storico"},
+                "giorni": {"type": "integer", "description": "7=settimana, ~28=mese"}},
+                "required": ["obiettivo", "giorni"]}}]
+        base = COACH_TOOL_PROMPT + _PLAN_TOOL_NOTE
+        fallback = COACH_CHAT_SYSTEM_PROMPT + "\n\nDATI DEL PERIODO (JSON):\n" + _dumps(full)
+    base += _DETAIL_TOOL_NOTE + "\n\nDATI DEL PERIODO (JSON):\n"
     raw = await _call_with_tools(base + _dumps(compact), history, tools, _exec,
                                  cache=True, fallback_system=fallback)
 
-    if captured.get("piano"):                     # tool path: proposal captured
-        return {"risposta": raw.strip(), "piano_richiesto": captured["piano"]}
+    if captured.get("piano") or captured["azioni"]:      # tool path
+        return {"risposta": raw.strip(), "piano_richiesto": captured.get("piano"),
+                "azioni": captured["azioni"]}
     # fallback path (JSON contract) — parse if the reply is a JSON object
     m = re.search(r"\{.*\}", raw, re.S)
     if m:
         try:
             d = json.loads(m.group(0))
+            az = d.get("azioni") if isinstance(d.get("azioni"), list) else []
             return {"risposta": str(d.get("risposta") or raw).strip(),
-                    "piano_richiesto": d.get("piano_richiesto") or None}
+                    "piano_richiesto": d.get("piano_richiesto") or None,
+                    "azioni": [a for a in az if isinstance(a, dict) and a.get("tipo")]}
         except json.JSONDecodeError:
             pass
-    return {"risposta": raw.strip(), "piano_richiesto": None}
+    return {"risposta": raw.strip(), "piano_richiesto": None, "azioni": []}
 
 
 async def list_openai_models() -> list[str]:

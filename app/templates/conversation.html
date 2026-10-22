@@ -55,8 +55,10 @@ chatForm.addEventListener("submit", async (e) => {
       body: JSON.stringify({ message: text, conversation_id: CONV_ID }),
     });
     const data = await r.json();
-    if (data.reply) thinking.innerHTML = window.renderMd(data.reply);
-    else thinking.textContent = "⚠️ " + (data.error || "errore");
+    if (data.reply) {
+      thinking.innerHTML = window.renderMd(data.reply);
+      window.renderCoachActions(chatThread, data.actions);
+    } else thinking.textContent = "⚠️ " + (data.error || "errore");
   } catch (err) {
     thinking.textContent = "⚠️ errore di rete";
   } finally {

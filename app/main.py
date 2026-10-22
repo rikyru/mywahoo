@@ -600,10 +600,11 @@ async def health_insight(request: Request, regenerate: str = Form(default=""),
     return RedirectResponse(redirect, status_code=303)
 
 
-@app.post("/health/chat", dependencies=[Depends(require_auth)])
-async def health_chat(request: Request):
-    """Grounded assistant, persisted: answers using the window's health data,
-    activities and nutrition. The thread is saved (Conversation) to review later.
+async def _coach_turn(request: Request, title_prefix: str = "") -> JSONResponse:
+    """One turn of THE coach (dashboard, Salute, Programma, conversazioni salvate):
+    grounded in the window's health data, activities and nutrition, persisted
+    (Conversation). With an active program it also sees the program and may
+    propose actions on it, returned for the user to confirm (/program/apply).
     Client sends {message, conversation_id?, win/end/from/to}."""
     try:
         body = await request.json()
@@ -618,7 +619,7 @@ async def health_chat(request: Request):
     with Session(engine) as session:
         conv = session.get(Conversation, conv_id) if conv_id else None
         if conv is None:
-            conv = Conversation(title=msg[:60])
+            conv = Conversation(title=f"{title_prefix}{msg}"[:60])
             session.add(conv)
             session.commit()
             session.refresh(conv)
@@ -626,6 +627,7 @@ async def health_chat(request: Request):
         prior = list(session.exec(select(ChatMessage)
                                   .where(ChatMessage.conversation_id == conv_id)
                                   .order_by(ChatMessage.created_at)))
+        has_program = program_runner.active_program(session) is not None
     history = ([{"role": m.role, "content": m.content} for m in prior]
                + [{"role": "user", "content": msg}])[-12:]
 
@@ -642,15 +644,29 @@ async def health_chat(request: Request):
                     for w in query_range(session, window["start"], window["end"], None)]
     nutri = await nutrition.fetch_nutrition(window["start"].date(), window["end"].date())
     _, form_summary = _fitness_series()
-    try:  # one unified assistant (same brain as the dashboard coach)
-        out = await anthropic_client.coach_chat(data, workouts, history, nutri, form_summary)
+    program = program_runner.chat_context(_program_ctx()) if has_program else None
+    try:
+        out = await anthropic_client.coach_chat(data, workouts, history, nutri,
+                                                form_summary, program=program)
     except anthropic_client.AnthropicError as e:
         return JSONResponse({"error": str(e)}, status_code=502)
 
     reply = out.get("risposta") or ""
     plan_req = out.get("piano_richiesto")
-    stored = reply + (f"\n\n[Piano proposto] {plan_req.get('obiettivo')} · "
-                      f"{plan_req.get('giorni')} giorni" if plan_req else "")
+    actions = out.get("azioni") or []
+    names = {}
+    with Session(engine) as session:
+        for a in actions:
+            sid = a.get("session_id")
+            if isinstance(sid, int) and (ps := session.get(PlanSession, sid)):
+                names[sid] = f"{ps.day_label} «{ps.title}»"
+    for a in actions:
+        a["label"] = _program_action_label(a, names)
+    stored = reply
+    if plan_req:
+        stored += f"\n\n[Piano proposto] {plan_req.get('obiettivo')} · {plan_req.get('giorni')} giorni"
+    if actions:
+        stored += "\n\n[Proposte] " + "; ".join(a["label"] for a in actions)
     with Session(engine) as session:
         session.add(ChatMessage(conversation_id=conv_id, role="user", content=msg))
         session.add(ChatMessage(conversation_id=conv_id, role="assistant", content=stored))
@@ -658,8 +674,13 @@ async def health_chat(request: Request):
         c.updated_at = datetime.utcnow()
         session.add(c)
         session.commit()
-    return JSONResponse({"reply": reply, "plan_request": plan_req,
+    return JSONResponse({"reply": reply, "plan_request": plan_req, "actions": actions,
                          "conversation_id": conv_id})
+
+
+@app.post("/health/chat", dependencies=[Depends(require_auth)])
+async def health_chat(request: Request):
+    return await _coach_turn(request)
 
 
 @app.get("/conversations", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
@@ -1724,9 +1745,6 @@ def program_page(request: Request):
         ws = session.exec(select(Workout).where(
             Workout.start_date >= datetime.combine(wk0, time.min),
             Workout.start_date <= datetime.combine(today, time.max))).all()
-        chat = [{"role": m.role, "content": m.content} for m in session.exec(
-            select(ChatMessage).where(ChatMessage.conversation_id == prog.conversation_id)
-            .order_by(ChatMessage.created_at))] if prog.conversation_id else []
         mults = jl(prog.block_multipliers_json, [1.0])
         pos = programmod.block_position(prog.start_date.date(), today, prog.block_weeks, mults)
         _, summary = _fitness_series()
@@ -1760,7 +1778,7 @@ def program_page(request: Request):
         "target": round(target), "done_load": round(done_load),
         "days": days, "proposals": proposals, "today": today.isoformat(),
         "absences": jl(prog.absences_json, []), "equipment": jl(prog.equipment_json, []),
-        "ftp": ftp_w, "chat_json": json.dumps(chat), "template": tpl,
+        "ftp": ftp_w, "template": tpl,
         "weekdays": programmod.WEEKDAYS_IT,
         "message": request.query_params.get("msg"), "error": request.query_params.get("error")})
 
@@ -1904,15 +1922,22 @@ async def program_session_action(sid: int, action: str):
                              else "Ok, la seduta resta com'era")
 
 
-def _program_action_label(a: dict) -> str:
+def _program_action_label(a: dict, names: dict | None = None) -> str:
+    """Etichetta leggibile di un'azione; `names` = {session_id: "Sab 24/10 titolo"}."""
     t = a.get("tipo")
+    if a.get("session_id") is not None:
+        sess = (names or {}).get(a.get("session_id"), f"seduta {a.get('session_id')}")
+        if t == "salta":
+            return f"salta {sess}"
+        if t == "modifica_seduta":
+            return (f"adatta {sess} → «{a.get('title') or '…'}»"
+                    + (f", {a.get('duration_min')}′" if a.get("duration_min") else "")
+                    + (f", RPE {a.get('rpe')}" if a.get("rpe") is not None else ""))
     if t == "assenza":
         ok = ", ".join(a.get("allowed") or []) or "nessun allenamento"
         return f"assenza {a.get('start')} → {a.get('end')} ({ok})"
     if t == "rimuovi_assenza":
         return f"togli assenza #{a.get('index')}"
-    if t == "salta":
-        return f"salta seduta {a.get('session_id')}"
     if t == "slot":
         ch = {k: v for k, v in a.items() if k not in ("tipo", "slot_id")}
         return f"slot {a.get('slot_id')}: {json.dumps(ch, ensure_ascii=False)}"
@@ -1926,58 +1951,9 @@ def _program_action_label(a: dict) -> str:
     return str(t)
 
 
-@app.post("/program/chat", dependencies=[Depends(require_auth)])
-async def program_chat(request: Request):
-    """Chat del programma: "sabato salto", "via dal 23/12 al 7/01"… → azioni da
-    confermare, poi ricalcolo."""
-    try:
-        body = await request.json()
-    except json.JSONDecodeError:
-        return JSONResponse({"error": "richiesta non valida"}, status_code=400)
-    msg = str(body.get("message", "")).strip()[:2000]
-    if not msg:
-        return JSONResponse({"error": "nessuna domanda"}, status_code=400)
-    ctx = program_runner.chat_context(_program_ctx())
-    if not ctx:
-        return JSONResponse({"error": "nessun programma attivo"}, status_code=404)
-    with Session(engine) as session:
-        prog = program_runner.active_program(session)
-        conv = session.get(Conversation, prog.conversation_id) if prog.conversation_id else None
-        if conv is None:
-            conv = Conversation(title=f"Programma · {prog.title}"[:60])
-            session.add(conv)
-            session.commit()
-            session.refresh(conv)
-            prog.conversation_id = conv.id
-            session.add(prog)
-            session.commit()
-        conv_id = conv.id
-        prior = list(session.exec(select(ChatMessage).where(
-            ChatMessage.conversation_id == conv_id).order_by(ChatMessage.created_at)))
-    history = ([{"role": m.role, "content": m.content} for m in prior]
-               + [{"role": "user", "content": msg}])[-12:]
-    try:
-        out = await anthropic_client.chat_program(ctx, history)
-    except anthropic_client.AnthropicError as e:
-        return JSONResponse({"error": str(e)}, status_code=502)
-    actions = [a for a in out.get("azioni") or [] if isinstance(a, dict) and a.get("tipo")]
-    for a in actions:
-        a["label"] = _program_action_label(a)
-    stored = (out.get("risposta") or "") + (
-        "\n\n[Proposte] " + "; ".join(a["label"] for a in actions) if actions else "")
-    with Session(engine) as session:
-        session.add(ChatMessage(conversation_id=conv_id, role="user", content=msg))
-        session.add(ChatMessage(conversation_id=conv_id, role="assistant", content=stored))
-        c = session.get(Conversation, conv_id)
-        c.updated_at = datetime.utcnow()
-        session.add(c)
-        session.commit()
-    return JSONResponse({"reply": out.get("risposta") or "", "actions": actions})
-
-
 @app.post("/program/apply", dependencies=[Depends(require_auth)])
 async def program_apply(request: Request):
-    """Applica le azioni confermate dalla chat e ricalcola."""
+    """Applica le azioni confermate nella chat del coach e ricalcola."""
     try:
         body = await request.json()
     except json.JSONDecodeError:
@@ -2257,24 +2233,36 @@ def plan_session_delete(plan_id: int, sid: int):
 
 @app.post("/plans/{plan_id}/session/{sid}/edit", dependencies=[Depends(require_auth)])
 def plan_session_edit(plan_id: int, sid: int, title: str = Form(""),
-                      sport: str = Form(""), durata_min: str = Form("0"),
-                      date_: str = Form("", alias="date"), description: str = Form("")):
+                      sport: str = Form(""), durata_min: str = Form(""),
+                      date_: str = Form("", alias="date"), description: str = Form(""),
+                      next: str = Form("")):
+    """Manual edit; empty fields are left unchanged. On a program session the
+    edit also counts as "keep it like this": the engine won't rewrite it unless
+    the weekly budget changes a lot."""
     with Session(engine) as session:
         ps = session.get(PlanSession, sid)
         if ps and ps.plan_id == plan_id:
             ps.title = title.strip() or ps.title
-            ps.sport = google_health.canonical_sport(sport)
+            if sport.strip():
+                ps.sport = google_health.canonical_sport(sport)
             try:
-                ps.duration_min = max(0, int(durata_min))
+                ps.duration_min = max(0, int(durata_min)) if durata_min.strip() else ps.duration_min
             except ValueError:
                 pass
             d = _parse_date(date_)
-            ps.date = datetime.combine(d, time(12, 0)) if d else None
-            ps.description = description.strip()
+            if d:
+                ps.date = datetime.combine(d, time(12, 0))
+            ps.description = description.strip() or ps.description
+            if ps.kind:
+                ps.reason = "modificata a mano"
+                ps.proposal_json = json.dumps({"rejected": True, "rpe": ps.rpe_target,
+                                               "duration": ps.duration_min})
             session.add(ps)
             session.commit()
-    return RedirectResponse(
-        f"/plans/{plan_id}?{urlencode({'msg': 'Sessione aggiornata'})}", status_code=303)
+    back = _safe_next(next, f"/plans/{plan_id}")
+    sep = "&" if "?" in back else "?"
+    return RedirectResponse(f"{back}{sep}{urlencode({'msg': 'Sessione aggiornata'})}",
+                            status_code=303)
 
 
 @app.get("/settings", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
@@ -2710,63 +2698,8 @@ async def analyze_period(win: str = Form("30"), end: str = Form(""),
 
 @app.post("/analyze/chat", dependencies=[Depends(require_auth)])
 async def analyze_chat(request: Request):
-    """Coach chat on the dashboard: grounded in the window's training + recovery +
-    nutrition, persisted (Conversation). Can propose a plan the client then
-    generates. Client sends {message, conversation_id?, win/end/from/to}."""
-    try:
-        body = await request.json()
-    except json.JSONDecodeError:
-        return JSONResponse({"error": "richiesta non valida"}, status_code=400)
-    msg = str(body.get("message", "")).strip()[:2000]
-    if not msg:
-        return JSONResponse({"error": "nessuna domanda"}, status_code=400)
-
-    conv_id = body.get("conversation_id")
-    with Session(engine) as session:
-        conv = session.get(Conversation, conv_id) if conv_id else None
-        if conv is None:
-            conv = Conversation(title=f"Coach · {msg[:50]}"[:60])
-            session.add(conv)
-            session.commit()
-            session.refresh(conv)
-        conv_id = conv.id
-        prior = list(session.exec(select(ChatMessage)
-                                  .where(ChatMessage.conversation_id == conv_id)
-                                  .order_by(ChatMessage.created_at)))
-    history = ([{"role": m.role, "content": m.content} for m in prior]
-               + [{"role": "user", "content": msg}])[-12:]
-
-    window = resolve_window(body.get("win", "30"), body.get("end", ""),
-                            body.get("from", ""), body.get("to", ""))
-    try:  # recovery/nutrition are best-effort; the coach still works without them
-        data = await google_health.fetch_health_overview(window["start"].date(),
-                                                         window["end"].date())
-    except google_health.GoogleHealthError:
-        data = {"metrics": {}, "body": {}, "sleep": [], "score": None}
-    _attach_vo2max(data)
-    with Session(engine) as session:
-        workouts = [w.model_dump(exclude={"raw_summary", "fit_path", "updated_at"})
-                    for w in query_range(session, window["start"], window["end"], None)]
-    nutri = await nutrition.fetch_nutrition(window["start"].date(), window["end"].date())
-    _, form_summary = _fitness_series()
-    try:
-        out = await anthropic_client.coach_chat(data, workouts, history, nutri, form_summary)
-    except anthropic_client.AnthropicError as e:
-        return JSONResponse({"error": str(e)}, status_code=502)
-
-    reply = out.get("risposta") or ""
-    plan_req = out.get("piano_richiesto")
-    stored = reply
-    if plan_req:
-        stored += f"\n\n[Piano proposto] {plan_req.get('obiettivo')} · {plan_req.get('giorni')} giorni"
-    with Session(engine) as session:
-        session.add(ChatMessage(conversation_id=conv_id, role="user", content=msg))
-        session.add(ChatMessage(conversation_id=conv_id, role="assistant", content=stored))
-        c = session.get(Conversation, conv_id)
-        c.updated_at = datetime.utcnow()
-        session.add(c)
-        session.commit()
-    return JSONResponse({"reply": reply, "plan_request": plan_req, "conversation_id": conv_id})
+    """Coach chat on the dashboard and the program page (same coach as /health/chat)."""
+    return await _coach_turn(request, "Coach · ")
 
 
 @app.post("/analyze/plan", dependencies=[Depends(require_auth)])

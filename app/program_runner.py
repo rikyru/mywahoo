@@ -471,6 +471,25 @@ def apply_actions(azioni: list) -> list[str]:
                     ps.skipped, ps.proposal_json = True, None
                     s.add(ps)
                     done.append(f"saltata {ps.day_label} {ps.title}")
+            elif t == "modifica_seduta":
+                ps = s.get(PlanSession, a.get("session_id")) if isinstance(a.get("session_id"), int) else None
+                if ps and ps.plan_id == prog.plan_id and not ps.done and not ps.skipped:
+                    if str(a.get("title") or "").strip():
+                        ps.title = str(a["title"]).strip()[:200]
+                    if str(a.get("description") or "").strip():
+                        ps.description = str(a["description"]).strip()
+                    if a.get("duration_min") is not None:
+                        ps.duration_min = P._int(a.get("duration_min"), ps.duration_min, 5, 480)
+                    try:
+                        ps.rpe_target = max(1.0, min(10.0, float(a["rpe"]))) if a.get("rpe") is not None else ps.rpe_target
+                    except (TypeError, ValueError):
+                        pass
+                    ps.structure_json = None if a.get("description") else ps.structure_json
+                    ps.reason = "adattata su tua richiesta al coach"
+                    ps.proposal_json = json.dumps({"rejected": True, "rpe": ps.rpe_target,
+                                                   "duration": ps.duration_min})
+                    s.add(ps)
+                    done.append(f"adattata {ps.day_label} {ps.title}")
             elif t == "slot":
                 sl = next((x for x in tpl if x.get("id") == a.get("slot_id")), None)
                 if sl:
@@ -537,10 +556,16 @@ def chat_context(ctx: dict) -> dict | None:
             "attrezzatura": jl(prog.equipment_json, []),
             "routine": [r.get("name") for r in jl(prog.routines_json, [])],
             "assenze": [{"index": i, **a} for i, a in enumerate(jl(prog.absences_json, []))],
-            "sessioni_prossime": [{"session_id": p.id, "data": p.date.date().isoformat(),
-                                   "sport": p.sport, "titolo": p.title,
-                                   "stato": "fatta" if p.done else "saltata" if p.skipped else "da fare"}
-                                  for p in upcoming if p.date],
+            "sessioni_prossime": [
+                {"session_id": p.id, "data": p.date.date().isoformat(), "sport": p.sport,
+                 "titolo": p.title, "tipo": p.kind, "durata_min": p.duration_min,
+                 "rpe_target": p.rpe_target,
+                 "stato": "fatta" if p.done else "saltata" if p.skipped else "da fare",
+                 # contenuto solo per le prossime da fare: serve per adattarle
+                 **({"contenuto": (p.description or "")[:500]}
+                    if not p.done and not p.skipped and p.date.date() <= today + timedelta(days=3)
+                    else {})}
+                for p in upcoming if p.date],
             "forma_attuale": ctx.get("form"),
         }
 

@@ -173,8 +173,9 @@
       <button class="btn btn-secondary" type="button" id="coachNew">Nuova</button>
     </div>
     <p class="muted">Domande sul periodo — allenamenti, <strong>recupero</strong> e
-      <strong>alimentazione</strong> insieme. Puoi anche chiedere di generare un
-      <strong>piano</strong> per la settimana o il mese. La conversazione viene salvata.</p>
+      <strong>alimentazione</strong> insieme — e modifiche al <strong>programma</strong>
+      («sabato salto», «sono via dal 23/12 al 7/01», «oggi ho solo 30 minuti»): le
+      confermi tu. La conversazione viene salvata.</p>
     <div id="coachLog" class="chat-log"></div>
     <div id="coachPlan"></div>
     <form id="coachForm" class="chat-input">
@@ -316,6 +317,7 @@ document.getElementById("coachForm").addEventListener("submit", async (e) => {
     thinking.innerHTML = window.renderMd(d.reply || "(nessuna risposta)");
     coachConv = d.conversation_id;
     if (d.plan_request) renderPlanReq(d.plan_request);
+    window.renderCoachActions(coachPlan, d.actions);
   } catch (ex) { thinking.textContent = "⚠️ errore di rete"; }
   finally { btn.disabled = false; coachMsg.focus(); }
 });

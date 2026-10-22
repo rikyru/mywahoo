@@ -155,7 +155,17 @@
           onsubmit="const b=this.querySelector('button');b.disabled=true;b.textContent='Ricalcolo…';">
       <button class="btn btn-secondary" type="submit">Salta</button>
     </form>
-    <a class="btn btn-secondary" href="/plans/{{ prog.plan_id }}#edit{{ s.id }}">Modifica / chiedi all'AI</a>
+    <details class="plan-done">
+      <summary class="btn btn-secondary">Modifica</summary>
+      <form method="post" action="/plans/{{ prog.plan_id }}/session/{{ s.id }}/edit" class="plan-edit-form">
+        <input type="hidden" name="next" value="/program">
+        <label>Titolo <input type="text" name="title" value="{{ s.title }}"></label>
+        <label>Durata (min) <input type="number" name="durata_min" value="{{ s.duration_min }}" min="0"></label>
+        <label>Contenuto <textarea name="description" rows="5" class="nw-desc">{{ s.description }}</textarea></label>
+        <p class="muted">Per farla adattare dall'AI («piove», «ho solo 30 minuti») chiedilo al coach qui sotto.</p>
+        <button type="submit" class="btn btn-secondary">Salva</button>
+      </form>
+    </details>
   </div>
   {% elif s.skipped %}
   <form method="post" action="/program/session/{{ s.id }}/unskip">
@@ -179,20 +189,19 @@
   {% if equipment %}<p class="muted">Attrezzatura: {{ equipment | join(', ') }}</p>{% endif %}
 </section>
 
-<section class="card">
-  <details class="plan-chat" id="progChat" open>
-    <summary class="muted">💬 Parla col programma</summary>
-    <p class="muted">Es. «sabato salto, ho un impegno», «sono via dal 23/12 al 7/01, posso fare
-      solo corpo libero», «ho comprato i rulli», «giovedì sono stanco, sposta le gambe a venerdì».
-      Le modifiche vanno confermate, poi il programma si ricalcola.</p>
-    <div class="chat-log" id="progChatLog"></div>
-    <div id="progActions"></div>
-    <form class="chat-input chat-form" id="progChatForm">
-      <input type="text" placeholder="Scrivi qui…" autocomplete="off">
-      <button class="btn" type="submit">Invia</button>
-    </form>
-  </details>
+<section class="card plan-chat">
+  <h3>💬 Coach</h3>
+  <p class="muted">Lo stesso coach della dashboard: vede allenamenti, recupero, alimentazione
+    e il programma. Es. «sabato salto», «sono via dal 23/12 al 7/01, solo corpo libero»,
+    «oggi piove e ho 30 minuti», «ho comprato i rulli». Le modifiche le confermi tu.</p>
+  <div class="chat-log" id="progChatLog"></div>
+  <div id="progActions"></div>
+  <form class="chat-input chat-form" id="progChatForm">
+    <input type="text" placeholder="Scrivi qui…" autocomplete="off">
+    <button class="btn" type="submit">Invia</button>
+  </form>
 </section>
+<p class="muted"><a href="/plans">Archivio piani</a> (i piani generati prima del programma)</p>
 {% endif %}
 {% endblock %}
 
@@ -204,6 +213,7 @@
   const box = document.getElementById("progActions");
   const form = document.getElementById("progChatForm");
   const input = form.querySelector("input");
+  let conv = null;   // la conversazione resta salvata in Conversazioni
 
   function add(role, text) {
     const d = document.createElement("div");
@@ -214,42 +224,24 @@
     log.scrollTop = log.scrollHeight;
     return d;
   }
-  ({{ chat_json | safe }}).forEach(m => add(m.role, m.content));
-
-  function showActions(actions) {
-    box.innerHTML = "";
-    if (!actions || !actions.length) return;
-    const ul = document.createElement("ul");
-    ul.className = "plan-action-list";
-    actions.forEach(a => { const li = document.createElement("li"); li.textContent = a.label; ul.appendChild(li); });
-    const btn = document.createElement("button");
-    btn.className = "btn"; btn.textContent = "Applica e ricalcola";
-    btn.onclick = async () => {
-      btn.disabled = true; btn.textContent = "Applico e ricalcolo…";
-      try {
-        const r = await fetch("/program/apply", { method: "POST",
-          headers: { "Content-Type": "application/json" }, body: JSON.stringify({ actions }) });
-        const d = await r.json();
-        location.href = "/program?" + new URLSearchParams({ msg: d.msg || d.error || "fatto" });
-      } catch (e) { btn.disabled = false; btn.textContent = "Riprova"; }
-    };
-    box.appendChild(ul); box.appendChild(btn);
-  }
 
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
     const msg = input.value.trim();
     if (!msg) return;
     input.value = "";
+    box.innerHTML = "";
     add("user", msg);
     const thinking = add("assistant", "…");
     try {
-      const r = await fetch("/program/chat", { method: "POST",
-        headers: { "Content-Type": "application/json" }, body: JSON.stringify({ message: msg }) });
+      const r = await fetch("/analyze/chat", { method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: msg, conversation_id: conv, win: "30" }) });
       const d = await r.json();
       if (d.error) { thinking.textContent = "⚠️ " + d.error; return; }
       thinking.innerHTML = window.renderMd(d.reply || "(nessuna risposta)");
-      showActions(d.actions);
+      conv = d.conversation_id;
+      window.renderCoachActions(box, d.actions);
     } catch (err) { thinking.textContent = "⚠️ errore di rete"; }
   });
 })();

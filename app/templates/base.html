@@ -25,7 +25,6 @@
         <div class="nav-menu">
           <a href="/program">Programma</a>
           <a href="/calendar">Calendario</a>
-          <a href="/plans">Piani</a>
           <a href="/esercizi">Esercizi</a>
         </div>
       </div>
@@ -100,6 +99,47 @@
       }
       return t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
               .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>").replace(/\n/g, "<br>");
+    };
+    // Modifiche al programma proposte dal coach: elenco + conferma (unico punto UI)
+    window.renderCoachActions = function (host, actions) {
+      if (!host || !actions || !actions.length) return;
+      const box = document.createElement("div");
+      box.className = "chat-proposal";
+      const h = document.createElement("div");
+      h.className = "chat-prop-head";
+      h.textContent = "Modifiche al programma";
+      const ul = document.createElement("ul");
+      ul.className = "plan-action-list";
+      actions.forEach(a => {
+        const li = document.createElement("li");
+        li.textContent = a.label || a.tipo;
+        ul.appendChild(li);
+      });
+      const btn = document.createElement("button");
+      btn.className = "btn";
+      btn.textContent = "Applica e ricalcola";
+      const out = document.createElement("p");
+      out.className = "muted";
+      btn.onclick = async () => {
+        btn.disabled = true; btn.textContent = "Applico e ricalcolo…";
+        try {
+          const r = await fetch("/program/apply", { method: "POST",
+            headers: { "Content-Type": "application/json" }, body: JSON.stringify({ actions }) });
+          const d = await r.json();
+          const msg = d.msg || d.error || "fatto";
+          if (location.pathname === "/program") {
+            location.href = "/program?" + new URLSearchParams({ msg });
+            return;
+          }
+          btn.remove();
+          out.textContent = "✓ " + msg + " — ";
+          const link = document.createElement("a");
+          link.href = "/program"; link.textContent = "apri il programma";
+          out.appendChild(link);
+        } catch (e) { btn.disabled = false; btn.textContent = "Riprova"; }
+      };
+      box.append(h, ul, btn, out);
+      host.appendChild(box);
     };
   </script>
   {% block scripts %}{% endblock %}

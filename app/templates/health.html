@@ -535,6 +535,7 @@ chatForm.addEventListener("submit", async (e) => {
       thinking.innerHTML = window.renderMd(data.reply);
       conversationId = data.conversation_id;
       renderPlanReq(data.plan_request);
+      window.renderCoachActions(chatPlan, data.actions);
     } else {
       thinking.textContent = "⚠️ " + (data.error || "errore");
     }
