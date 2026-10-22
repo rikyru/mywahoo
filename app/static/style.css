@@ -97,6 +97,11 @@ small { font-size: .8em; }
   overflow: hidden; text-overflow: ellipsis; }
 /* adaptive program */
 .prog-block { font-size: 1.05rem; }
+.prog-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 0 1rem; }
+.prog-mini h3 { margin-bottom: .3rem; font-size: 1.02rem; }
+.prog-rate { align-items: center; padding: .4rem 0; }
+.prog-rate input { padding: .45rem .55rem; background: var(--bg-elev); color: var(--text);
+  border: 1px solid var(--border); border-radius: var(--radius-sm); }
 .prog-reason { font-size: .82rem; margin: .35rem 0 0; }
 .prog-actions { display: flex; flex-wrap: wrap; gap: .5rem; align-items: flex-start; margin-top: .6rem; }
 .prog-actions form { margin: 0; }

@@ -20,11 +20,13 @@ from sqlmodel import Session, select
 from . import anthropic_client, google_health, program as P
 from . import form as formmod
 from . import profile as profilemod
-from .db import PlanSession, Program, TrainingPlan, Workout, engine
+from .db import (BodyGirth, BodyMeasure, PeriodSummary, PlanSession, Program, TrainingPlan,
+                 Workout, engine, get_setting, set_setting)
 
 logger = logging.getLogger(__name__)
 _LOCK = asyncio.Lock()
 AUTOLINK_MIN_SHARE = 0.5     # un'attività "conta" come la seduta se dura almeno metà
+READINESS_MAX_AGE_H = 12     # se Google non risponde, si usa l'ultima prontezza entro questo tempo
 DONE_MIN_MIN = 25            # sotto questi minuti (es. tragitti) non soddisfa uno slot "sab o dom"
 
 
@@ -93,8 +95,10 @@ def _rates(s, anchors) -> dict:
 
 
 def _week_target_done(s, tpl: list, absences: list, wk: date, multiplier: float,
-                      week_workouts: list, linked: set, anchors, rates: dict) -> tuple:
-    """(target, fatto) della settimana che inizia `wk`.
+                      week_workouts: list, linked: set, anchors, rates: dict,
+                      extras: list | None = None) -> tuple:
+    """(target, fatto) della settimana che inizia `wk`. Se `extras` è una lista, ci
+    aggiunge le attività fuori programma (non agganciate e non su uno slot).
 
     target = la settimana tipo completa (assenze escluse): pianificate tarate ×
     moltiplicatore + esterne previste. fatto = sedute del programma svolte +
@@ -114,9 +118,18 @@ def _week_target_done(s, tpl: list, absences: list, wk: date, multiplier: float,
     # conta ciò che realizza la settimana tipo (stesso giorno e sport di uno slot,
     # anche se non agganciato a una seduta: es. fatto prima di creare il programma)
     template_days = {(family(i["slot"].get("sport", "")), i["date"]) for i in full}
-    done = sum(_wload(w, anchors) for w in week_workouts
-               if w.id in linked or (w.moving_s or 0) / 60 >= P.CALIBRATION_MIN_MIN
-               or (family(w.sport), w.start_date.date()) in template_days)
+    done = 0.0
+    for w in week_workouts:
+        mins = (w.moving_s or 0) / 60
+        on_plan = w.id in linked or (family(w.sport), w.start_date.date()) in template_days
+        counted = on_plan or mins >= P.CALIBRATION_MIN_MIN
+        load = _wload(w, anchors)
+        if counted:
+            done += load
+        if extras is not None and not on_plan:
+            extras.append({"id": w.id, "date": w.start_date, "name": w.name or w.sport,
+                           "sport": w.sport, "min": round(mins), "load": round(load),
+                           "counted": counted})
     return target, done
 
 
@@ -136,10 +149,141 @@ def week_summary(anchors) -> dict | None:
             PlanSession.workout_id != None)).all()}  # noqa: E711
         pos = P.block_position(prog.start_date.date(), today, prog.block_weeks,
                                jl(prog.block_multipliers_json, [1.0]))
+        extras: list = []
         target, done = _week_target_done(
             s, jl(prog.template_json, []), jl(prog.absences_json, []), wk0,
-            pos["multiplier"], ws, linked, anchors, _rates(s, anchors))
-    return {"pos": pos, "target": target, "done": done}
+            pos["multiplier"], ws, linked, anchors, _rates(s, anchors), extras)
+        rd = jl(prog.readiness_json, {})
+    return {"pos": pos, "target": target, "done": done,
+            "extras": sorted(extras, key=lambda x: x["date"]), "readiness": rd or None}
+
+
+# ------------------------------------------------------------ pagella settimanale
+
+def _report_key(monday: date) -> str:
+    return f"pagella:{monday.isoformat()}"
+
+
+def cached_report(monday: date) -> dict | None:
+    with Session(engine) as s:
+        row = s.get(PeriodSummary, _report_key(monday))
+    if row is None:
+        return None
+    return jl(row.content, {}) or None
+
+
+async def weekly_report(monday: date, anchors, force: bool = False) -> dict | None:
+    """Pagella della settimana che inizia `monday`: tre voti deterministici
+    (allenamento, recupero, alimentazione) + commento AI. In cache: una chiamata
+    AI a settimana (o quando la rigeneri)."""
+    from . import nutrition
+    if not force and (hit := cached_report(monday)):
+        return hit
+    sunday = monday + timedelta(days=6)
+    lo, hi = datetime.combine(monday, time.min), datetime.combine(sunday, time.max)
+    with Session(engine) as s:
+        prog = active_program(s)
+        if not prog or not prog.plan_id:
+            return None
+        sess = s.exec(select(PlanSession).where(PlanSession.plan_id == prog.plan_id,
+                                                PlanSession.date >= lo, PlanSession.date <= hi)).all()
+        # i segnaposto di "salta tutta la settimana" non sono sedute in più
+        planned = [p for p in sess if not (p.reason or "").endswith("(tutta la settimana)")]
+        done = [p for p in planned if p.done]
+        skipped = [p for p in planned if p.skipped]
+        ws = s.exec(select(Workout).where(Workout.start_date >= lo, Workout.start_date <= hi)).all()
+        linked = {ps.workout_id for ps in s.exec(select(PlanSession).where(
+            PlanSession.workout_id != None)).all()}  # noqa: E711
+        pos = P.block_position(prog.start_date.date(), monday, prog.block_weeks,
+                               jl(prog.block_multipliers_json, [1.0]))
+        extras: list = []
+        target, done_load = _week_target_done(
+            s, jl(prog.template_json, []), jl(prog.absences_json, []), monday,
+            pos["multiplier"], ws, linked, anchors, _rates(s, anchors), extras)
+    t_score = P.training_score(len(planned), len(done), done_load, target)
+
+    wellness, sleep_h = [], []
+    if google_health.is_authenticated():
+        try:   # 28 giorni: la prontezza di ogni giorno si confronta con la tua media recente
+            ov = await google_health.fetch_health_overview(sunday - timedelta(days=27), sunday)
+            wellness = [p["value"] for p in ov.get("score_series") or []
+                        if monday.isoformat() <= p["date"] <= sunday.isoformat()]
+            sleep_h = [n["asleep_min"] / 60 for n in ov.get("sleep") or []
+                       if monday.isoformat() <= n["date"] <= sunday.isoformat()]
+        except google_health.GoogleHealthError as e:
+            logger.info("Weekly report without Google data: %s", e)
+    r_score = P.recovery_score(wellness, sleep_h)
+
+    at = ((await nutrition.fetch_nutrition(monday, sunday)) or {}).get("alimentazione_tracciata") or {}
+    balances = [r["saldo_vs_obiettivo"] for r in at.get("per_giorno") or []
+                if r.get("saldo_vs_obiettivo") is not None]
+    weight = profilemod.load().get("weight_kg")
+    tg = nutrition.build_targets()
+    prot_target = (tg["targets"]["protein_g"] / weight) if tg and weight else None
+    n_score = P.nutrition_score(balances, at.get("proteine_g_per_kg"), prot_target)
+
+    numbers = {
+        "settimana": f"{monday.isoformat()} → {sunday.isoformat()}", "blocco": P.block_label(pos),
+        "sedute_previste": len(planned), "sedute_fatte": len(done),
+        "sedute_saltate": [{"giorno": p.day_label, "titolo": p.title, "motivo": p.reason} for p in skipped],
+        "carico_fatto_trimp": round(done_load), "carico_previsto_trimp": round(target),
+        "fuori_programma": [{"nome": e["name"], "minuti": e["min"], "trimp": e["load"]}
+                            for e in extras if e["counted"]],
+        "prontezza_media": round(sum(wellness) / len(wellness)) if wellness else None,
+        "sonno_medio_h": round(sum(sleep_h) / len(sleep_h), 1) if sleep_h else None,
+        "giorni_entro_150kcal": (f"{sum(1 for b in balances if abs(b) <= 150)}/{len(balances)}"
+                                 if balances else None),
+        "saldo_medio_kcal": round(sum(balances) / len(balances)) if balances else None,
+        "proteine_g_kg": at.get("proteine_g_per_kg"),
+        "proteine_obiettivo_g_kg": round(prot_target, 2) if prot_target else None,
+    }
+    scores = {"allenamento": t_score, "recupero": r_score, "alimentazione": n_score}
+    try:
+        text = await anthropic_client.weekly_report_text({"voti": scores, "numeri": numbers})
+    except anthropic_client.AnthropicError as e:
+        logger.warning("Weekly report text failed: %s", e)
+        text = ""
+    data = {"week": monday.isoformat(), "scores": scores, "numbers": numbers, "text": text,
+            "created_at": datetime.utcnow().isoformat()}
+    with Session(engine) as s:
+        row = s.get(PeriodSummary, _report_key(monday)) or PeriodSummary(
+            key=_report_key(monday), content="")
+        row.content = json.dumps(data, ensure_ascii=False, default=str)
+        row.model = anthropic_client.effective_model()
+        row.created_at = datetime.utcnow()
+        s.add(row)
+        s.commit()
+    return data
+
+
+# ------------------------------------------------------------ promemoria corpo
+
+WEIGH_EVERY_DAYS = 7         # pesata (la bilancia la manda HA)
+MEASURE_EVERY_DAYS = 21      # misure col metro
+
+
+def body_reminders() -> dict:
+    """Promemoria pesata/misure + trend del peso e del girovita."""
+    from . import nutrition
+    now = datetime.utcnow()
+    with Session(engine) as s:
+        last_w = s.exec(select(BodyMeasure).where(BodyMeasure.weight_kg != None)  # noqa: E711
+                        .order_by(BodyMeasure.measured_at.desc())).first()
+        girths = s.exec(select(BodyGirth).order_by(BodyGirth.measured_at.desc())).all()
+    last_g = girths[0] if girths else None
+    dw = (now - last_w.measured_at).days if last_w else None
+    dg = (now - last_g.measured_at).days if last_g else None
+    # girovita: ultima misura vs la più vecchia negli ultimi ~60 giorni
+    waist = [g for g in girths if g.vita_cm and (now - g.measured_at).days <= 60]
+    waist_delta = (round(waist[0].vita_cm - waist[-1].vita_cm, 1)
+                   if len(waist) >= 2 else None)
+    tr = nutrition.weight_trend_kg_per_week()
+    return {"weigh_due": dw is None or dw >= WEIGH_EVERY_DAYS, "days_since_weigh": dw,
+            "last_weight": round(last_w.weight_kg, 1) if last_w else None,
+            "measure_due": dg is None or dg >= MEASURE_EVERY_DAYS, "days_since_measure": dg,
+            "trend_kg_week": round(tr["rate"], 2) if tr else None,
+            "waist_delta_cm": waist_delta,
+            "waist_span_days": (waist[0].measured_at - waist[-1].measured_at).days if len(waist) >= 2 else None}
 
 
 def _day_label(d: date) -> str:
@@ -182,11 +326,69 @@ async def recalc(ctx: dict, why: str = "") -> dict | None:
         return await _recalc(ctx, why)
 
 
+def _nolink_key(sid: int, wid: int) -> str:
+    return f"nolink:{sid}:{wid}"
+
+
+def recent_motives(s, prog: Program, today: date) -> list[str]:
+    """Motivi "stanco"/"dolore" delle sedute saltate tra ieri l'altro e domani."""
+    if not prog or not prog.plan_id:
+        return []
+    out = []
+    for ps in s.exec(select(PlanSession).where(
+            PlanSession.plan_id == prog.plan_id, PlanSession.skipped == True,  # noqa: E712
+            PlanSession.date >= datetime.combine(today - timedelta(days=2), time.min),
+            PlanSession.date <= datetime.combine(today + timedelta(days=1), time.max))).all():
+        r = (ps.reason or "").lower()
+        if "dolore" in r or "malessere" in r:
+            out.append("dolore")
+        elif "stanco" in r:
+            out.append("stanco")
+    return out
+
+
+async def compute_readiness(ctx: dict) -> dict:
+    """Semaforo di oggi: prontezza Google (HRV, FC a riposo, sonno), forma (TSB) e
+    motivi recenti di "Non la faccio". Best-effort: senza Google resta verde."""
+    today = date.today()
+    score, stale = None, False
+    if google_health.is_authenticated():
+        try:
+            ov = await google_health.fetch_health_overview(today - timedelta(days=27), today)
+            score = (ov.get("score") or {}).get("score")
+        except google_health.GoogleHealthError as e:
+            logger.info("Readiness without fresh Google data: %s", e)
+    with Session(engine) as s:
+        prog = active_program(s)
+        motives = recent_motives(s, prog, today)
+        last = jl(prog.readiness_json, {}) if prog else {}
+    if score is None and last.get("score") is not None:
+        # Google a volte risponde 503: un errore passeggero non deve far diventare
+        # verde il semaforo -> ultima prontezza valida se recente
+        try:
+            age = datetime.utcnow() - datetime.fromisoformat(last.get("at", ""))
+        except ValueError:
+            age = timedelta(days=1)
+        if age < timedelta(hours=READINESS_MAX_AGE_H):
+            score, stale = last["score"], True
+    rd = P.readiness(score, (ctx.get("form") or {}).get("tsb"), motives)
+    rd["score"] = score
+    if stale:
+        rd["why"].append("dato di prontezza delle ultime ore (Google non ha risposto)")
+    return rd
+
+
 async def _recalc(ctx: dict, why: str) -> dict | None:
     today = date.today()
     anchors = ctx["anchors"]
     sex = anchors[2]
     stats = {"created": 0, "updated": 0, "proposals": 0, "removed": 0, "linked": 0}
+    with Session(engine) as s:
+        if not active_program(s):
+            return None
+    rd = await compute_readiness(ctx)          # rete: fuori dalla sessione DB
+    rd_note = (f" · semaforo {rd['level']}: {', '.join(rd['why'])}"
+               if rd["factor"] < 1 else "")
     with Session(engine) as s:
         prog = active_program(s)
         if not prog:
@@ -218,7 +420,8 @@ async def _recalc(ctx: dict, why: str) -> dict | None:
             fam = family(ps.sport)
             w = next((w for w in ws if w.start_date.date() == ps.date.date()
                       and family(w.sport) == fam and w.id not in linked
-                      and (w.moving_s or 0) / 60 >= AUTOLINK_MIN_SHARE * (ps.duration_min or 0)),
+                      and (w.moving_s or 0) / 60 >= AUTOLINK_MIN_SHARE * (ps.duration_min or 0)
+                      and not get_setting(_nolink_key(ps.id, w.id))),   # annullato a mano
                      None)
             if w:
                 ps.done, ps.workout_id, ps.proposal_json = True, w.id, None
@@ -269,8 +472,15 @@ async def _recalc(ctx: dict, why: str) -> dict | None:
                     ext_loads.append(ext_est[k][0])
                 else:
                     planned.append((k, sl.get("sport", ""), dur, sl.get("intensity", "media")))
+            # semaforo: abbassa solo oggi e domani (il recupero è un segnale a breve)
+            levels = ({k: pos["multiplier"] * rd["factor"] for k, *_ in planned
+                       if P.is_proposal_day(date.fromisoformat(k.split("@")[1]), today)}
+                      if rd["factor"] < 1 else None)
             alloc.update(P.allocate(target, done_load, ext_loads, planned, sex,
-                                    rates=rates, family=family, level=pos["multiplier"]))
+                                    rates=rates, family=family, level=pos["multiplier"],
+                                    levels=levels))
+            for k in levels or {}:
+                alloc[k]["note"] = rd_note
             weeks[wk] = {"pos": pos, "target": target, "done": done_load}
 
         # 4) per ogni istanza: crea l'esterna, decide cosa riempire con l'AI
@@ -308,7 +518,7 @@ async def _recalc(ctx: dict, why: str) -> dict | None:
                     cur_rpe, cur_dur = prop.get("rpe_target"), prop.get("duration_min")
                 if not P.needs_update(cur_rpe, cur_dur, a["rpe"], a["duration"]):
                     ex.reason = P.reason_text(wi["pos"], a, wi["target"], wi["done"],
-                                              rpe=ex.rpe_target)
+                                              rpe=ex.rpe_target) + a.get("note", "")
                     s.add(ex)
                     continue
             to_fill.append({"key": k, "slot": sl, "date": d, "alloc": a,
@@ -364,7 +574,7 @@ async def _recalc(ctx: dict, why: str) -> dict | None:
                 "duration_min": P._int(c.get("duration_min"), a["duration"], 5, 480),
                 "rpe_target": a["rpe"],
                 "structure_json": _clean_structure(c.get("structure")) if sl.get("indoor") else None,
-                "reason": P.reason_text(wi["pos"], a, wi["target"], wi["done"]),
+                "reason": P.reason_text(wi["pos"], a, wi["target"], wi["done"]) + a.get("note", ""),
             }
             ex = s.get(PlanSession, f["existing_id"]) if f["existing_id"] else None
             if ex is None:
@@ -391,6 +601,7 @@ async def _recalc(ctx: dict, why: str) -> dict | None:
                                           ("agganciate", stats["linked"])) if v]
         prog.last_recalc_at = datetime.utcnow()
         prog.last_recalc_log = (why + ": " if why else "") + (", ".join(parts) or "nessuna modifica")
+        prog.readiness_json = json.dumps({**rd, "at": datetime.utcnow().isoformat()})
         s.add(prog)
         s.commit()
     logger.info("Program recalc (%s): %s", why, stats)

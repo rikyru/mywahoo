@@ -4,6 +4,7 @@ import logging
 import secrets
 import calendar as pycal
 import os
+import re
 from collections import defaultdict
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
@@ -12,7 +13,7 @@ from urllib.parse import urlencode
 import markdown as md
 from fastapi import (BackgroundTasks, Depends, FastAPI, File, Form, HTTPException,
                      Request, UploadFile)
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import func
@@ -1551,6 +1552,13 @@ async def _nightly_recompute_loop() -> None:
             await _import_activities_and_recalc("notturno", push_nutrition=False)
         except Exception as e:  # noqa: BLE001
             logger.warning("Nightly program recalc failed: %s", e)
+        # il lunedì: pagella della settimana appena chiusa (una chiamata AI, in cache)
+        if date.today().weekday() == 0:
+            try:
+                await program_runner.weekly_report(
+                    programmod.monday(date.today()) - timedelta(days=7), _hr_anchors())
+            except Exception as e:  # noqa: BLE001
+                logger.warning("Weekly report failed: %s", e)
         try:
             if nutrition.is_configured():
                 ok = await nutrition.recompute_and_push()
@@ -1729,6 +1737,10 @@ async def plan_session_undo(plan_id: int, sid: int, next: str = Form("")):
                 w = session.get(Workout, ps.workout_id)
                 if w and w.manual:
                     session.delete(w)
+                elif w and ps.kind:
+                    # attività reale agganciata in automatico: l'utente dice che non è
+                    # questa seduta -> il ricalcolo non deve riagganciarla
+                    set_setting(program_runner._nolink_key(ps.id, w.id), "1")
             ps.done = False
             ps.workout_id = None
             session.add(ps)
@@ -1805,7 +1817,13 @@ def program_page(request: Request):
     wsum = program_runner.week_summary(_hr_anchors()) or {}
     pos = wsum.get("pos") or programmod.block_position(today, today, 1, [1.0])
     target, done_load = wsum.get("target", 0.0), wsum.get("done", 0.0)
+    last_monday = programmod.monday(today) - timedelta(days=7)
+    report = program_runner.cached_report(last_monday)
     return templates.TemplateResponse(request, "program.html", {
+        "readiness": wsum.get("readiness"), "extras": wsum.get("extras") or [],
+        "body": program_runner.body_reminders(),
+        "report": report, "report_week": last_monday,
+        "report_html": md.markdown(report.get("text") or "") if report else "",
         "prog": prog, "pos": pos, "block_label": programmod.block_label(pos),
         "target": round(target), "done_load": round(done_load),
         "days": days, "proposals": proposals, "today": today.isoformat(),
@@ -1930,6 +1948,95 @@ def _recalc_msg(st: dict | None) -> str:
                                               ("proposals", "proposte"), ("removed", "tolte"),
                                               ("linked", "agganciate")) if st.get(k)]
     return "ricalcolo: " + (", ".join(parts) or "nessuna modifica")
+
+
+@app.post("/workout/{workout_id}/rate", dependencies=[Depends(require_auth)])
+async def workout_rate(workout_id: int, rpe: str = Form(""), note: str = Form("")):
+    """Valutazione a spanne di un'attività senza FC: RPE 1-10 + due parole. Il
+    carico di quell'attività passa da "tipico dello sport" alla tua sensazione."""
+    try:
+        val = max(1.0, min(10.0, float(rpe.replace(",", "."))))
+    except ValueError:
+        return RedirectResponse(f"/?{urlencode({'error': 'RPE non valido (1-10)'})}", status_code=303)
+    with Session(engine) as session:
+        w = session.get(Workout, workout_id)
+        if not w:
+            raise HTTPException(404)
+        w.rpe = val
+        if note.strip():
+            w.notes = ((w.notes or "") + "\n" + note.strip()).strip()
+        session.add(w)
+        session.commit()
+    _kick_program("valutazione seduta")
+    return RedirectResponse(f"/?{urlencode({'msg': 'Valutazione salvata'})}", status_code=303)
+
+
+@app.get("/api/ha/status")
+async def ha_status(request: Request):
+    """Per Home Assistant (sensore REST + automazioni): seduta di oggi, proposte in
+    attesa, semaforo, promemoria, credito AI. Auth: lo stesso token condiviso della
+    bilancia (header x-webhook-token o ?token=)."""
+    tok = request.headers.get("x-webhook-token") or request.query_params.get("token", "")
+    if not settings.body_webhook_token or not secrets.compare_digest(
+            str(tok), settings.body_webhook_token):
+        raise HTTPException(401)
+    today = date.today()
+    out: dict = {"date": today.isoformat(), "today": [], "pending_proposals": 0,
+                 "readiness": None}
+    with Session(engine) as session:
+        prog = program_runner.active_program(session)
+        if prog and prog.plan_id:
+            rows = session.exec(select(PlanSession).where(
+                PlanSession.plan_id == prog.plan_id,
+                PlanSession.date >= datetime.combine(today, time.min),
+                PlanSession.date <= datetime.combine(today + timedelta(days=1), time.max))).all()
+            for ps in rows:
+                prop = program_runner.jl(ps.proposal_json, {})
+                if prop and not prop.get("rejected"):
+                    out["pending_proposals"] += 1
+                if ps.date.date() == today:
+                    out["today"].append({"title": ps.title, "sport": ps.sport,
+                                         "minutes": ps.duration_min, "rpe": ps.rpe_target,
+                                         "state": "fatta" if ps.done else
+                                         "saltata" if ps.skipped else "da fare"})
+            rd = program_runner.jl(prog.readiness_json, {})
+            out["readiness"] = rd.get("level")
+    body = program_runner.body_reminders()
+    credit = ai_usage.credit_status()
+    out.update({"weigh_due": body["weigh_due"], "measure_due": body["measure_due"],
+                "ai_credit_low": credit["low"], "ai_credit_remaining": credit["remaining"]})
+    todo = [t for t in out["today"] if t["state"] == "da fare"]
+    out["summary"] = (f"Oggi: {todo[0]['title']} ({todo[0]['minutes']}′)" if todo
+                      else "Oggi niente da fare" if not out["today"] else "Fatto per oggi ✓")
+    return JSONResponse(out)
+
+
+@app.post("/program/report", dependencies=[Depends(require_auth)])
+async def program_report(week: str = Form("")):
+    """Genera (o rigenera) la pagella della settimana indicata (default: la scorsa)."""
+    monday = _parse_date(week) or (programmod.monday(date.today()) - timedelta(days=7))
+    data = await program_runner.weekly_report(programmod.monday(monday), _hr_anchors(), force=True)
+    if not data:
+        return _program_redirect(error="Nessun programma attivo per quella settimana")
+    return _program_redirect(msg="Pagella aggiornata")
+
+
+@app.get("/program/session/{sid}/workout.{fmt}", dependencies=[Depends(require_auth)])
+def program_session_export(sid: int, fmt: str):
+    """Scarica la seduta strutturata dei rulli (.zwo per Zwift/MyWhoosh…, .mrc generico)."""
+    if fmt not in ("zwo", "mrc"):
+        raise HTTPException(404)
+    with Session(engine) as session:
+        ps = session.get(PlanSession, sid)
+        steps = program_runner.jl(ps.structure_json, []) if ps else []
+        title, desc = (ps.title, ps.description) if ps else ("", "")
+    if not steps:
+        raise HTTPException(404, "Questa seduta non ha una struttura a intervalli")
+    body = (programmod.to_zwo(title, steps, desc) if fmt == "zwo"
+            else programmod.to_mrc(title, steps))
+    fname = re.sub(r"[^A-Za-z0-9_-]+", "_", title)[:60] or "seduta"
+    return Response(content=body, media_type="application/xml" if fmt == "zwo" else "text/plain",
+                    headers={"Content-Disposition": f'attachment; filename="{fname}.{fmt}"'})
 
 
 @app.post("/program/recalc", dependencies=[Depends(require_auth)])
@@ -2685,9 +2792,17 @@ def dashboard(request: Request, win: str = "30", end: str = "",
     _, form_summary = _fitness_series()
     upcoming = _upcoming_sessions()
 
+    with Session(engine) as session:
+        # attività recenti senza FC né valutazione: il carico resterebbe stimato a occhio
+        to_rate = [w for w in session.exec(select(Workout).where(
+            Workout.start_date >= datetime.utcnow() - timedelta(days=3))
+            .order_by(Workout.start_date.desc())).all()
+            if not w.avg_hr and not w.rpe and (w.moving_s or 0) >= 600]
     return templates.TemplateResponse(request, "dashboard.html", {
         "user": wahoo.get_user_name(),
         "credit": ai_usage.credit_status(),
+        "body": program_runner.body_reminders(),
+        "to_rate": to_rate,
         "form": form_summary, "upcoming": upcoming,
         "last_workout": max(workouts, key=lambda w: w.start_date) if workouts else None,
         "window": window, "windows": WINDOWS,
@@ -2995,11 +3110,19 @@ def _estimated_ftp() -> dict | None:
     with Session(engine) as session:
         rides = session.exec(select(Workout).where(Workout.start_date >= cutoff)).all()
     best20, best5 = [], []
+    real20, real5 = [], []        # uscite con potenza MISURATA (rulli smart, misuratore)
     for r in rides:
-        if google_health._sport_family(r.sport) != "bike" or r.avg_power:
+        if google_health._sport_family(r.sport) != "bike":
             continue
         s = fitmod.load_streams(r.id)
         if not s:
+            continue
+        if r.avg_power and any(s.get("power") or []):
+            pw = cyclingmod._fill(s.get("power") or [])
+            if (b := cyclingmod.best_rolling_avg(s["t"], pw, 1200)):
+                real20.append(round(b))
+            if (b5 := cyclingmod.best_rolling_avg(s["t"], pw, 300)):
+                real5.append(round(b5))
             continue
         power = cyclingmod.estimate_power_series(s, mass)   # compute once, reuse
         b = cyclingmod.best_rolling_avg(s["t"], power, 1200)
@@ -3008,13 +3131,17 @@ def _estimated_ftp() -> dict | None:
         b5 = cyclingmod.best_rolling_avg(s["t"], power, 300)
         if b5:
             best5.append(round(b5))
+    # con potenza reale disponibile (rulli/misuratore) la stima dal GPS non serve più
+    if real20:
+        best20, best5 = real20, real5 or best5
     # miglior 20' robusto (ignora un picco isolato) × 0.95, come il grafico eFTP
     best20_robust = cyclingmod.robust_best(best20)
     ftp = round(best20_robust * 0.95) if best20_robust else None
     wkg = round(ftp / weight, 2) if ftp else None
     # best 5-min power feeds the cycling VO2max estimate (artifact-robust max)
     peak5 = cyclingmod.robust_best(best5)
-    val = ({"ftp": ftp, "wkg": wkg, "n_rides": len(best20), "best_5min": peak5}
+    val = ({"ftp": ftp, "wkg": wkg, "n_rides": len(best20), "best_5min": peak5,
+            "source": "potenza reale" if real20 else "stimato dal GPS"}
            if ftp or peak5 else None)
     _FTP_CACHE["v"] = {"at": datetime.utcnow(), "val": val}
     return val

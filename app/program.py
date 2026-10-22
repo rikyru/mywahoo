@@ -198,11 +198,13 @@ def nominal_load(sport: str, intensity: str, dur: float, sex: str = "M",
 
 def allocate(target: float, done_load: float, external_loads: list[float],
              planned: list[tuple], sex: str = "M", rates: dict | None = None,
-             family=_lower_family, level: float = 1.0) -> dict:
+             family=_lower_family, level: float = 1.0,
+             levels: dict | None = None) -> dict:
     """Ripartisce il budget residuo sugli slot PIANIFICATI rimasti nella settimana.
 
     planned: [(key, sport, duration_min, intensity)]; rates: taratura (calibrate);
-    level: moltiplicatore della settimana nel blocco (il livello del piano).
+    level: moltiplicatore della settimana nel blocco (il livello del piano);
+    levels: {key: livello} per singola seduta (es. semaforo giallo su oggi).
     ASIMMETRICO: se hai già fatto di più (nuoto pesante, extra) le sedute si
     alleggeriscono fino a LIGHTEST × livello; se hai fatto di meno restano al
     livello del piano — non si "recupera" il carico perso con sedute più dure.
@@ -216,13 +218,135 @@ def allocate(target: float, done_load: float, external_loads: list[float],
     for k, s, d, i in planned:
         nom = noms[k]
         share = remaining * nom / tot if tot else nom
-        lo, hi = LIGHTEST * level, level
+        lv = (levels or {}).get(k, level)
+        lo, hi = LIGHTEST * lv, lv
         tgt = min(max(share, lo * nom), hi * nom) if nom else 0.0
         ratio = tgt / nom if nom else 1.0
         rpe = rpe_for_load(load_at(nominal_rpe(s, i), d, sex) * ratio, d, sex)
         out[k] = {"load": round(tgt), "rpe": rpe, "duration": int(d),
                   "nominal": round(nom), "ratio": round(ratio, 2)}
     return out
+
+
+# ------------------------------------------------------------ semaforo recupero
+
+READINESS_FACTOR = {"verde": 1.0, "giallo": 0.85, "rosso": LIGHTEST}
+_LEVELS = ["verde", "giallo", "rosso"]
+
+
+def readiness(score: float | None, tsb: float | None, recent_motives: list[str]) -> dict:
+    """Semaforo di oggi dai segnali di recupero. `score`: indice di prontezza 0-100
+    (HRV, FC a riposo, sonno vs la tua media; None = non disponibile); `tsb`: forma
+    (CTL−ATL); `recent_motives`: motivi delle sedute saltate negli ultimi 2 giorni.
+    Ritorna {level, factor, why}: il factor abbassa il livello delle sedute di oggi
+    e domani (mai le alza)."""
+    why = []
+    lvl = 0
+    if score is None:
+        why.append("dati di recupero non disponibili")
+    elif score < 40:
+        lvl = 2
+        why.append(f"prontezza bassa ({round(score)}/100)")
+    elif score < 60:
+        lvl = 1
+        why.append(f"prontezza nella media bassa ({round(score)}/100)")
+    else:
+        why.append(f"prontezza buona ({round(score)}/100)")
+    if tsb is not None and tsb < -20:
+        lvl = max(lvl, 1)
+        why.append(f"affaticamento accumulato (forma {round(tsb)})")
+    if "dolore" in recent_motives:
+        lvl = 2
+        why.append("hai segnalato dolore o malessere")
+    elif "stanco" in recent_motives:
+        lvl = max(lvl, 1)
+        why.append("hai segnalato stanchezza")
+    level = _LEVELS[lvl]
+    return {"level": level, "factor": READINESS_FACTOR[level], "why": why}
+
+
+# ------------------------------------------------------------ export sedute rulli
+
+def to_zwo(title: str, steps: list[dict], description: str = "") -> str:
+    """Seduta strutturata -> file .zwo (Zwift, MyWhoosh e altre app): blocchi a
+    potenza costante in frazione di FTP, con cadenza se indicata."""
+    from xml.sax.saxutils import escape, quoteattr
+    blocks = []
+    for st in steps:
+        secs = int(round(float(st.get("min") or 0) * 60))
+        if secs <= 0:
+            continue
+        attrs = f'Duration="{secs}" Power="{float(st.get("pct_ftp") or 0) / 100:.2f}"'
+        if st.get("rpm"):
+            attrs += f' Cadence="{int(st["rpm"])}"'
+        blocks.append(f"    <SteadyState {attrs}>"
+                      + (f'<textevent timeoffset="0" message={quoteattr(st["note"])}/>' if st.get("note") else "")
+                      + "</SteadyState>")
+    return ("<workout_file>\n  <author>mywahoo</author>\n"
+            f"  <name>{escape(title)}</name>\n  <description>{escape(description)}</description>\n"
+            "  <sportType>bike</sportType>\n  <tags/>\n  <workout>\n"
+            + "\n".join(blocks) + "\n  </workout>\n</workout_file>\n")
+
+
+def to_mrc(title: str, steps: list[dict]) -> str:
+    """Seduta strutturata -> file .mrc (minuti / % FTP), il formato testuale che
+    quasi tutte le app di allenamento indoor importano."""
+    rows, t = [], 0.0
+    for st in steps:
+        mins = float(st.get("min") or 0)
+        if mins <= 0:
+            continue
+        pct = float(st.get("pct_ftp") or 0)
+        rows.append(f"{t:.2f}\t{pct:.0f}")
+        t += mins
+        rows.append(f"{t:.2f}\t{pct:.0f}")
+    return ("[COURSE HEADER]\nVERSION = 2\nUNITS = ENGLISH\n"
+            f"DESCRIPTION = {title}\nFILE NAME = {title}\nMINUTES PERCENT\n"
+            "[END COURSE HEADER]\n[COURSE DATA]\n" + "\n".join(rows)
+            + "\n[END COURSE DATA]\n")
+
+
+# ------------------------------------------------------------ punteggi settimanali
+
+def _clamp100(x: float) -> int:
+    return int(round(max(0.0, min(100.0, x))))
+
+
+def training_score(planned: int, done: int, load_done: float, load_target: float) -> int | None:
+    """Costanza (sedute fatte / previste, 70%) + carico vicino al previsto (30%)."""
+    if not planned:
+        return None
+    completion = min(1.0, done / planned)
+    ratio = (load_done / load_target) if load_target else 1.0
+    closeness = max(0.0, 1.0 - abs(1.0 - ratio))
+    return _clamp100(100 * (0.7 * completion + 0.3 * closeness))
+
+
+def recovery_score(wellness: list[float], sleep_h: list[float]) -> int | None:
+    """Prontezza media della settimana (70%) + sonno medio rispetto a 7,5 h (30%)."""
+    if not wellness and not sleep_h:
+        return None
+    parts, weights = [], []
+    if wellness:
+        parts.append(sum(wellness) / len(wellness))
+        weights.append(0.7)
+    if sleep_h:
+        parts.append(min(100.0, (sum(sleep_h) / len(sleep_h)) / 7.5 * 100))
+        weights.append(0.3)
+    return _clamp100(sum(p * w for p, w in zip(parts, weights)) / sum(weights))
+
+
+def nutrition_score(day_balances: list[float], protein_per_kg: float | None,
+                    protein_target_per_kg: float | None) -> int | None:
+    """Giorni con il consumato entro ±150 kcal dall'obiettivo periodizzato (60%) +
+    proteine rispetto all'obiettivo (40%). None senza dati tracciati."""
+    if not day_balances:
+        return None
+    in_range = sum(1 for b in day_balances if abs(b) <= 150) / len(day_balances)
+    if protein_per_kg and protein_target_per_kg:
+        prot = min(1.0, protein_per_kg / protein_target_per_kg)
+        return _clamp100(100 * (0.6 * in_range + 0.4 * prot))
+    return _clamp100(100 * in_range)
 
 
 def needs_update(old_rpe: float | None, old_dur: int | None,

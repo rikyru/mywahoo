@@ -138,6 +138,45 @@ def test_allocate_redistributes_and_clamps():
     assert all(abs(v["ratio"] - 0.7) < 0.001 for v in out.values())
 
 
+def test_readiness_traffic_light():
+    assert P.readiness(75, -5, [])["level"] == "verde"
+    assert P.readiness(50, -5, [])["level"] == "giallo"
+    assert P.readiness(30, -5, [])["level"] == "rosso"
+    assert P.readiness(75, -25, [])["level"] == "giallo"            # affaticamento accumulato
+    assert P.readiness(75, 0, ["stanco"])["level"] == "giallo"      # "Non la faccio: stanco"
+    assert P.readiness(75, 0, ["dolore"])["level"] == "rosso"
+    r = P.readiness(None, None, [])
+    assert r["level"] == "verde" and r["factor"] == 1.0 and "non disponibili" in r["why"][0]
+
+
+def test_readiness_lowers_only_today_sessions():
+    planned = [("oggi", "Corpo libero", 45, "intensa"), ("dopo", "Corpo libero", 45, "intensa")]
+    out = P.allocate(1e6, 0, [], planned, levels={"oggi": P.READINESS_FACTOR["giallo"]})
+    assert out["oggi"]["ratio"] == 0.85 and out["dopo"]["ratio"] == 1.0
+    assert out["oggi"]["rpe"] < out["dopo"]["rpe"]
+
+
+def test_weekly_scores():
+    assert P.training_score(5, 5, 100, 100) == 100
+    assert P.training_score(5, 4, 80, 100) == round(100 * (0.7 * 0.8 + 0.3 * 0.8))
+    assert P.training_score(0, 0, 0, 0) is None
+    assert P.recovery_score([60, 70], [7.5, 7.5]) == round(0.7 * 65 + 0.3 * 100)
+    assert P.recovery_score([], []) is None
+    assert P.nutrition_score([0, 100, -400, 50], 1.6, 2.0) == round(100 * (0.6 * 0.75 + 0.4 * 0.8))
+    assert P.nutrition_score([], 1.6, 2.0) is None
+
+
+def test_workout_exports():
+    steps = [{"min": 10, "pct_ftp": 55, "rpm": 90, "note": "riscaldamento"},
+             {"min": 2.5, "pct_ftp": 105, "rpm": None, "note": "Z4 <dura>"}]
+    zwo = P.to_zwo("Soglia & co", steps)
+    assert '<SteadyState Duration="600" Power="0.55" Cadence="90">' in zwo
+    assert 'Duration="150" Power="1.05">' in zwo
+    assert "Soglia &amp; co" in zwo and "&lt;dura&gt;" in zwo          # XML escapato
+    mrc = P.to_mrc("Soglia", steps)
+    assert "0.00\t55\n10.00\t55\n10.00\t105\n12.50\t105" in mrc
+
+
 def test_needs_update_thresholds():
     assert P.needs_update(None, None, 6, 45)
     assert not P.needs_update(6.0, 45, 6.5, 48)

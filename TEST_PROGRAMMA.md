@@ -1,77 +1,59 @@
-# Programma adattivo — periodo di test
+# Programma adattivo — test
 
-**Stato: IN TEST dal 22/10/2026 al ~05/11/2026.** Niente nuove feature sul programma
-finché non finisce la prova; poi si decide cosa semplificare e cosa costruire.
+**Stato: IN TEST dal 22/10/2026**, con tutto il pacchetto attivo (deciso di testare
+tutto insieme invece di procedere a tappe). A fine prova: cosa tenere, cosa
+semplificare, cosa togliere.
 
-## Cosa c'è (M1, commit 92efea2)
-Programma con settimana tipo (slot pianificati/esterni, "sab o dom", intensità,
-routine fisse come il core del PT), blocchi da 4 settimane con scarico, assenze.
-Solo i prossimi 10 giorni diventano sedute; ricalcolo notturno e a ogni evento,
-budget di carico (CTL×7×moltiplicatore − fatto) → RPE target, proposte per
-oggi/domani, chat che traduce in azioni. Codice: `app/program.py` (motore puro),
-`app/program_runner.py`, route `/program` in `app/main.py`.
+## Cosa c'è
+- **Programma** (`/program`): settimana tipo (slot pianificati/esterni, "sab o dom",
+  intensità, routine fisse come il core del PT, indoor/rulli), blocchi da 4 settimane
+  con scarico, assenze. Solo i prossimi 10 giorni diventano sedute.
+- **Motore**: target = la settimana tipo stessa (carichi tarati sul tuo storico FC:
+  corpo libero 0,49 TRIMP/min, nuoto 0,92, bici 1,12, camminata 0,32) × moltiplicatore
+  del blocco + nuoto previsto. **Asimmetrico**: se hai fatto di più le sedute si
+  alleggeriscono fino al −30%, se hai fatto di meno restano come da piano.
+- **Semaforo recupero**: prontezza (HRV, FC a riposo, sonno vs tua media), forma (TSB),
+  "Non la faccio: stanco/dolore" → giallo ×0,85 / rosso ×0,7 su oggi e domani. Se Google
+  non risponde usa l'ultima prontezza delle 12 ore.
+- **Proposte** per oggi/domani (Accetta / Tieni com'era); "Non la faccio" con motivo e,
+  per la bici sab-o-dom, sposta o salta la settimana.
+- **Un solo coach** (dashboard, Salute, Programma) che propone azioni sul programma da
+  confermare con "Applica".
+- **Import automatico** da Google ogni 2 ore (+ notte): le sedute registrate col Pixel si
+  spuntano da sole.
+- **Attività fuori programma** visibili nel Programma (≥25′ contano nel carico).
+- **Promemoria** pesata (7 gg) e misure col metro (21 gg), con trend peso e girovita.
+- **Card "Com'è andata?"** in dashboard per le rare attività senza FC (RPE + note).
+- **Pagella settimanale**: voti allenamento / recupero / alimentazione + commento AI,
+  generata il lunedì notte (o a mano).
+- **Rulli**: sedute a intervalli in % FTP con watt, export **.zwo** e **.mrc**; l'FTP passa
+  da "stimato dal GPS" a "potenza reale" appena ci sono uscite con potenza misurata.
+- **Home Assistant**: `GET /api/ha/status?token=<BODY_WEBHOOK_TOKEN>` → seduta di oggi,
+  proposte in attesa, semaforo, promemoria, credito AI (`summary` pronto per una notifica).
+- **Credito OpenAI** stimato in Impostazioni, con avviso in dashboard.
 
-Setup del test: bici disattivata finché non arrivano i rulli (forse 31/10).
-All'arrivo: slot bici attivo + indoor, "rulli smart" in attrezzatura, prima
-seduta trasformata in test FTP (l'FTP attuale, 145 W, è stimato dal GPS).
+Setup: bici disattivata finché non arrivano i rulli (forse 31/10). All'arrivo: slot bici
+attivo + indoor, "rulli smart" in attrezzatura, prima seduta → test FTP.
 
 ## Cosa annotare (una riga a settimana)
 1. Ho seguito le sedute proposte o le ho cambiate spesso?
-2. Le proposte di modifica le accettavo o le rifiutavo?
+2. Proposte (motore e coach): le accettavo o le rifiutavo?
 3. L'RPE target mi diceva qualcosa, o guardavo solo il contenuto?
-4. Cose fastidiose: sedute assurde, motivi incomprensibili, cose fatte a mano.
+4. Il semaforo era credibile (giallo/rosso quando mi sentivo davvero stanco)?
+5. La pagella del lunedì mi è servita o l'ho ignorata?
+6. Cose fastidiose: sedute assurde, motivi incomprensibili, cose fatte a mano.
 
 ## Diario del test
 - Settimana 1 (22/10 → 01/11):
 - Settimana 2 (02/11 → 08/11):
 
-## Motore rivisto il 22/10, prima dell'inizio del test
-Quasi tutte le attività hanno FC misurata (Pixel Watch a casa/nuoto/camminate,
-fascia in bici), quindi:
-- **Taratura sullo storico**: il carico "tipo" di uno sport è il TRIMP/min mediano
-  misurato (ultimi 90 gg, sedute ≥25′). Valori reali: corpo libero 0,49, nuoto 0,92,
-  bici 1,12, camminata 0,32 (la formula generica dava ~1,7 al corpo libero).
-- **Target = la settimana tipo stessa** (pianificate tarate × moltiplicatore + nuoto
-  previsto), non più CTL×7: d'inverno, senza bici, il CTL estivo era irraggiungibile.
-- **Asimmetrico**: se hai fatto di più (nuoto pesante, escursione) le sedute si
-  alleggeriscono fino al −30%; se hai fatto di meno restano come da piano (niente
-  recupero dei carichi persi). Contano anche le attività che realizzano uno slot
-  (stesso giorno/sport) e gli extra ≥25′; i tragitti brevi sono attività di fondo.
-- **Import automatico da Google ogni 2 ore** (+ notte): la seduta registrata col Pixel
-  si spunta da sola e il budget si aggiorna senza premere Sync.
+## Dubbi aperti
+- Se l'RPE target non serve → regole leggibili al posto del budget.
+- Pagella: "alimentazione" conta i giorni entro ±150 kcal dall'obiettivo; con i pasti
+  non tutti tracciati può risultare severa.
+- Caso noto: annullare una seduta agganciata in automatico ora la scollega per sempre
+  da quell'attività (corretto), ma la seduta resta "da fare".
 
-## Dubbi aperti (dal confronto sull'overengineering)
-- **Il motore era più preciso dei dati** → in gran parte risolto dalla revisione sopra.
-  Resta da verificare nel test se l'RPE target serve; se no → regole leggibili
-  (scarico ogni 4ª settimana, alleggerire con recupero basso, salta = sposta o togli).
-- ~~Troppe superfici~~ **fatto il 22/10 (72da0ce)**: Programma unica pagina
-  dell'allenamento (Piani in archivio), **un solo coach** (dashboard, Salute,
-  Programma) che propone azioni sul programma da confermare con "Applica";
-  il box Proposte resta per le modifiche decise dal motore su oggi/domani.
-  Da osservare nel test: il coach sceglie le azioni giuste? (es. "niente bici
-  questo weekend" → salta + assenza sab-dom, così non la sposta a domenica).
-- **M3 (punteggi/pagella)** solo se dopo il test ne sento davvero la mancanza.
-
-## Appunti da fare dopo il test (piccoli)
-- ~~Bici "sab o dom": sposta a domenica / salta la settimana~~ **fatto il 22/10**: "Non
-  la faccio" con motivo (riposo, stanco, fuori casa, dolore, altro) + nota, e per gli
-  slot sab-o-dom la scelta sposta/salta la settimana; il coach vede i motivi.
-  Il motivo per ora non cambia il calcolo ("stanco" → alleggerire è roba da M2).
-- Attività fuori programma (es. escursione in un giorno libero): già contate nel
-  budget, ma da **mostrare** nella pagina Programma col loro carico.
-- Promemoria **pesata** (~settimanale) e **misure col metro** (~2-4 settimane), con
-  trend nel programma (era previsto in M2 insieme al semaforo recupero).
-- Annullare una seduta agganciata in automatico a un'attività reale: al ricalcolo
-  si riaggancia (caso limite non gestito).
-
-## Roadmap residua (da rivalutare dopo il test)
-- M2: semaforo recupero (HRV/FC riposo/sonno/TSB) nel ricalcolo + card per
-  valutare le sedute senza FC + promemoria pesata/misure.
-- M3: punteggi training/recupero/alimentazione + pagella settimanale.
-- M4: rulli (FTP reale, export workout strutturati) e notifiche via Home Assistant.
-  Notifiche HA rimandate a dopo il test (non falsare "lo apro da solo?"). Design
-  deciso: HA interroga un endpoint JSON di mywahoo (seduta di oggi, proposte in
-  attesa, credito basso, promemoria) e le automazioni stanno in HA. Se durante il
-  test mi dimentico di aprire il Programma → anticiparle (~30 righe).
-
-Costo AI misurato (GPT-5.5, $5 in / $30 out per M token): ~2-5 cent/giorno.
+## Costi AI
+GPT-5.5 ($5 in / $30 out per M token): ~2-5 cent/giorno per il programma + coach +
+pagella settimanale (~1 cent). Credito stimato in Impostazioni.

@@ -58,6 +58,61 @@
   {% if prog.last_recalc_log %}<p class="muted prog-reason">Ultimo ricalcolo · {{ prog.last_recalc_log }}</p>{% endif %}
 </section>
 
+<section class="prog-row">
+  {% if readiness %}
+  <div class="card prog-mini">
+    <h3>{{ {'verde': '🟢', 'giallo': '🟡', 'rosso': '🔴'}.get(readiness.level, '⚪') }} Recupero: {{ readiness.level }}</h3>
+    <p class="muted prog-reason">{{ readiness.why | join(' · ') }}</p>
+    {% if readiness.factor < 1 %}<p class="prog-reason">Oggi e domani le sedute sono alleggerite
+      (×{{ '%g'|format(readiness.factor) }}).</p>{% endif %}
+  </div>
+  {% endif %}
+  <div class="card prog-mini">
+    <h3>⚖️ Corpo</h3>
+    <p class="prog-reason">
+      {% if body.weigh_due %}<strong>Pesati</strong>{% if body.days_since_weigh is not none %} (ultima pesata {{ body.days_since_weigh }} gg fa){% endif %}.
+      {% else %}Ultima pesata {{ body.days_since_weigh }} gg fa{% if body.last_weight %}: {{ body.last_weight }} kg{% endif %}.{% endif %}
+      {% if body.trend_kg_week is not none %}Trend {{ '%+.2f'|format(body.trend_kg_week) }} kg/sett.{% endif %}
+    </p>
+    <p class="prog-reason">
+      {% if body.measure_due %}<strong>Prendi le misure col metro</strong>{% if body.days_since_measure is not none %} (ultime {{ body.days_since_measure }} gg fa){% endif %} — <a href="/health">Salute</a>.
+      {% else %}Misure di {{ body.days_since_measure }} gg fa.{% endif %}
+      {% if body.waist_delta_cm is not none %}Girovita {{ '%+.1f'|format(body.waist_delta_cm) }} cm in {{ body.waist_span_days }} gg.{% endif %}
+    </p>
+  </div>
+</section>
+
+{% if report %}
+<section class="card">
+  <div class="card-head">
+    <h3>Pagella settimana {{ report_week.strftime('%d/%m') }}</h3>
+    <form method="post" action="/program/report"
+          onsubmit="const b=this.querySelector('button');b.disabled=true;b.textContent='Rigenero…';">
+      <button class="btn btn-secondary" type="submit">↻</button>
+    </form>
+  </div>
+  <section class="kpi-row">
+    {% for k, lbl in [('allenamento', 'Allenamento'), ('recupero', 'Recupero'), ('alimentazione', 'Alimentazione')] %}
+    {% set v = report.scores[k] %}
+    <div class="kpi"><span class="kpi-value {{ 'bal-ok' if v is not none and v >= 70 else ('bal-over' if v is not none and v >= 50 else 'bal-under') }}">{{ v if v is not none else '–' }}</span>
+      <span class="kpi-label">{{ lbl }}</span></div>
+    {% endfor %}
+  </section>
+  {% if report_html %}<div class="ai-analysis">{{ report_html | safe }}</div>{% endif %}
+</section>
+{% else %}
+<section class="card">
+  <div class="card-head">
+    <h3>Pagella settimana {{ report_week.strftime('%d/%m') }}</h3>
+    <form method="post" action="/program/report"
+          onsubmit="const b=this.querySelector('button');b.disabled=true;b.textContent='Calcolo…';">
+      <button class="btn btn-secondary" type="submit">Genera</button>
+    </form>
+  </div>
+  <p class="muted">Voti di allenamento, recupero e alimentazione con un commento. Si genera da sola ogni lunedì notte.</p>
+</section>
+{% endif %}
+
 {% if proposals %}
 <section class="card prog-proposals">
   <h3>Proposte da confermare</h3>
@@ -116,6 +171,9 @@
   {% if s.description %}<p class="plan-session-desc">{{ v.desc }}</p>{% endif %}
 
   {% if v.steps %}
+  <p class="prog-reason">Scarica per l'app dei rulli:
+    <a href="/program/session/{{ s.id }}/workout.zwo">.zwo</a> (Zwift, MyWhoosh…) ·
+    <a href="/program/session/{{ s.id }}/workout.mrc">.mrc</a> (formato generico)</p>
   <div class="nutri-table-wrap">
     <table class="nutri-table prog-steps">
       <thead><tr><th>Step</th><th>Min</th><th>% FTP</th><th>Watt</th><th>Cadenza</th><th>Nota</th></tr></thead>
@@ -192,6 +250,18 @@
 </section>
 {% endfor %}
 {% endfor %}
+
+{% if extras %}
+<section class="card">
+  <h3>Fuori programma questa settimana</h3>
+  <ul class="prog-list">
+    {% for e in extras %}
+    <li><a href="/workout/{{ e.id }}">{{ e.date.strftime('%d/%m') }} · {{ e.name }}</a> · {{ e.min }}′ · {{ e.load }} TRIMP
+      <span class="muted">· {{ 'conta nel carico: le prossime sedute si alleggeriscono se serve' if e.counted else 'attività di fondo (breve)' }}</span></li>
+    {% endfor %}
+  </ul>
+</section>
+{% endif %}
 
 <section class="card">
   <h3>Assenze</h3>

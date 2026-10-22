@@ -712,6 +712,26 @@ salta una seduta di uno slot "pick: one" (es. bici sab o dom) il motore la spost
 da solo all'altro giorno, a meno di "intera_settimana": true."""
 
 
+WEEKLY_REPORT_PROMPT = """\
+Sei il coach dell'atleta e scrivi la PAGELLA della settimana appena chiusa. Ricevi
+tre voti 0-100 già calcolati (allenamento, recupero, alimentazione; null = dati
+mancanti) e i numeri da cui derivano. NON ricalcolare i voti: spiegali.
+Italiano, Markdown, massimo ~150 parole, in questo formato:
+**Com'è andata** — 2-3 frasi che citano i numeri chiave (sedute fatte/previste,
+carico, sonno/prontezza, kcal e proteine).
+**Da migliorare** — 1-2 punti concreti, legati al voto più basso.
+**Settimana prossima** — 1 indicazione pratica, coerente col blocco (se è scarico,
+dillo). Se un voto manca, dillo in una frase senza inventare. Tono diretto, niente
+frasi motivazionali vuote."""
+
+
+async def weekly_report_text(payload: dict) -> str:
+    """Commento della pagella settimanale (i voti li calcola il codice)."""
+    if (who := _profile.ai_context()):
+        payload = {**payload, "atleta": who}
+    return await _call_claude(WEEKLY_REPORT_PROMPT, _dumps(payload))
+
+
 async def program_prefill(notes: str, athlete: dict | None = None) -> dict | None:
     """Memoria AI dell'atleta -> configurazione strutturata del programma."""
     payload = {"memoria_atleta": notes or ""}

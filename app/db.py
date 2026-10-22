@@ -102,6 +102,7 @@ class Program(SQLModel, table=True):
     conversation_id: Optional[int] = None
     last_recalc_at: Optional[datetime] = None
     last_recalc_log: str = ""
+    readiness_json: str = ""       # ultimo semaforo di recupero {level, factor, why, at}
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 
@@ -344,6 +345,7 @@ _MIGRATIONS = {
     "trainingplan": [("conversation_id", "INTEGER")],
     "climbeffort": [("kind", "TEXT DEFAULT 'climb'"), ("path_json", "TEXT DEFAULT '[]'")],
     "customsegment": [("source_workout_id", "INTEGER")],
+    "program": [("readiness_json", "TEXT DEFAULT ''")],
 }
 
 
