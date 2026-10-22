@@ -18,7 +18,7 @@ from sqlmodel import Session, select
 from . import google_health
 from . import profile as profilemod
 from .config import settings
-from .db import BodyMeasure, PlanSession, engine
+from .db import BodyMeasure, PlanSession, Workout, engine
 
 logger = logging.getLogger(__name__)
 
@@ -199,35 +199,70 @@ def _session_kcal(sport: str, minutes: int | None) -> float:
     return (minutes or 0) * rate
 
 
-def periodized_daily(base_kcal: float, days: int = 7) -> dict:
-    """Target per-giorno per i prossimi `days`: ai giorni con sessione pianificata
-    (non ancora fatta) somma le kcal stimate dell'allenamento al target base.
-    Mappa {data ISO: {kcal, training_note}}; i giorni senza allenamento sono
-    omessi (useranno il target piatto)."""
-    start = date.today()
-    end = start + timedelta(days=days - 1)
-    lo = datetime.combine(start, time.min)
-    hi = datetime.combine(end, time.max)
-    with Session(engine) as s:
-        rows = s.exec(select(PlanSession).where(
-            PlanSession.date != None,  # noqa: E711
-            PlanSession.date >= lo, PlanSession.date <= hi,
-            PlanSession.done == False)).all()  # noqa: E712
-    by_date: dict = {}
-    for ps in rows:
-        iso = ps.date.date().isoformat()
-        by_date.setdefault(iso, []).append(ps)
-    out: dict = {}
-    for iso, sessions in by_date.items():
-        extra = sum(_session_kcal(p.sport, p.duration_min) for p in sessions)
-        if extra <= 0:
+def _agg_training(items: list[tuple]) -> dict:
+    """items: [(iso_date, sport, minutes)] -> {iso: {"kcal": float, "parts": [str]}}
+    sommando le kcal stimate per giorno."""
+    by: dict = {}
+    for iso, sport, mins in items:
+        k = _session_kcal(sport, mins)
+        if k <= 0:
             continue
-        note = " + ".join(f"{p.sport} {p.duration_min}′" for p in sessions if p.duration_min)
-        entry = {"kcal": round(base_kcal + extra)}
+        d = by.setdefault(iso, {"kcal": 0.0, "parts": []})
+        d["kcal"] += k
+        if mins:
+            d["parts"].append(f"{sport} {mins}′")
+    return by
+
+
+def _periodize(base_kcal: float, planned: list[tuple], actual: list[tuple]) -> dict:
+    """Core puro della periodizzazione. `planned`/`actual` sono liste
+    (iso_date, sport, minuti): le sessioni PIANIFICATE non ancora fatte e le
+    ATTIVITÀ realmente svolte. Per ogni giorno il surplus è il MASSIMO tra reale
+    e pianificato (il reale vince a parità), così:
+    - un giorno futuro è guidato dal piano (carburante in anticipo);
+    - oggi prima di allenarti usa comunque il piano (pre-fuel);
+    - quando ti alleni e segni la sessione «fatta» il surplus NON sparisce,
+      perché subentra l'attività reale di quel giorno.
+    Ritorna {iso: {kcal, training_note}}; i giorni senza allenamento sono omessi."""
+    plan_by, real_by = _agg_training(planned), _agg_training(actual)
+    out: dict = {}
+    for iso in set(plan_by) | set(real_by):
+        p, r = plan_by.get(iso), real_by.get(iso)
+        chosen = r if (r and (not p or r["kcal"] >= p["kcal"])) else p
+        if not chosen or chosen["kcal"] <= 0:
+            continue
+        entry = {"kcal": round(base_kcal + chosen["kcal"])}
+        note = " + ".join(chosen["parts"])
         if note:
             entry["training_note"] = note
         out[iso] = entry
     return out
+
+
+def periodized_daily(base_kcal: float, days: int = 7) -> dict:
+    """Target per-giorno per i prossimi `days`: a ogni giorno con allenamento
+    somma al target base le kcal stimate, prese dall'ATTIVITÀ REALE svolta quando
+    c'è (così il surplus riflette ciò che hai fatto e non sparisce quando segni la
+    sessione «fatta») e altrimenti dalla sessione PIANIFICATA non ancora fatta.
+    Vedi _periodize per la regola del massimo."""
+    start = date.today()
+    end = start + timedelta(days=days - 1)
+    today = start
+    lo = datetime.combine(start, time.min)
+    hi = datetime.combine(end, time.max)
+    with Session(engine) as s:
+        planned = [(p.date.date().isoformat(), p.sport, p.duration_min)
+                   for p in s.exec(select(PlanSession).where(
+                       PlanSession.date != None,  # noqa: E711
+                       PlanSession.date >= lo, PlanSession.date <= hi,
+                       PlanSession.done == False)).all()]  # noqa: E712
+        actual = [(w.start_date.date().isoformat(),
+                   google_health.canonical_sport(w.sport),
+                   round((w.moving_s or 0) / 60))
+                  for w in s.exec(select(Workout).where(
+                      Workout.start_date >= lo, Workout.start_date <= hi)).all()
+                  if w.start_date.date() <= today]   # solo giorni correnti/passati
+    return _periodize(base_kcal, planned, actual)
 
 
 async def recompute_and_push() -> bool:
