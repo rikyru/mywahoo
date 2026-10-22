@@ -31,10 +31,12 @@ seduta trasformata in test FTP (l'FTP attuale, 145 W, è stimato dal GPS).
   settimana tipo vale ~1,4× il carico sostenuto). Se l'RPE target non serve →
   sostituire il budget con regole leggibili (scarico ogni 4ª settimana,
   alleggerire con recupero basso, salta = sposta o togli).
-- **Troppe superfici** (Piani, Programma, chat coach/programma/seduta). Proposta:
-  Programma unica pagina dell'allenamento (Piani classici in archivio), **un solo
-  coach** con le azioni del programma come strumenti, ogni modifica nel box
-  Proposte (Accetta / Tieni com'era). Da fare dopo il test.
+- ~~Troppe superfici~~ **fatto il 22/10 (72da0ce)**: Programma unica pagina
+  dell'allenamento (Piani in archivio), **un solo coach** (dashboard, Salute,
+  Programma) che propone azioni sul programma da confermare con "Applica";
+  il box Proposte resta per le modifiche decise dal motore su oggi/domani.
+  Da osservare nel test: il coach sceglie le azioni giuste? (es. "niente bici
+  questo weekend" → salta + assenza sab-dom, così non la sposta a domenica).
 - **M3 (punteggi/pagella)** solo se dopo il test ne sento davvero la mancanza.
 
 ## Appunti da fare dopo il test (piccoli)
