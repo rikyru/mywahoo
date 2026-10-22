@@ -53,8 +53,10 @@ fascia in bici), quindi:
 - **M3 (punteggi/pagella)** solo se dopo il test ne sento davvero la mancanza.
 
 ## Appunti da fare dopo il test (piccoli)
-- Bici "sab o dom": alla rinuncia scegliere **sposta a domenica** / **salta la settimana**
-  (oggi "Salta" sposta sempre); la chat deve chiedere, non decidere.
+- ~~Bici "sab o dom": sposta a domenica / salta la settimana~~ **fatto il 22/10**: "Non
+  la faccio" con motivo (riposo, stanco, fuori casa, dolore, altro) + nota, e per gli
+  slot sab-o-dom la scelta sposta/salta la settimana; il coach vede i motivi.
+  Il motivo per ora non cambia il calcolo ("stanco" → alleggerire è roba da M2).
 - Attività fuori programma (es. escursione in un giorno libero): già contate nel
   budget, ma da **mostrare** nella pagina Programma col loro carico.
 - Promemoria **pesata** (~settimanale) e **misure col metro** (~2-4 settimane), con

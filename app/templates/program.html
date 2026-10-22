@@ -151,10 +151,27 @@
         <button type="submit" class="btn">Conferma</button>
       </form>
     </details>
-    <form method="post" action="/program/session/{{ s.id }}/skip"
-          onsubmit="const b=this.querySelector('button');b.disabled=true;b.textContent='Ricalcolo…';">
-      <button class="btn btn-secondary" type="submit">Salta</button>
-    </form>
+    <details class="plan-done">
+      <summary class="btn btn-secondary">Non la faccio</summary>
+      <form method="post" action="/program/session/{{ s.id }}/skip" class="plan-edit-form"
+            onsubmit="const b=this.querySelector('button');b.disabled=true;b.textContent='Ricalcolo…';">
+        <div class="prog-flags">
+          {% for k, lbl in [("riposo", "riposo"), ("stanco", "stanco"), ("fuori", "fuori casa / impegno"),
+                            ("dolore", "dolore o malessere"), ("altro", "altro")] %}
+          <label><input type="radio" name="motive" value="{{ k }}" {% if loop.first %}checked{% endif %}> {{ lbl }}</label>
+          {% endfor %}
+        </div>
+        <label>Nota <span class="muted">(facoltativa)</span>
+          <input type="text" name="note" maxlength="200" placeholder="es. riunione fino a tardi"></label>
+        {% if v.pick_one %}
+        <div class="prog-flags">
+          <label><input type="radio" name="scope" value="move" checked> spostala all'altro giorno</label>
+          <label><input type="radio" name="scope" value="week"> salta questa settimana</label>
+        </div>
+        {% endif %}
+        <button type="submit" class="btn btn-secondary">Conferma</button>
+      </form>
+    </details>
     <details class="plan-done">
       <summary class="btn btn-secondary">Modifica</summary>
       <form method="post" action="/plans/{{ prog.plan_id }}/session/{{ s.id }}/edit" class="plan-edit-form">

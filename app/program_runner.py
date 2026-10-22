@@ -473,13 +473,51 @@ def reject_proposal(sid: int) -> bool:
     return True
 
 
-def skip_session(sid: int) -> bool:
+SKIP_MOTIVES = {"riposo": "riposo", "stanco": "stanco", "fuori": "fuori casa / impegno",
+                "dolore": "dolore o malessere", "altro": "altro"}
+
+
+def _skip(s, prog: Program, ps: PlanSession, motive: str = "", note: str = "",
+          whole_week: bool = False) -> None:
+    """Segna la seduta come non fatta, col motivo. Per uno slot «uno dei giorni»
+    (bici sab o dom) `whole_week` la toglie anche dagli altri giorni della
+    settimana, invece di lasciarla spostare dal motore."""
+    label = SKIP_MOTIVES.get(motive, motive or "")
+    why = "saltata" + (f" — {label}" if label else "") + (f": {note.strip()}" if note.strip() else "")
+    ps.skipped, ps.proposal_json, ps.reason = True, None, why[:300]
+    s.add(ps)
+    if not whole_week or not ps.slot_id or not ps.date:
+        return
+    slot = next((x for x in jl(prog.template_json, []) if x.get("id") == ps.slot_id), None)
+    if not slot or slot.get("pick") != "one":
+        return
+    wk = P.monday(ps.date.date())
+    for dnum in slot.get("days") or []:
+        d = wk + timedelta(days=int(dnum))
+        if d == ps.date.date():
+            continue
+        other = s.exec(select(PlanSession).where(
+            PlanSession.plan_id == prog.plan_id, PlanSession.slot_id == ps.slot_id,
+            PlanSession.date >= datetime.combine(d, time.min),
+            PlanSession.date <= datetime.combine(d, time.max))).first()
+        if other and other.done:
+            continue
+        if other is None:   # segnaposto "saltata": impedisce al motore di spostarla qui
+            other = PlanSession(plan_id=prog.plan_id, order=_order(d, slot, [slot]),
+                                day_label=_day_label(d), date=datetime.combine(d, time(12, 0)),
+                                title=ps.title, sport=ps.sport, duration_min=ps.duration_min,
+                                slot_id=ps.slot_id, kind=ps.kind)
+        other.skipped, other.proposal_json = True, None
+        other.reason = why[:300] + " (tutta la settimana)"
+        s.add(other)
+
+
+def skip_session(sid: int, motive: str = "", note: str = "", whole_week: bool = False) -> bool:
     with Session(engine) as s:
         ps = _own_session(s, sid)
         if not ps or ps.done:
             return False
-        ps.skipped, ps.proposal_json = True, None
-        s.add(ps)
+        _skip(s, active_program(s), ps, motive, note, whole_week)
         s.commit()
     return True
 
@@ -533,9 +571,10 @@ def apply_actions(azioni: list) -> list[str]:
             elif t == "salta":
                 ps = s.get(PlanSession, a.get("session_id")) if isinstance(a.get("session_id"), int) else None
                 if ps and ps.plan_id == prog.plan_id and not ps.done:
-                    ps.skipped, ps.proposal_json = True, None
-                    s.add(ps)
-                    done.append(f"saltata {ps.day_label} {ps.title}")
+                    _skip(s, prog, ps, str(a.get("motivo") or ""), "",
+                          bool(a.get("intera_settimana")))
+                    done.append(f"saltata {ps.day_label} {ps.title}"
+                                + (" (tutta la settimana)" if a.get("intera_settimana") else ""))
             elif t == "modifica_seduta":
                 ps = s.get(PlanSession, a.get("session_id")) if isinstance(a.get("session_id"), int) else None
                 if ps and ps.plan_id == prog.plan_id and not ps.done and not ps.skipped:
@@ -626,6 +665,7 @@ def chat_context(ctx: dict) -> dict | None:
                  "titolo": p.title, "tipo": p.kind, "durata_min": p.duration_min,
                  "rpe_target": p.rpe_target,
                  "stato": "fatta" if p.done else "saltata" if p.skipped else "da fare",
+                 **({"motivo": p.reason} if p.skipped and p.reason else {}),
                  # contenuto solo per le prossime da fare: serve per adattarle
                  **({"contenuto": (p.description or "")[:500]}
                     if not p.done and not p.skipped and p.date.date() <= today + timedelta(days=3)

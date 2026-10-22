@@ -1793,6 +1793,7 @@ def program_page(request: Request):
                  "routines": [{**routines[r], "html": exercisesmod.linkify(routines[r].get("content", ""))}
                               for r in slot.get("routines") or [] if r in routines],
                  "steps": steps, "indoor": slot.get("indoor"),
+                 "pick_one": slot.get("pick") == "one",
                  "past": ps.date.date() < today if ps.date else False,
                  "is_today": ps.date.date() == today if ps.date else False,
                  "proposal": prop if prop and not prop.get("rejected") else None}
@@ -1938,11 +1939,18 @@ async def program_recalc():
 
 
 @app.post("/program/session/{sid}/{action}", dependencies=[Depends(require_auth)])
-async def program_session_action(sid: int, action: str):
-    fn = {"skip": program_runner.skip_session, "unskip": program_runner.unskip_session,
-          "accept": program_runner.accept_proposal,
-          "reject": program_runner.reject_proposal}.get(action)
-    if not fn or not fn(sid):
+async def program_session_action(sid: int, action: str, request: Request):
+    form = await request.form()
+    if action == "skip":     # "Non la faccio": motivo, nota, ed eventualmente tutta la settimana
+        ok = program_runner.skip_session(sid, str(form.get("motive") or ""),
+                                         str(form.get("note") or "")[:200],
+                                         form.get("scope") == "week")
+    else:
+        fn = {"unskip": program_runner.unskip_session,
+              "accept": program_runner.accept_proposal,
+              "reject": program_runner.reject_proposal}.get(action)
+        ok = bool(fn and fn(sid))
+    if not ok:
         return _program_redirect(error="Azione non valida su questa seduta")
     if action in ("skip", "unskip"):
         st, err = await _program_recalc_now("seduta saltata" if action == "skip" else "seduta ripristinata")

@@ -694,7 +694,9 @@ Azioni possibili (usa solo queste):
  {"tipo": "assenza", "start": "YYYY-MM-DD", "end": "YYYY-MM-DD", "note": "...",
   "allowed": ["sport ancora possibili; lista vuota = nessun allenamento"]}
  {"tipo": "rimuovi_assenza", "index": intero}
- {"tipo": "salta", "session_id": intero}
+ {"tipo": "salta", "session_id": intero, "motivo": "riposo|stanco|fuori|dolore|altro",
+  "intera_settimana": bool}   (intera_settimana solo per slot "pick: one" come la bici
+   sab o dom: true = non spostarla all'altro giorno; se l'atleta non lo dice, chiediglielo)
  {"tipo": "modifica_seduta", "session_id": intero, "title": "...", "description": "...",
   "duration_min": intero, "rpe": numero}   (adatta UNA seduta: piove, poco tempo,
    stanchezza… Scrivi il contenuto completo sostitutivo, a carico equivalente salvo
@@ -706,8 +708,8 @@ Azioni possibili (usa solo queste):
  {"tipo": "fine", "date": "YYYY-MM-DD"}
  {"tipo": "nota", "testo": "..."}   (aggiunge alle note del programma)
 Risolvi i giorni relativi rispetto a OGGI. Non toccare sedute già fatte. Se l'atleta
-salta una seduta di uno slot "pick: one" (es. bici sab o dom) basta "salta": il
-motore la sposta da solo all'altro giorno."""
+salta una seduta di uno slot "pick: one" (es. bici sab o dom) il motore la sposta
+da solo all'altro giorno, a meno di "intera_settimana": true."""
 
 
 async def program_prefill(notes: str, athlete: dict | None = None) -> dict | None:
