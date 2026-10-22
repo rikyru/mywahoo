@@ -2003,7 +2003,7 @@ async def nutrition_push_targets():
     if not res:
         return JSONResponse({"error": "Serve una pesata con BMR (sali sulla bilancia)"},
                             status_code=400)
-    daily = nutrition.periodized_daily(res["targets"]["kcal"])
+    daily = nutrition.periodized_map(res["targets"]["kcal"])
     allow_upscale = (res["basis"].get("goal") != "cut") or bool(daily)
     ok = await nutrition.push_targets(res["targets"], allow_upscale=allow_upscale, daily=daily)
     if not ok:

@@ -239,30 +239,41 @@ def _periodize(base_kcal: float, planned: list[tuple], actual: list[tuple]) -> d
     return out
 
 
-def periodized_daily(base_kcal: float, days: int = 7) -> dict:
-    """Target per-giorno per i prossimi `days`: a ogni giorno con allenamento
-    somma al target base le kcal stimate, prese dall'ATTIVITÀ REALE svolta quando
-    c'è (così il surplus riflette ciò che hai fatto e non sparisce quando segni la
-    sessione «fatta») e altrimenti dalla sessione PIANIFICATA non ancora fatta.
-    Vedi _periodize per la regola del massimo."""
-    start = date.today()
-    end = start + timedelta(days=days - 1)
-    today = start
-    lo = datetime.combine(start, time.min)
+def periodized_map(base_kcal: float, back_days: int = 180, fwd_days: int = 6) -> dict:
+    """Mappa {iso: {kcal, training_note}} dei giorni con allenamento nella finestra
+    [oggi-back_days, oggi+fwd_days]. Le sessioni PIANIFICATE contano solo da oggi in
+    avanti (carburante per ciò che devi ancora fare); i giorni PASSATI e oggi usano
+    l'ATTIVITÀ REALE svolta (Workout sincronizzati), così lo storico riflette ciò
+    che hai davvero fatto e il surplus non dipende dal flag «fatta». Per data si
+    prende il massimo tra reale e pianificato (vedi _periodize).
+
+    Inviando SEMPRE la mappa completa (passato incluso), planmydinner — che
+    sovrascrive la periodizzazione a ogni push — mantiene storicamente i target
+    corretti dei giorni di allenamento, anche a ritroso."""
+    today = date.today()
+    end = today + timedelta(days=fwd_days)
+    back_start = today - timedelta(days=back_days)
+    lo_plan = datetime.combine(today, time.min)        # pianificato: da oggi in poi
     hi = datetime.combine(end, time.max)
+    lo_act = datetime.combine(back_start, time.min)     # reale: finestra passata..oggi
+    hi_today = datetime.combine(today, time.max)
     with Session(engine) as s:
         planned = [(p.date.date().isoformat(), p.sport, p.duration_min)
                    for p in s.exec(select(PlanSession).where(
                        PlanSession.date != None,  # noqa: E711
-                       PlanSession.date >= lo, PlanSession.date <= hi,
+                       PlanSession.date >= lo_plan, PlanSession.date <= hi,
                        PlanSession.done == False)).all()]  # noqa: E712
         actual = [(w.start_date.date().isoformat(),
                    google_health.canonical_sport(w.sport),
                    round((w.moving_s or 0) / 60))
                   for w in s.exec(select(Workout).where(
-                      Workout.start_date >= lo, Workout.start_date <= hi)).all()
-                  if w.start_date.date() <= today]   # solo giorni correnti/passati
+                      Workout.start_date >= lo_act, Workout.start_date <= hi_today)).all()]
     return _periodize(base_kcal, planned, actual)
+
+
+def periodized_daily(base_kcal: float, days: int = 7) -> dict:
+    """Solo la finestra oggi→+(days-1), senza storico (compat). Vedi periodized_map."""
+    return periodized_map(base_kcal, back_days=0, fwd_days=days - 1)
 
 
 async def recompute_and_push() -> bool:
@@ -271,8 +282,10 @@ async def recompute_and_push() -> bool:
     res = await build_targets_auto()
     if not res:
         return False
-    # Periodizzazione: più kcal nei giorni di allenamento pianificato.
-    daily = periodized_daily(res["targets"]["kcal"])
+    # Periodizzazione: più kcal nei giorni di allenamento. Mandiamo anche lo
+    # storico (back_days) coi target corretti dall'attività reale, così lo Storico
+    # di planmydinner non sottostima i giorni allenati del passato.
+    daily = periodized_map(res["targets"]["kcal"])
     # In a cut, portions may only shrink — MA nei giorni di allenamento la
     # periodizzazione deve poter aumentare le porzioni (carburante guadagnato),
     # quindi se ci sono bump consentiamo l'upscale.
