@@ -320,7 +320,9 @@
             <td class="nutri-act">{{ r.allenamento or '—' }}</td>
             <td>{% if r.kcal is not none %}{{ r.kcal | round | int }}{% else %}–{% endif %}</td>
             <td>{% if r.obiettivo_kcal is not none %}{{ r.obiettivo_kcal | round | int }}{% else %}–{% endif %}</td>
-            {% if r.saldo_vs_obiettivo is not none %}
+            {% if r.in_corso %}
+            <td class="muted">in corso{% if r.saldo_vs_obiettivo is not none %} ({{ '%+d'|format(r.saldo_vs_obiettivo | round | int) }}){% endif %}</td>
+            {% elif r.saldo_vs_obiettivo is not none %}
             <td class="{{ 'bal-under' if r.saldo_vs_obiettivo < -150 else ('bal-over' if r.saldo_vs_obiettivo > 150 else 'bal-ok') }}">{{ '%+d'|format(r.saldo_vs_obiettivo | round | int) }}</td>
             {% else %}<td>–</td>{% endif %}
           </tr>

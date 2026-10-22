@@ -348,8 +348,11 @@ async def today_nutrition() -> dict | None:
     prof = settings.planmydinner_profile
     today = date.today().isoformat()
     async with httpx.AsyncClient(timeout=10) as client:
+        # solo pasti mangiati: la card dice quanto hai mangiato FINORA, non dà per
+        # mangiata la cena pianificata
         j = await _get(client, base, "/integration/summary",
-                       {"profile_id": prof, "start_date": today, "end_date": today})
+                       {"profile_id": prof, "start_date": today, "end_date": today,
+                        "consumed_only": "true"})
     if not j:
         return None
     day = (j.get("days") or [{}])[0]
@@ -377,9 +380,11 @@ async def fetch_nutrition(start: date, end: date) -> dict | None:
     prof = settings.planmydinner_profile
 
     async with httpx.AsyncClient(timeout=15) as client:
+        # solo pasti mangiati davvero (come lo Storico di planmydinner): un pasto
+        # pianificato ma non registrato non conta come mangiato
         summary = await _get(client, base, "/integration/summary",
                              {"profile_id": prof, "start_date": start.isoformat(),
-                              "end_date": end.isoformat()})
+                              "end_date": end.isoformat(), "consumed_only": "true"})
         profile = await _get(client, base, f"/profiles/{prof}", {})
 
     return _shape(summary, profile, start, end, profilemod.load().get("weight_kg"))
@@ -411,8 +416,9 @@ def _shape(summary, profile, start: date, end: date, weight_kg) -> dict | None:
     if avg.get("days_with_data"):
         prot = avg.get("protein_g")
         macros = {
-            "nota": "valori dei PASTI TRACCIATI (pasti pianificati), non "
-                    "necessariamente l'intero introito giornaliero",
+            "nota": "valori dei soli PASTI REGISTRATI COME MANGIATI (più colazione/"
+                    "spuntini di routine), non necessariamente l'intero introito; la "
+                    "giornata di oggi è IN CORSO",
             "giorni_con_dati": avg.get("days_with_data"),
             "kcal_medie": _r(avg.get("kcal")),
             "proteine_g_medie": _r(prot),
@@ -439,13 +445,20 @@ def _shape(summary, profile, start: date, end: date, weight_kg) -> dict | None:
                     row["saldo_vs_obiettivo"] = _r(nut["kcal"] - tgt)
             if d.get("training_note"):
                 row["allenamento"] = d["training_note"]
+            if d.get("date") == today_iso:
+                row["in_corso"] = True     # pasti ancora da mangiare: saldo provvisorio
             return row
-        macros["per_giorno"] = [_day_row(d) for d in days
-                                if (d.get("nutrition") or {}).get("kcal") is not None]
-        # aggregate adequacy signal: consumed vs the periodized target
+        today_iso = date.today().isoformat()
+        # niente giorni futuri: con i soli pasti mangiati avrebbero solo la routine
+        real_days = [d for d in days if not d.get("future")
+                     and (d.get("date") or "") <= today_iso
+                     and (d.get("nutrition") or {}).get("kcal") is not None]
+        macros["per_giorno"] = [_day_row(d) for d in real_days]
+        # aggregate adequacy signal: consumed vs the periodized target — solo giorni
+        # CHIUSI (oggi è a metà e sembrerebbe sempre sotto obiettivo)
         bal = [((d.get("nutrition") or {}).get("kcal") - d["target_kcal"], d)
-               for d in days
-               if (d.get("nutrition") or {}).get("kcal") is not None and d.get("target_kcal")]
+               for d in real_days
+               if d.get("target_kcal") and d.get("date") != today_iso]
         if bal:
             saldi = [s for s, _ in bal]
             macros["bilancio_vs_obiettivo"] = {
