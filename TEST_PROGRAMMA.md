@@ -54,5 +54,9 @@ seduta trasformata in test FTP (l'FTP attuale, 145 W, è stimato dal GPS).
   valutare le sedute senza FC + promemoria pesata/misure.
 - M3: punteggi training/recupero/alimentazione + pagella settimanale.
 - M4: rulli (FTP reale, export workout strutturati) e notifiche via Home Assistant.
+  Notifiche HA rimandate a dopo il test (non falsare "lo apro da solo?"). Design
+  deciso: HA interroga un endpoint JSON di mywahoo (seduta di oggi, proposte in
+  attesa, credito basso, promemoria) e le automazioni stanno in HA. Se durante il
+  test mi dimentico di aprire il Programma → anticiparle (~30 righe).
 
 Costo AI misurato (GPT-5.5, $5 in / $30 out per M token): ~2-5 cent/giorno.
