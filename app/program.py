@@ -20,7 +20,7 @@ from . import form as formmod
 
 WINDOW_DAYS = 10          # giorni materializzati come sessioni concrete
 PROPOSAL_DAYS = 1         # oggi + domani: le modifiche diventano proposte
-ALLOC_CLAMP = (0.7, 1.3)  # una seduta non scende/sale oltre questo × il nominale
+LIGHTEST = 0.7            # una seduta scende al massimo a questo × il livello del piano
 RPE_RANGE = (2.0, 9.0)
 WEEKDAYS_IT = ["lun", "mar", "mer", "gio", "ven", "sab", "dom"]
 
@@ -40,9 +40,17 @@ def block_position(start: date, day: date, block_weeks: int,
             "block_weeks": bw, "multiplier": mult, "deload": mult < 0.9}
 
 
-def week_target(ctl: float | None, multiplier: float) -> float:
-    """Carico settimanale target (TRIMP): ciò che sostieni oggi × moltiplicatore."""
-    return max(0.0, float(ctl or 0.0) * 7.0 * float(multiplier))
+def week_budget(planned_week: list[tuple], external_week: list[float], multiplier: float,
+                sex: str = "M", rates: dict | None = None, family=None) -> float:
+    """Carico target della settimana = la settimana tipo stessa: sedute pianificate
+    (tarate) × moltiplicatore del blocco + esterne previste (non scalabili).
+    planned_week: [(key, sport, duration_min, intensity)] di TUTTA la settimana
+    (assenze già escluse). Il budget così serve solo a ribilanciare gli scarti
+    (extra fatti, sedute saltate), non a inseguire un carico cronico che d'inverno,
+    con meno volume, non è raggiungibile."""
+    family = family or _lower_family
+    planned = sum(nominal_load(s, i, d, sex, rates, family) for _, s, d, i in planned_week)
+    return sum(external_week or []) + float(multiplier) * planned
 
 
 def _matches(sport: str, allowed: list[str], family) -> bool:
@@ -158,23 +166,62 @@ def nominal_rpe(sport: str, intensity: str = "media") -> float:
     return formmod.sport_rpe(sport) + INTENSITY_DELTA.get(intensity, 0.0)
 
 
+# Taratura sul proprio storico: il carico di una seduta "media" di uno sport è
+# quello che l'orologio misura di solito (TRIMP da FC) per minuto. L'intensità del
+# giorno lo sposta. Così il budget confronta misurato (fatto) con misurato
+# (previsto), invece di una formula generica RPE→FC che sovrastima/sottostima.
+INTENSITY_FACTOR = {"leggera": 0.7, "media": 1.0, "intensa": 1.25}
+CALIBRATION_MIN_SAMPLES = 3
+CALIBRATION_MIN_MIN = 25      # sotto (es. tragitti in bici) non rappresenta una seduta
+
+
+def calibrate(history: list[tuple]) -> dict:
+    """history: [(family, minutes, measured_load)] -> {family: carico/min mediano},
+    solo per gli sport con abbastanza sedute vere (≥ CALIBRATION_MIN_MIN minuti)."""
+    import statistics
+    by: dict = {}
+    for fam, mins, load in history:
+        if fam and mins and mins >= CALIBRATION_MIN_MIN and load and load > 0:
+            by.setdefault(fam, []).append(load / mins)
+    return {f: statistics.median(v) for f, v in by.items() if len(v) >= CALIBRATION_MIN_SAMPLES}
+
+
+def nominal_load(sport: str, intensity: str, dur: float, sex: str = "M",
+                 rates: dict | None = None, family=_lower_family) -> float:
+    """Carico di una seduta tipo: dal proprio storico se c'è, altrimenti dalla
+    formula generica sull'RPE tipico dello sport."""
+    rate = (rates or {}).get(family(sport))
+    if rate:
+        return rate * dur * INTENSITY_FACTOR.get(intensity, 1.0)
+    return load_at(nominal_rpe(sport, intensity), dur, sex)
+
+
 def allocate(target: float, done_load: float, external_loads: list[float],
-             planned: list[tuple], sex: str = "M") -> dict:
+             planned: list[tuple], sex: str = "M", rates: dict | None = None,
+             family=_lower_family, level: float = 1.0) -> dict:
     """Ripartisce il budget residuo sugli slot PIANIFICATI rimasti nella settimana.
 
-    planned: [(key, sport, duration_min, intensity)]. Ritorna {key: {load, rpe,
-    duration, nominal, ratio}} — ratio = carico assegnato / nominale (1 = seduta tipo)."""
+    planned: [(key, sport, duration_min, intensity)]; rates: taratura (calibrate);
+    level: moltiplicatore della settimana nel blocco (il livello del piano).
+    ASIMMETRICO: se hai già fatto di più (nuoto pesante, extra) le sedute si
+    alleggeriscono fino a LIGHTEST × livello; se hai fatto di meno restano al
+    livello del piano — non si "recupera" il carico perso con sedute più dure.
+    Ritorna {key: {load, rpe, duration, nominal, ratio}} — ratio = carico assegnato
+    / nominale. L'RPE mostrato è quello tipico dello sport e del giorno scalato per
+    ratio: resta sulla scala 1-10 qualunque sia la taratura."""
     remaining = max(0.0, target - done_load - sum(external_loads or []))
-    noms = {k: load_at(nominal_rpe(s, i), d, sex) for k, s, d, i in planned}
+    noms = {k: nominal_load(s, i, d, sex, rates, family) for k, s, d, i in planned}
     tot = sum(noms.values())
     out = {}
-    for k, s, d, _ in planned:
+    for k, s, d, i in planned:
         nom = noms[k]
         share = remaining * nom / tot if tot else nom
-        lo, hi = ALLOC_CLAMP
+        lo, hi = LIGHTEST * level, level
         tgt = min(max(share, lo * nom), hi * nom) if nom else 0.0
-        out[k] = {"load": round(tgt), "rpe": rpe_for_load(tgt, d, sex), "duration": int(d),
-                  "nominal": round(nom), "ratio": round(tgt / nom, 2) if nom else 1.0}
+        ratio = tgt / nom if nom else 1.0
+        rpe = rpe_for_load(load_at(nominal_rpe(s, i), d, sex) * ratio, d, sex)
+        out[k] = {"load": round(tgt), "rpe": rpe, "duration": int(d),
+                  "nominal": round(nom), "ratio": round(ratio, 2)}
     return out
 
 
@@ -277,12 +324,13 @@ def block_label(pos: dict) -> str:
             f"{pos['block_weeks']} ({tag})")
 
 
-def reason_text(pos: dict, alloc: dict | None, target: float, done: float) -> str:
-    """Motivo leggibile della seduta, mostrato in UI."""
+def reason_text(pos: dict, alloc: dict | None, target: float, done: float,
+                rpe: float | None = None) -> str:
+    """Motivo leggibile della seduta, mostrato in UI. `rpe`: quello della seduta
+    salvata quando il contenuto non viene riscritto (scarto sotto soglia)."""
     base = f"{block_label(pos)} · settimana {round(done)}/{round(target)} TRIMP fatti"
     if not alloc:
         return base
-    r = alloc["ratio"]
-    adj = ("più leggera del solito" if r < 0.95 else
-           "più intensa del solito" if r > 1.05 else "seduta tipo")
-    return f"{base} · RPE {alloc['rpe']:g} ({adj})"
+    lighter = alloc["ratio"] < 0.95 * pos["multiplier"]
+    adj = "più leggera: hai già fatto di più" if lighter else "come da piano"
+    return f"{base} · RPE {rpe if rpe is not None else alloc['rpe']:g} ({adj})"

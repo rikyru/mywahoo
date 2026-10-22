@@ -82,6 +82,66 @@ def _external_estimate(session, sport: str, duration: int, anchors) -> tuple[flo
     return P.load_at(rpe, duration, sex), rpe
 
 
+def _rates(s, anchors) -> dict:
+    """Taratura: carico/min mediano per sport dalle attività con FC degli ultimi 90 gg."""
+    hist = s.exec(select(Workout).where(
+        Workout.start_date >= datetime.utcnow() - timedelta(days=90))).all()
+    rates = P.calibrate([(family(w.sport), (w.moving_s or 0) / 60, _wload(w, anchors))
+                         for w in hist if w.avg_hr])
+    logger.info("Program calibration (TRIMP/min): %s", {k: round(v, 2) for k, v in rates.items()})
+    return rates
+
+
+def _week_target_done(s, tpl: list, absences: list, wk: date, multiplier: float,
+                      week_workouts: list, linked: set, anchors, rates: dict) -> tuple:
+    """(target, fatto) della settimana che inizia `wk`.
+
+    target = la settimana tipo completa (assenze escluse): pianificate tarate ×
+    moltiplicatore + esterne previste. fatto = sedute del programma svolte +
+    attività extra da CALIBRATION_MIN_MIN minuti in su (es. un'escursione); i
+    tragitti brevi non agganciati restano attività di fondo."""
+    full = P.expand_slots(tpl, absences, wk, wk + timedelta(days=6), wk, family=family)
+    planned_week, ext_week = [], []
+    for i in full:
+        sl = i["slot"]
+        dur = int(sl.get("duration") or 45)
+        if sl.get("kind") == "external":
+            ext_week.append(_external_estimate(s, sl.get("sport", ""), dur, anchors)[0])
+        else:
+            planned_week.append((_key(sl["id"], i["date"]), sl.get("sport", ""), dur,
+                                 sl.get("intensity", "media")))
+    target = P.week_budget(planned_week, ext_week, multiplier, anchors[2], rates, family)
+    # conta ciò che realizza la settimana tipo (stesso giorno e sport di uno slot,
+    # anche se non agganciato a una seduta: es. fatto prima di creare il programma)
+    template_days = {(family(i["slot"].get("sport", "")), i["date"]) for i in full}
+    done = sum(_wload(w, anchors) for w in week_workouts
+               if w.id in linked or (w.moving_s or 0) / 60 >= P.CALIBRATION_MIN_MIN
+               or (family(w.sport), w.start_date.date()) in template_days)
+    return target, done
+
+
+def week_summary(anchors) -> dict | None:
+    """Carico della settimana corrente per la pagina Programma (stessi conti del
+    ricalcolo, stesse ancore FC): {pos, target, done}."""
+    today = date.today()
+    wk0 = P.monday(today)
+    with Session(engine) as s:
+        prog = active_program(s)
+        if not prog:
+            return None
+        ws = s.exec(select(Workout).where(
+            Workout.start_date >= datetime.combine(wk0, time.min),
+            Workout.start_date <= datetime.combine(today, time.max))).all()
+        linked = {ps.workout_id for ps in s.exec(select(PlanSession).where(
+            PlanSession.workout_id != None)).all()}  # noqa: E711
+        pos = P.block_position(prog.start_date.date(), today, prog.block_weeks,
+                               jl(prog.block_multipliers_json, [1.0]))
+        target, done = _week_target_done(
+            s, jl(prog.template_json, []), jl(prog.absences_json, []), wk0,
+            pos["multiplier"], ws, linked, anchors, _rates(s, anchors))
+    return {"pos": pos, "target": target, "done": done}
+
+
 def _day_label(d: date) -> str:
     return f"{P.WEEKDAYS_IT[d.weekday()].capitalize()} {d.strftime('%d/%m')}"
 
@@ -183,14 +243,17 @@ async def _recalc(ctx: dict, why: str) -> dict | None:
         inst = P.expand_slots(tpl, absences, today, end, today, family=family,
                               keep_day=keep_day, skipped=skipped, done_days=done_days)
 
-        # 3) budget per settimana -> intensità di ogni seduta pianificata
+        # 3) budget per settimana -> intensità di ogni seduta pianificata, con il
+        #    carico "tipo" di ogni sport tarato sullo storico misurato (FC)
+        rates = _rates(s, anchors)
         alloc: dict = {}
         weeks: dict = {}
         ext_est: dict = {}
         for wk in sorted({P.monday(i["date"]) for i in inst}):
             pos = P.block_position(start_p, wk, prog.block_weeks, mults)
-            target = P.week_target(ctx.get("ctl"), pos["multiplier"])
-            done_load = sum(_wload(w, anchors) for w in ws) if wk == wk0 else 0.0
+            target, done_load = _week_target_done(
+                s, tpl, absences, wk, pos["multiplier"], ws if wk == wk0 else [],
+                linked, anchors, rates)
             ext_loads, planned = [], []
             for i in inst:
                 if P.monday(i["date"]) != wk:
@@ -206,7 +269,8 @@ async def _recalc(ctx: dict, why: str) -> dict | None:
                     ext_loads.append(ext_est[k][0])
                 else:
                     planned.append((k, sl.get("sport", ""), dur, sl.get("intensity", "media")))
-            alloc.update(P.allocate(target, done_load, ext_loads, planned, sex))
+            alloc.update(P.allocate(target, done_load, ext_loads, planned, sex,
+                                    rates=rates, family=family, level=pos["multiplier"]))
             weeks[wk] = {"pos": pos, "target": target, "done": done_load}
 
         # 4) per ogni istanza: crea l'esterna, decide cosa riempire con l'AI
@@ -243,7 +307,8 @@ async def _recalc(ctx: dict, why: str) -> dict | None:
                 if prop and not prop.get("rejected") and not prop.get("remove"):
                     cur_rpe, cur_dur = prop.get("rpe_target"), prop.get("duration_min")
                 if not P.needs_update(cur_rpe, cur_dur, a["rpe"], a["duration"]):
-                    ex.reason = P.reason_text(wi["pos"], a, wi["target"], wi["done"])
+                    ex.reason = P.reason_text(wi["pos"], a, wi["target"], wi["done"],
+                                              rpe=ex.rpe_target)
                     s.add(ex)
                     continue
             to_fill.append({"key": k, "slot": sl, "date": d, "alloc": a,

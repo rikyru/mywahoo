@@ -62,6 +62,7 @@ async def on_startup() -> None:
                 settings.app_name, settings.ai_provider, settings.ai_model,
                 settings.db_path, settings.fit_dir)
     _fire_and_forget(_nightly_recompute_loop())   # ricalcolo target notturno
+    _fire_and_forget(_activity_import_loop())     # Pixel Watch (Google) ogni 2 ore
 
 
 # ---------------------------------------------------------------- helpers
@@ -1490,6 +1491,42 @@ def _kick_program(why: str) -> None:
     _fire_and_forget(run())
 
 
+IMPORT_EVERY_S = 2 * 3600   # attività dal Pixel Watch (Google): ogni 2 ore
+
+
+async def _import_activities_and_recalc(why: str, push_nutrition: bool = True) -> dict | None:
+    """Importa le attività nuove da Google (Pixel Watch: casa, nuoto, camminate),
+    unisce i doppioni coi segnaposto del piano, poi ricalcola il programma — così
+    la seduta fatta si spunta da sola e il budget della settimana si aggiorna
+    senza premere Sync."""
+    if google_health.is_authenticated():
+        try:
+            n = await google_health.enrich_workouts(max_pages=2)
+            if n:
+                logger.info("Periodic Google import (%s): %s workouts created/updated", why, n)
+                reconcile_plan_duplicates()
+        except google_health.GoogleHealthError as e:
+            logger.warning("Periodic Google import skipped (%s): %s", why, e)
+    st = await program_runner.recalc(_program_ctx(), why)
+    if push_nutrition and st and nutrition.is_configured() and any(
+            st[k] for k in ("created", "updated", "removed", "linked")):
+        await nutrition.recompute_and_push()
+    return st
+
+
+async def _activity_import_loop() -> None:
+    """Ogni IMPORT_EVERY_S: import da Google + ricalcolo del programma.
+    Best-effort: gli errori non fermano il loop."""
+    import asyncio
+    logger.info("Activity import loop started (every %ss)", IMPORT_EVERY_S)
+    while True:
+        await asyncio.sleep(IMPORT_EVERY_S)
+        try:
+            await _import_activities_and_recalc("import periodico")
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Periodic import/recalc failed: %s", e)
+
+
 async def _nightly_recompute_loop() -> None:
     """Ricalcola e ri-invia i target a planmydinner ogni notte (03:00 locali),
     così il fabbisogno segue peso e allenamenti anche senza pesarsi o rigenerare
@@ -1507,11 +1544,11 @@ async def _nightly_recompute_loop() -> None:
         if nxt <= now:
             nxt += timedelta(days=1)
         await asyncio.sleep(max(60.0, (nxt - now).total_seconds()))
-        # prima il programma (il nuovo giorno entra nella finestra), poi i target
-        # nutrizionali, così la periodizzazione vede le sedute appena create
+        # prima le attività del giorno (Pixel Watch via Google) e il programma (il
+        # nuovo giorno entra nella finestra), poi i target nutrizionali, così la
+        # periodizzazione vede le sedute appena create
         try:
-            st = await program_runner.recalc(_program_ctx(), "notturno")
-            logger.info("Nightly program recalc: %s", st)
+            await _import_activities_and_recalc("notturno", push_nutrition=False)
         except Exception as e:  # noqa: BLE001
             logger.warning("Nightly program recalc failed: %s", e)
         try:
@@ -1742,15 +1779,6 @@ def program_page(request: Request):
             PlanSession.plan_id == prog.plan_id,
             PlanSession.date >= datetime.combine(wk0, time.min))
             .order_by(PlanSession.date, PlanSession.order)).all() if prog.plan_id else []
-        ws = session.exec(select(Workout).where(
-            Workout.start_date >= datetime.combine(wk0, time.min),
-            Workout.start_date <= datetime.combine(today, time.max))).all()
-        mults = jl(prog.block_multipliers_json, [1.0])
-        pos = programmod.block_position(prog.start_date.date(), today, prog.block_weeks, mults)
-        _, summary = _fitness_series()
-        target = programmod.week_target((summary or {}).get("ctl"), pos["multiplier"])
-        anchors = _hr_anchors()
-        done_load = sum(program_runner._wload(w, anchors) for w in ws)
         ftp_w = (_estimated_ftp() or {}).get("ftp")
 
         days: dict = {}
@@ -1773,6 +1801,9 @@ def program_page(request: Request):
                 proposals.append(v)
             key = ps.date.date().isoformat() if ps.date else "—"
             days.setdefault(key, {"label": ps.day_label, "items": []})["items"].append(v)
+    wsum = program_runner.week_summary(_hr_anchors()) or {}
+    pos = wsum.get("pos") or programmod.block_position(today, today, 1, [1.0])
+    target, done_load = wsum.get("target", 0.0), wsum.get("done", 0.0)
     return templates.TemplateResponse(request, "program.html", {
         "prog": prog, "pos": pos, "block_label": programmod.block_label(pos),
         "target": round(target), "done_load": round(done_load),

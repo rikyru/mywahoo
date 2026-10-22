@@ -79,19 +79,63 @@ def test_allocate_keeps_day_intent_when_squeezed():
     assert out["mar"]["rpe"] < out["sab"]["rpe"] < out["gio"]["rpe"]
 
 
+def test_week_budget_is_the_template_itself():
+    # se segui il piano, il target coincide col nominale delle sedute (× moltiplicatore)
+    # più le esterne previste: niente rincorsa a un carico cronico irraggiungibile
+    rates = {"corpo libero": 0.5}
+    planned = [("gio", "Corpo libero", 45, "intensa"), ("mar", "Corpo libero", 25, "leggera")]
+    nom = 45 * 0.5 * 1.25 + 25 * 0.5 * 0.7
+    assert P.week_budget(planned, [60.0, 60.0], 1.1, rates=rates) == 120 + 1.1 * nom
+    # a inizio settimana (niente fatto) le sedute escono esattamente × moltiplicatore
+    out = P.allocate(P.week_budget(planned, [60.0, 60.0], 1.1, rates=rates), 0,
+                     [60.0, 60.0], planned, rates=rates, level=1.1)
+    assert all(abs(v["ratio"] - 1.1) < 0.02 for v in out.values())
+    # scarico: tutte più leggere
+    out = P.allocate(P.week_budget(planned, [], 0.7, rates=rates), 0, [], planned,
+                     rates=rates, level=0.7)
+    assert all(abs(v["ratio"] - 0.7) < 0.02 for v in out.values())
+
+
+def test_calibrate_from_history():
+    hist = [("strength", 40, 40.0), ("strength", 45, 54.0), ("strength", 30, 33.0),
+            ("bike", 16, 8.0), ("bike", 18, 9.0), ("bike", 17, 9.0),     # tragitti: esclusi
+            ("bike", 120, 180.0), ("swim", 60, 90.0)]                    # troppo pochi campioni
+    rates = P.calibrate(hist)
+    assert set(rates) == {"strength"}
+    assert rates["strength"] == 1.1                       # mediana di 1.0 / 1.2 / 1.1
+
+
+def test_allocate_uses_calibration_and_keeps_rpe_scale():
+    planned = [("gio", "Corpo libero", 45, "intensa"), ("mar", "Corpo libero", 25, "leggera")]
+    rates = {"corpo libero": 1.0}                       # 1 TRIMP/min misurato
+    nom = 45 * 1.0 * P.INTENSITY_FACTOR["intensa"] + 25 * 1.0 * P.INTENSITY_FACTOR["leggera"]
+    out = P.allocate(nom, 0, [], planned, rates=rates)
+    # budget = nominale tarato -> sedute tipo, RPE = quello tipico del giorno
+    assert out["gio"]["nominal"] == round(45 * 1.25)
+    assert abs(out["gio"]["ratio"] - 1.0) < 0.02
+    assert out["gio"]["rpe"] == P.rpe_for_load(P.load_at(P.nominal_rpe("Corpo libero", "intensa"), 45), 45)
+    assert out["mar"]["rpe"] < out["gio"]["rpe"]
+
+
 def test_allocate_redistributes_and_clamps():
     planned = [("a", "Corpo libero", 45, "media"), ("b", "Ciclismo", 120, "media")]
     nom = sum(P.load_at(P.nominal_rpe(s, i), d) for _, s, d, i in planned)
     # budget esattamente uguale al nominale -> sedute tipo
     out = P.allocate(nom, 0, [], planned)
     assert all(abs(v["ratio"] - 1.0) < 0.02 for v in out.values())
-    # già fatto molto -> sedute alleggerite, ma mai sotto il clamp
+    # già fatto molto (nuoto pesante, extra) -> sedute alleggerite, mai sotto LIGHTEST
     out = P.allocate(nom, nom, [], planned)
-    assert all(v["ratio"] == P.ALLOC_CLAMP[0] for v in out.values())
+    assert all(v["ratio"] == P.LIGHTEST for v in out.values())
     assert out["a"]["rpe"] < 6.0
-    # budget enorme -> clamp alto
+    # ASIMMETRICO: fatto MENO del previsto (budget enorme) -> restano al livello del
+    # piano, non diventano più dure (il caso reale: nuoti leggeri -> gambe a RPE 8)
     out = P.allocate(nom * 5, 0, [], planned)
-    assert all(v["ratio"] == P.ALLOC_CLAMP[1] for v in out.values())
+    assert all(v["ratio"] == 1.0 for v in out.values())
+    # il tetto segue il livello della settimana (progressione e scarico)
+    out = P.allocate(nom * 5, 0, [], planned, level=1.1)
+    assert all(abs(v["ratio"] - 1.1) < 0.001 for v in out.values())
+    out = P.allocate(nom * 5, 0, [], planned, level=0.7)
+    assert all(abs(v["ratio"] - 0.7) < 0.001 for v in out.values())
 
 
 def test_needs_update_thresholds():

@@ -25,12 +25,25 @@ seduta trasformata in test FTP (l'FTP attuale, 145 W, è stimato dal GPS).
 - Settimana 1 (22/10 → 01/11):
 - Settimana 2 (02/11 → 08/11):
 
+## Motore rivisto il 22/10, prima dell'inizio del test
+Quasi tutte le attività hanno FC misurata (Pixel Watch a casa/nuoto/camminate,
+fascia in bici), quindi:
+- **Taratura sullo storico**: il carico "tipo" di uno sport è il TRIMP/min mediano
+  misurato (ultimi 90 gg, sedute ≥25′). Valori reali: corpo libero 0,49, nuoto 0,92,
+  bici 1,12, camminata 0,32 (la formula generica dava ~1,7 al corpo libero).
+- **Target = la settimana tipo stessa** (pianificate tarate × moltiplicatore + nuoto
+  previsto), non più CTL×7: d'inverno, senza bici, il CTL estivo era irraggiungibile.
+- **Asimmetrico**: se hai fatto di più (nuoto pesante, escursione) le sedute si
+  alleggeriscono fino al −30%; se hai fatto di meno restano come da piano (niente
+  recupero dei carichi persi). Contano anche le attività che realizzano uno slot
+  (stesso giorno/sport) e gli extra ≥25′; i tragitti brevi sono attività di fondo.
+- **Import automatico da Google ogni 2 ore** (+ notte): la seduta registrata col Pixel
+  si spunta da sola e il budget si aggiorna senza premere Sync.
+
 ## Dubbi aperti (dal confronto sull'overengineering)
-- **Il motore è più preciso dei dati.** TRIMP di sedute a casa da RPE stimato, nuoto da
-  media storica, CTL da FC media: sui dati reali schiaccia tutto al minimo (la
-  settimana tipo vale ~1,4× il carico sostenuto). Se l'RPE target non serve →
-  sostituire il budget con regole leggibili (scarico ogni 4ª settimana,
-  alleggerire con recupero basso, salta = sposta o togli).
+- **Il motore era più preciso dei dati** → in gran parte risolto dalla revisione sopra.
+  Resta da verificare nel test se l'RPE target serve; se no → regole leggibili
+  (scarico ogni 4ª settimana, alleggerire con recupero basso, salta = sposta o togli).
 - ~~Troppe superfici~~ **fatto il 22/10 (72da0ce)**: Programma unica pagina
   dell'allenamento (Piani in archivio), **un solo coach** (dashboard, Salute,
   Programma) che propone azioni sul programma da confermare con "Applica";
