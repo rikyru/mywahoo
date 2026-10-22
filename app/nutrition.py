@@ -421,14 +421,43 @@ def _shape(summary, profile, start: date, end: date, weight_kg) -> dict | None:
         # protein per kg: the single most useful quality signal for an athlete
         if prot and weight_kg:
             macros["proteine_g_per_kg"] = round(prot / weight_kg, 2)
-        # per-day energy/macros so the AI can see variability, not just the mean
-        macros["per_giorno"] = [
-            {"data": d.get("date"), "kcal": _r((d.get("nutrition") or {}).get("kcal")),
-             "proteine_g": _r((d.get("nutrition") or {}).get("protein_g")),
-             "carboidrati_g": _r((d.get("nutrition") or {}).get("carbs_g")),
-             "grassi_g": _r((d.get("nutrition") or {}).get("fat_g")),
-             "pasti_liberi": d.get("free_meals")}
-            for d in days if (d.get("nutrition") or {}).get("kcal") is not None]
+        # per-day energy/macros so the AI can see variability, not just the mean —
+        # and, crucially, the PERIODIZED target of that day (higher on training
+        # days) plus the balance, so it can judge fueling vs the actual training
+        def _day_row(d):
+            nut = d.get("nutrition") or {}
+            row = {"data": d.get("date"), "kcal": _r(nut.get("kcal")),
+                   "proteine_g": _r(nut.get("protein_g")),
+                   "carboidrati_g": _r(nut.get("carbs_g")),
+                   "grassi_g": _r(nut.get("fat_g")),
+                   "pasti_liberi": d.get("free_meals")}
+            tgt = d.get("target_kcal")
+            if tgt:
+                row["obiettivo_kcal"] = _r(tgt)
+                if nut.get("kcal") is not None:
+                    row["saldo_vs_obiettivo"] = _r(nut["kcal"] - tgt)
+            if d.get("training_note"):
+                row["allenamento"] = d["training_note"]
+            return row
+        macros["per_giorno"] = [_day_row(d) for d in days
+                                if (d.get("nutrition") or {}).get("kcal") is not None]
+        # aggregate adequacy signal: consumed vs the periodized target
+        bal = [((d.get("nutrition") or {}).get("kcal") - d["target_kcal"], d)
+               for d in days
+               if (d.get("nutrition") or {}).get("kcal") is not None and d.get("target_kcal")]
+        if bal:
+            saldi = [s for s, _ in bal]
+            macros["bilancio_vs_obiettivo"] = {
+                "nota": "obiettivo = target giornaliero PERIODIZZATO (sale nei giorni di "
+                        "allenamento); saldo = consumato − obiettivo. Negativo = sotto "
+                        "l'obiettivo (possibile sotto-alimentazione, SE i pasti sono tracciati; "
+                        "un saldo negativo può anche voler dire pasti non registrati).",
+                "giorni_confrontati": len(bal),
+                "saldo_medio_kcal": round(sum(saldi) / len(saldi)),
+                "giorni_sotto_obiettivo": sum(1 for s in saldi if s < -150),
+                "giorni_sopra_obiettivo": sum(1 for s in saldi if s > 150),
+                "giorni_allenamento": sum(1 for _, d in bal if d.get("training_note")),
+            }
         out["alimentazione_tracciata"] = macros
 
     if profile:
