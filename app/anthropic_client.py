@@ -696,7 +696,10 @@ Azioni possibili (usa solo queste):
  {"tipo": "rimuovi_assenza", "index": intero}
  {"tipo": "salta", "session_id": intero, "motivo": "riposo|stanco|fuori|dolore|altro",
   "intera_settimana": bool}   (intera_settimana solo per slot "pick: one" come la bici
-   sab o dom: true = non spostarla all'altro giorno; se l'atleta non lo dice, chiediglielo)
+   sab o dom: true = non spostarla all'altro giorno; se l'atleta non lo dice, chiediglielo.
+   motivo dalle sue parole: "non ci sono", "sono via", "impegno", "lavoro", "cena" →
+   fuori; "stanco", "sfinito", "dormito male" → stanco; "male", "dolore", "malato",
+   "febbre" → dolore; "riposo", "scarico" → riposo; solo se non si capisce → altro)
  {"tipo": "modifica_seduta", "session_id": intero, "title": "...", "description": "...",
   "duration_min": intero, "rpe": numero}   (adatta UNA seduta: piove, poco tempo,
    stanchezza… Scrivi il contenuto completo sostitutivo, a carico equivalente salvo

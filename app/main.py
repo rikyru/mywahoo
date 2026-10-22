@@ -1758,16 +1758,18 @@ def _program_redirect(msg: str = "", error: str = "", path: str = "/program"):
     return RedirectResponse(f"{path}?{q}" if q else path, status_code=303)
 
 
-async def _program_recalc_now(why: str) -> tuple[dict | None, str]:
+async def _program_recalc_now(why: str, push: bool = False) -> tuple[dict | None, str]:
     """Ricalcolo sincrono (l'utente aspetta il risultato) + target nutrizione in
-    background. Ritorna (stats, errore)."""
+    background. `push`: riallinea i target anche se il ricalcolo non ha toccato
+    sedute — saltarne una o ripristinarla cambia già il target di quel giorno.
+    Ritorna (stats, errore)."""
     try:
         st = await program_runner.recalc(_program_ctx(), why)
     except Exception as e:  # noqa: BLE001
         logger.exception("Program recalc (%s) failed", why)
         return None, f"Ricalcolo non riuscito: {e}"
-    if st and nutrition.is_configured() and any(
-            st[k] for k in ("created", "updated", "removed", "linked")):
+    if nutrition.is_configured() and (push or (st and any(
+            st[k] for k in ("created", "updated", "removed", "linked")))):
         _fire_and_forget(nutrition.recompute_and_push())
     return st, ""
 
@@ -2060,7 +2062,8 @@ async def program_session_action(sid: int, action: str, request: Request):
     if not ok:
         return _program_redirect(error="Azione non valida su questa seduta")
     if action in ("skip", "unskip"):
-        st, err = await _program_recalc_now("seduta saltata" if action == "skip" else "seduta ripristinata")
+        st, err = await _program_recalc_now(
+            "seduta saltata" if action == "skip" else "seduta ripristinata", push=True)
         return _program_redirect(msg=_recalc_msg(st) if not err else "", error=err)
     if action == "accept" and nutrition.is_configured():
         _fire_and_forget(nutrition.recompute_and_push())
@@ -2107,7 +2110,7 @@ async def program_apply(request: Request):
     done = program_runner.apply_actions(body.get("actions") or [])
     if not done:
         return JSONResponse({"done": [], "msg": "Nessuna modifica applicabile"})
-    st, err = await _program_recalc_now("chat")
+    st, err = await _program_recalc_now("chat", push=True)
     return JSONResponse({"done": done, "msg": err or _recalc_msg(st)})
 
 
