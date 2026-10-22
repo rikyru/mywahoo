@@ -262,7 +262,8 @@ def periodized_map(base_kcal: float, back_days: int = 180, fwd_days: int = 6) ->
                    for p in s.exec(select(PlanSession).where(
                        PlanSession.date != None,  # noqa: E711
                        PlanSession.date >= lo_plan, PlanSession.date <= hi,
-                       PlanSession.done == False)).all()]  # noqa: E712
+                       PlanSession.done == False,  # noqa: E712
+                       PlanSession.skipped == False)).all()]  # noqa: E712
         actual = [(w.start_date.date().isoformat(),
                    google_health.canonical_sport(w.sport),
                    round((w.moving_s or 0) / 60))

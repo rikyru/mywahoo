@@ -594,6 +594,139 @@ async def chat_plan(ctx: dict, history: list[dict]) -> dict:
     return {"risposta": str(d.get("risposta") or "").strip(), "azioni": azioni}
 
 
+def _json_object(raw: str) -> dict | None:
+    """First {...} object in a model reply, or None (no fence/garbage tolerance
+    beyond that — callers fall back on None)."""
+    import re
+    m = re.search(r"\{.*\}", raw or "", re.S)
+    if not m:
+        return None
+    try:
+        d = json.loads(m.group(0))
+    except json.JSONDecodeError:
+        return None
+    return d if isinstance(d, dict) else None
+
+
+PROGRAM_PREFILL_PROMPT = """\
+Trasforma la memoria dell'atleta (testo libero) nella configurazione di un
+PROGRAMMA di allenamento adattivo a lungo termine. Estrai SOLO ciò che il testo
+dice o implica chiaramente; non inventare sedute o attrezzi.
+Rispondi SOLO con JSON valido, senza testo attorno né code fence:
+{"title": "titolo breve", "goal": "obiettivo in 1-2 frasi",
+ "equipment": ["attrezzo", ...],
+ "routines": [{"id": "slug", "name": "nome", "duration_min": intero,
+               "content": "struttura completa: riscaldamento, circuito, tempi, elenco esercizi",
+               "video_url": ""}],
+ "template": [{"id": "slug", "days": [interi 0-6, lun=0], "pick": "each" oppure "one",
+               "sport": "UNA di: """ + SPORT_VOCAB + """", "kind": "external" oppure "planned",
+               "duration": minuti, "focus": "intenzione di quel giorno",
+               "intensity": "leggera" oppure "media" oppure "intensa",
+               "routines": ["id routine da includere"], "indoor": true/false}],
+ "notes": "indicazioni utili alla programmazione non coperte sopra"}
+Regole:
+- "external" = sedute guidate da altri (corso con allenatore, squadra): l'app le
+  conta ma non ne decide il contenuto. Tutto ciò che l'atleta fa da solo è "planned".
+- "pick": "one" quando il testo dà ALTERNATIVE ("sabato o domenica"); "each" quando
+  la seduta si ripete in tutti i giorni elencati ("lunedì e mercoledì").
+- Le routine che l'atleta fa "in ogni allenamento a casa" vanno in TUTTI gli slot a
+  casa, compresi quelli leggeri.
+- "duration" = durata TOTALE realistica della seduta in minuti. Se il testo non la
+  dice, stimala: corso di nuoto master 60-75, seduta a casa = routine incluse + parte
+  principale (di solito 35-50 in tutto; "solo core" = la routine più qualche minuto).
+  Mai meno della somma delle routine incluse.
+- "Scarico gambe", "leggero", "preservare le gambe" NON significa riposo: è una seduta
+  che evita o limita le gambe (busto, braccia, core). Usa "Riposo" solo se il testo
+  dice esplicitamente riposo.
+- "intensity": l'intenzione relativa del giorno — "leggera" (solo core, scarico,
+  recupero, per arrivare freschi a qualcosa), "intensa" (carico, pesante, lavoro
+  principale della settimana), altrimenti "media".
+- "focus": max 60 caratteri, solo l'intenzione dell'allenamento (es. "solo core",
+  "gambe carico", "scarico gambe: busto e core"), niente spiegazioni sull'app.
+- duration_min delle routine: calcolala dalla struttura (es. 5' riscaldamento +
+  2 giri × 10 esercizi × (30s+10s) + pause).
+- "indoor" vale solo per la bici: true se d'inverno/al chiuso/sui rulli."""
+
+
+PROGRAM_FILL_PROMPT = """\
+Sei l'allenatore di questo atleta e riempi di contenuto le sedute di un programma
+adattivo. Per ogni slot ricevi data, sport, focus del giorno, durata e un RPE
+TARGET deciso dal budget di carico settimanale: RISPETTALO (è ciò che bilancia
+la settimana rispetto a quanto l'atleta ha già fatto).
+- Routine fisse dello slot: NON modificarle e NON riscriverle. Inizia la
+  descrizione con "Routine: <nome>" e programma il resto attorno, contando la
+  loro durata dentro la durata totale (se la routine copre già tutta la durata,
+  aggiungi al massimo un breve defaticamento/mobilità).
+- Usa SOLO l'attrezzatura disponibile.
+- Progressione: tieni conto del blocco e della settimana del blocco (le settimane
+  crescono, quella di scarico riduce il volume) e delle ultime sedute svolte, per
+  dare continuità (aumenta ripetizioni, serie o varianti rispetto alle precedenti).
+- Bici indoor (indoor=true): aggiungi "structure", lista di step
+  {"min": minuti, "pct_ftp": percentuale FTP, "rpm": cadenza o null, "note": "breve"}
+  che sommano alla durata; costruiscila per l'obiettivo FTP coerente col blocco
+  (sweet spot → soglia → VO2max). Se l'atleta non ha ancora i rulli prepara
+  comunque la seduta strutturata. Bici outdoor: descrivi l'uscita con zone e
+  intensità, "structure": null. Per gli altri sport "structure": null.
+- Descrizioni concrete: esercizi con serie × ripetizioni (o tempi) e recuperi.
+Rispondi SOLO con JSON valido, senza testo attorno né code fence:
+{"sessioni": [{"key": "chiave ricevuta", "title": "titolo breve",
+  "description": "contenuto della seduta", "duration_min": intero, "rpe": numero,
+  "structure": [...] oppure null}]}
+Includi TUTTE le key ricevute."""
+
+
+PROGRAM_CHAT_PROMPT = """\
+Sei l'allenatore che gestisce il PROGRAMMA a lungo termine dell'atleta. Può
+segnalarti imprevisti e cambi ("sabato salto", "sono via dal 23/12 al 7/01",
+"ho comprato i rulli", "giovedì le gambe le faccio venerdì") o farti domande.
+Traduci le richieste in AZIONI: dopo averle applicate il programma si ricalcola da
+solo (budget di carico, sedute successive), quindi NON riprogrammare tu le sedute.
+
+Azioni possibili (usa solo queste):
+ {"tipo": "assenza", "start": "YYYY-MM-DD", "end": "YYYY-MM-DD", "note": "...",
+  "allowed": ["sport ancora possibili; lista vuota = nessun allenamento"]}
+ {"tipo": "rimuovi_assenza", "index": intero}
+ {"tipo": "salta", "session_id": intero}
+ {"tipo": "slot", "slot_id": "...", "enabled": bool, "days": [0-6], "duration": int,
+  "focus": "...", "indoor": bool}   (metti solo i campi che cambiano)
+ {"tipo": "attrezzatura", "aggiungi": ["..."], "rimuovi": ["..."]}
+ {"tipo": "fine", "date": "YYYY-MM-DD"}
+ {"tipo": "nota", "testo": "..."}   (aggiunge alle note del programma)
+Risolvi i giorni relativi rispetto a OGGI. Non toccare sedute già fatte. Se
+l'atleta salta una seduta di uno slot "pick: one" (es. bici sab o dom) basta
+"salta": il motore la sposta da solo all'altro giorno.
+Rispondi SOLO con JSON valido, senza testo attorno né code fence:
+{"risposta": "risposta conversazionale in Markdown, concisa", "azioni": [...]}
+"azioni" vuota se stai solo rispondendo a una domanda."""
+
+
+async def program_prefill(notes: str, athlete: dict | None = None) -> dict | None:
+    """Memoria AI dell'atleta -> configurazione strutturata del programma."""
+    payload = {"memoria_atleta": notes or ""}
+    if athlete:
+        payload["atleta"] = athlete
+    return _json_object(await _call_claude(PROGRAM_PREFILL_PROMPT, _dumps(payload)))
+
+
+async def fill_program_sessions(ctx: dict) -> list[dict]:
+    """Contenuto delle sedute pianificate (una chiamata per tutti gli slot)."""
+    raw = await _call_claude(PROGRAM_FILL_PROMPT + _exmod.NUDGE, _dumps(ctx))
+    d = _json_object(raw) or {}
+    out = d.get("sessioni")
+    return out if isinstance(out, list) else []
+
+
+async def chat_program(ctx: dict, history: list[dict]) -> dict:
+    """Conversazione sul programma -> {"risposta", "azioni"} da confermare in UI."""
+    system = PROGRAM_CHAT_PROMPT + "\n\nCONTESTO (JSON):\n" + _dumps(ctx)
+    raw = await _call_messages(system, history, cache=True)
+    d = _json_object(raw)
+    if not d:
+        return {"risposta": raw.strip(), "azioni": []}
+    azioni = d.get("azioni") if isinstance(d.get("azioni"), list) else []
+    return {"risposta": str(d.get("risposta") or "").strip(), "azioni": azioni}
+
+
 async def generate_plan(goal: str, n_days: int, start_date: str) -> dict:
     """Generate a structured training plan (JSON of dated sessions)."""
     import re

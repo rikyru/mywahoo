@@ -69,6 +69,40 @@ class PlanSession(SQLModel, table=True):
     done: bool = False
     workout_id: Optional[int] = None
     conversation_id: Optional[int] = None   # AI thread about adapting this session
+    # --- adaptive Program sessions (empty/None for classic plans) ---
+    slot_id: str = ""                        # template slot this session realizes
+    kind: str = ""                           # "planned" | "external" ("" = classic)
+    skipped: bool = False                    # explicitly skipped (not done, not pending)
+    rpe_target: Optional[float] = None       # intensity the budget asks for
+    structure_json: Optional[str] = None     # indoor bike: [{min, pct_ftp, note}]
+    reason: str = ""                         # why the engine created/changed it
+    proposal_json: Optional[str] = None      # pending change for today/tomorrow
+
+
+class Program(SQLModel, table=True):
+    """Programma stagionale adattivo. Tiene il lungo periodo (obiettivo, blocchi,
+    settimana tipo, attrezzatura, routine fisse, assenze); solo i prossimi giorni
+    diventano PlanSession concrete nel TrainingPlan collegato, ricalcolate a ogni
+    evento (vedi program.py / program_runner.py). Le parti strutturate sono JSON:
+    app mono-utente, nessuna tabella di contorno."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    title: str = ""
+    goal: str = ""
+    start_date: datetime
+    end_date: Optional[datetime] = None
+    active: bool = True
+    block_weeks: int = 4
+    block_multipliers_json: str = "[1.0, 1.05, 1.1, 0.7]"
+    template_json: str = "[]"      # [{id, days, sport, kind, duration, focus, routines, indoor, enabled}]
+    equipment_json: str = "[]"     # ["tappettino", "elastici", ...]
+    routines_json: str = "[]"      # [{id, name, content, duration_min, video_url}]
+    absences_json: str = "[]"      # [{start, end, note, allowed: [sport]}]
+    notes: str = ""
+    plan_id: Optional[int] = None
+    conversation_id: Optional[int] = None
+    last_recalc_at: Optional[datetime] = None
+    last_recalc_log: str = ""
+    created_at: datetime = Field(default_factory=datetime.utcnow)
 
 
 class ClimbEffort(SQLModel, table=True):
@@ -291,7 +325,10 @@ _MIGRATIONS = {
     "workout": [("manual", "INTEGER DEFAULT 0"), ("notes", "TEXT DEFAULT ''"),
                 ("rpe", "REAL"), ("climbs_indexed", "INTEGER DEFAULT 0"),
                 ("best20_w", "REAL"), ("laps_json", "TEXT")],
-    "plansession": [("conversation_id", "INTEGER")],
+    "plansession": [("conversation_id", "INTEGER"), ("slot_id", "TEXT DEFAULT ''"),
+                    ("kind", "TEXT DEFAULT ''"), ("skipped", "INTEGER DEFAULT 0"),
+                    ("rpe_target", "REAL"), ("structure_json", "TEXT"),
+                    ("reason", "TEXT DEFAULT ''"), ("proposal_json", "TEXT")],
     "trainingplan": [("conversation_id", "INTEGER")],
     "climbeffort": [("kind", "TEXT DEFAULT 'climb'"), ("path_json", "TEXT DEFAULT '[]'")],
     "customsegment": [("source_workout_id", "INTEGER")],

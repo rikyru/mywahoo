@@ -22,11 +22,12 @@ from starlette.middleware.sessions import SessionMiddleware
 from . import (anthropic_client, bodycomp, cycling as cyclingmod,
                exercises as exercisesmod, fit as fitmod, form as formmod,
                google_health, gpx as gpxmod, nutrition, profile as profilemod,
-               progress as progressmod, vo2max as vo2maxmod, wahoo)
+               program as programmod, program_runner, progress as progressmod,
+               vo2max as vo2maxmod, wahoo)
 from .config import settings, setup_logging
 from .db import (AiAnalysis, BodyGirth, BodyMeasure, ChatMessage, ClimbEffort,
                  Conversation, CustomEffort, CustomSegment, IgnoredImport,
-                 PeriodSummary, PlanSession, RouteAssessment, TrainingPlan, Workout,
+                 PeriodSummary, PlanSession, Program, RouteAssessment, TrainingPlan, Workout,
                  WorkoutStream, engine, get_setting, init_db, set_setting)
 
 setup_logging()
@@ -1445,6 +1446,29 @@ def _fire_and_forget(coro) -> None:
     task.add_done_callback(_BG_TASKS.discard)
 
 
+def _program_ctx() -> dict:
+    """What the program engine needs from the rest of the app (passed in so
+    program_runner never imports main)."""
+    _, summary = _fitness_series()
+    return {"ctl": (summary or {}).get("ctl") or 0.0, "anchors": _hr_anchors(),
+            "ftp": _estimated_ftp(), "form": summary}
+
+
+def _kick_program(why: str) -> None:
+    """Ricalcolo del programma in background dopo un evento (nuova attività,
+    seduta fatta/annullata), poi riallinea i target nutrizionali se è cambiato
+    qualcosa. Va chiamato da codice async (serve il loop in esecuzione)."""
+    async def run():
+        try:
+            st = await program_runner.recalc(_program_ctx(), why)
+            if st and nutrition.is_configured() and any(
+                    st[k] for k in ("created", "updated", "removed", "linked")):
+                await nutrition.recompute_and_push()
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Program recalc (%s) failed: %s", why, e)
+    _fire_and_forget(run())
+
+
 async def _nightly_recompute_loop() -> None:
     """Ricalcola e ri-invia i target a planmydinner ogni notte (03:00 locali),
     così il fabbisogno segue peso e allenamenti anche senza pesarsi o rigenerare
@@ -1462,6 +1486,13 @@ async def _nightly_recompute_loop() -> None:
         if nxt <= now:
             nxt += timedelta(days=1)
         await asyncio.sleep(max(60.0, (nxt - now).total_seconds()))
+        # prima il programma (il nuovo giorno entra nella finestra), poi i target
+        # nutrizionali, così la periodizzazione vede le sedute appena create
+        try:
+            st = await program_runner.recalc(_program_ctx(), "notturno")
+            logger.info("Nightly program recalc: %s", st)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Nightly program recalc failed: %s", e)
         try:
             if nutrition.is_configured():
                 ok = await nutrition.recompute_and_push()
@@ -1571,16 +1602,24 @@ def plan_delete(plan_id: int):
                             status_code=303)
 
 
+def _safe_next(nxt: str, fallback: str) -> str:
+    """Only same-site relative redirects (no //host or scheme)."""
+    return nxt if nxt.startswith("/") and not nxt.startswith("//") else fallback
+
+
 @app.post("/plans/{plan_id}/session/{sid}/done", dependencies=[Depends(require_auth)])
 async def plan_session_done(plan_id: int, sid: int, done_notes: str = Form(""),
-                            done_min: str = Form(""), done_date: str = Form("")):
+                            done_min: str = Form(""), done_date: str = Form(""),
+                            next: str = Form("")):
     """Mark a session done, recording what was *actually* done (defaults to the
     planned session) as the workout notes, so the AI can judge the real load."""
+    back = _safe_next(next, f"/plans/{plan_id}")
     with Session(engine) as session:
         ps = session.get(PlanSession, sid)
         if not ps or ps.plan_id != plan_id or ps.done:
-            return RedirectResponse(f"/plans/{plan_id}", status_code=303)
+            return RedirectResponse(back, status_code=303)
         title, sport, planned_min = ps.title, ps.sport, ps.duration_min
+        is_program = bool(ps.kind)
         notes = done_notes.strip() or ps.description
     try:
         mins = int(done_min) if done_min.strip() else planned_min
@@ -1600,12 +1639,13 @@ async def plan_session_done(plan_id: int, sid: int, done_notes: str = Form(""),
     with Session(engine) as session:
         ps = session.get(PlanSession, sid)
         if not ps or ps.done:
-            return RedirectResponse(f"/plans/{plan_id}", status_code=303)
+            return RedirectResponse(back, status_code=303)
         start = (datetime.combine(d, time(12, 0)) if d
                  else (ps.date or datetime.utcnow()))
         wid = _create_manual_workout(title, sport, start, mins, notes, rpe=rpe)
         ps.done = True
         ps.workout_id = wid
+        ps.proposal_json = None
         session.add(ps)
         session.commit()
     # se la registrazione reale (Wahoo/Google/FIT) di questa sessione è già
@@ -1614,13 +1654,16 @@ async def plan_session_done(plan_id: int, sid: int, done_notes: str = Form(""),
         reconcile_plan_duplicates()
     except Exception as e:
         logger.warning("Reconcile after plan-done failed: %s", e)
-    return RedirectResponse(
-        f"/plans/{plan_id}?{urlencode({'msg': 'Sessione segnata come fatta'})}",
-        status_code=303)
+    if is_program:
+        _kick_program("seduta fatta")
+    sep = "&" if "?" in back else "?"
+    return RedirectResponse(f"{back}{sep}{urlencode({'msg': 'Sessione segnata come fatta'})}",
+                            status_code=303)
 
 
 @app.post("/plans/{plan_id}/session/{sid}/undo", dependencies=[Depends(require_auth)])
-def plan_session_undo(plan_id: int, sid: int):
+async def plan_session_undo(plan_id: int, sid: int, next: str = Form("")):
+    is_program = False
     with Session(engine) as session:
         ps = session.get(PlanSession, sid)
         if ps and ps.plan_id == plan_id and ps.done:
@@ -1632,7 +1675,318 @@ def plan_session_undo(plan_id: int, sid: int):
             ps.workout_id = None
             session.add(ps)
             session.commit()
-    return RedirectResponse(f"/plans/{plan_id}", status_code=303)
+            is_program = bool(ps.kind)
+    if is_program:
+        _kick_program("seduta annullata")
+    return RedirectResponse(_safe_next(next, f"/plans/{plan_id}"), status_code=303)
+
+
+# ---------------------------------------------------------------- programma adattivo
+
+def _program_redirect(msg: str = "", error: str = "", path: str = "/program"):
+    q = urlencode({k: v for k, v in (("msg", msg), ("error", error)) if v})
+    return RedirectResponse(f"{path}?{q}" if q else path, status_code=303)
+
+
+async def _program_recalc_now(why: str) -> tuple[dict | None, str]:
+    """Ricalcolo sincrono (l'utente aspetta il risultato) + target nutrizione in
+    background. Ritorna (stats, errore)."""
+    try:
+        st = await program_runner.recalc(_program_ctx(), why)
+    except Exception as e:  # noqa: BLE001
+        logger.exception("Program recalc (%s) failed", why)
+        return None, f"Ricalcolo non riuscito: {e}"
+    if st and nutrition.is_configured() and any(
+            st[k] for k in ("created", "updated", "removed", "linked")):
+        _fire_and_forget(nutrition.recompute_and_push())
+    return st, ""
+
+
+@app.get("/program", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
+def program_page(request: Request):
+    today = date.today()
+    jl = program_runner.jl
+    with Session(engine) as session:
+        prog = program_runner.active_program(session)
+        if not prog:
+            return templates.TemplateResponse(request, "program.html", {
+                "prog": None, "has_notes": bool(profilemod.load().get("ai_notes")),
+                "error": request.query_params.get("error")})
+        tpl = jl(prog.template_json, [])
+        routines = {r["id"]: r for r in jl(prog.routines_json, [])
+                    if isinstance(r, dict) and r.get("id")}
+        slot_by_id = {s.get("id"): s for s in tpl}
+        wk0 = programmod.monday(today)
+        rows = session.exec(select(PlanSession).where(
+            PlanSession.plan_id == prog.plan_id,
+            PlanSession.date >= datetime.combine(wk0, time.min))
+            .order_by(PlanSession.date, PlanSession.order)).all() if prog.plan_id else []
+        ws = session.exec(select(Workout).where(
+            Workout.start_date >= datetime.combine(wk0, time.min),
+            Workout.start_date <= datetime.combine(today, time.max))).all()
+        chat = [{"role": m.role, "content": m.content} for m in session.exec(
+            select(ChatMessage).where(ChatMessage.conversation_id == prog.conversation_id)
+            .order_by(ChatMessage.created_at))] if prog.conversation_id else []
+        mults = jl(prog.block_multipliers_json, [1.0])
+        pos = programmod.block_position(prog.start_date.date(), today, prog.block_weeks, mults)
+        _, summary = _fitness_series()
+        target = programmod.week_target((summary or {}).get("ctl"), pos["multiplier"])
+        anchors = _hr_anchors()
+        done_load = sum(program_runner._wload(w, anchors) for w in ws)
+        ftp_w = (_estimated_ftp() or {}).get("ftp")
+
+        days: dict = {}
+        proposals = []
+        for ps in rows:
+            slot = slot_by_id.get(ps.slot_id) or {}
+            prop = jl(ps.proposal_json, {})
+            steps = jl(ps.structure_json, [])
+            for st in steps:
+                st["watt"] = round(ftp_w * st["pct_ftp"] / 100) if ftp_w and st.get("pct_ftp") else None
+            v = {"ps": ps, "desc": exercisesmod.linkify(ps.description or ""),
+                 "routines": [{**routines[r], "html": exercisesmod.linkify(routines[r].get("content", ""))}
+                              for r in slot.get("routines") or [] if r in routines],
+                 "steps": steps, "indoor": slot.get("indoor"),
+                 "past": ps.date.date() < today if ps.date else False,
+                 "is_today": ps.date.date() == today if ps.date else False,
+                 "proposal": prop if prop and not prop.get("rejected") else None}
+            if v["proposal"]:
+                v["prop_desc"] = exercisesmod.linkify(prop.get("description") or "")
+                proposals.append(v)
+            key = ps.date.date().isoformat() if ps.date else "—"
+            days.setdefault(key, {"label": ps.day_label, "items": []})["items"].append(v)
+    return templates.TemplateResponse(request, "program.html", {
+        "prog": prog, "pos": pos, "block_label": programmod.block_label(pos),
+        "target": round(target), "done_load": round(done_load),
+        "days": days, "proposals": proposals, "today": today.isoformat(),
+        "absences": jl(prog.absences_json, []), "equipment": jl(prog.equipment_json, []),
+        "ftp": ftp_w, "chat_json": json.dumps(chat), "template": tpl,
+        "weekdays": programmod.WEEKDAYS_IT,
+        "message": request.query_params.get("msg"), "error": request.query_params.get("error")})
+
+
+@app.post("/program/create", dependencies=[Depends(require_auth)])
+async def program_create(goal: str = Form("")):
+    try:
+        await program_runner.create_from_notes(goal)
+    except anthropic_client.AnthropicError as e:
+        return _program_redirect(error=str(e))
+    return _program_redirect(
+        msg="Programma precompilato dalla tua memoria AI: controlla e salva per generare le sedute",
+        path="/program/settings")
+
+
+@app.get("/program/settings", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
+def program_settings(request: Request):
+    jl = program_runner.jl
+    with Session(engine) as session:
+        prog = program_runner.active_program(session)
+        if not prog:
+            return RedirectResponse("/program", status_code=303)
+    return templates.TemplateResponse(request, "program_settings.html", {
+        "prog": prog, "template": jl(prog.template_json, []),
+        "routines": jl(prog.routines_json, []), "absences": jl(prog.absences_json, []),
+        "equipment": "\n".join(jl(prog.equipment_json, [])),
+        "multipliers": ", ".join(f"{m:g}" for m in jl(prog.block_multipliers_json, [1.0])),
+        "weekdays": programmod.WEEKDAYS_IT,
+        "message": request.query_params.get("msg"), "error": request.query_params.get("error")})
+
+
+@app.post("/program/settings", dependencies=[Depends(require_auth)])
+async def program_settings_save(request: Request):
+    form = await request.form()
+
+    def g(k: str) -> str:
+        return str(form.get(k) or "").strip()
+
+    routines, i = [], 0
+    while f"r-{i}-name" in form:
+        if not form.get(f"r-{i}-del"):
+            routines.append({"id": g(f"r-{i}-id") or g(f"r-{i}-name"), "name": g(f"r-{i}-name"),
+                             "duration_min": g(f"r-{i}-duration"), "content": g(f"r-{i}-content"),
+                             "video_url": g(f"r-{i}-video")})
+        i += 1
+    routines = programmod.sanitize_routines(routines)
+    rids = [r["id"] for r in routines]
+
+    slots, i = [], 0
+    while f"s-{i}-sport" in form:
+        if not form.get(f"s-{i}-del"):
+            slots.append({"id": g(f"s-{i}-id") or g(f"s-{i}-sport"),
+                          "days": [d for d in range(7) if form.get(f"s-{i}-day-{d}")],
+                          "pick": "one" if form.get(f"s-{i}-pick") else "each",
+                          "sport": g(f"s-{i}-sport"), "kind": g(f"s-{i}-kind"),
+                          "duration": g(f"s-{i}-duration"), "focus": g(f"s-{i}-focus"),
+                          "intensity": g(f"s-{i}-intensity"),
+                          "routines": [r for r in rids if form.get(f"s-{i}-rt-{r}")],
+                          "indoor": bool(form.get(f"s-{i}-indoor")),
+                          "enabled": bool(form.get(f"s-{i}-enabled"))})
+        i += 1
+    template = programmod.sanitize_template(
+        slots, {r["id"]: r["duration_min"] for r in routines})
+
+    absences, i = [], 0
+    while f"a-{i}-start" in form:
+        st, en = _parse_date(g(f"a-{i}-start")), _parse_date(g(f"a-{i}-end"))
+        if st and not form.get(f"a-{i}-del"):
+            en = en if en and en >= st else st
+            absences.append({"start": st.isoformat(), "end": en.isoformat(),
+                             "note": g(f"a-{i}-note")[:120],
+                             "allowed": [x.strip()[:40] for x in g(f"a-{i}-allowed").split(",")
+                                         if x.strip()]})
+        i += 1
+
+    try:
+        bw = max(1, min(8, int(g("block_weeks") or 4)))
+    except ValueError:
+        bw = 4
+    mults = []
+    for x in g("multipliers").replace(";", ",").split(","):
+        try:
+            mults.append(max(0.3, min(1.5, float(x))))
+        except ValueError:
+            continue
+    mults = (mults + [1.0] * bw)[:bw]
+
+    with Session(engine) as session:
+        prog = program_runner.active_program(session)
+        if not prog:
+            return RedirectResponse("/program", status_code=303)
+        prog.title = g("title")[:120] or prog.title
+        prog.goal = g("goal")[:1000]
+        sd, ed = _parse_date(g("start")), _parse_date(g("end"))
+        if sd:
+            prog.start_date = datetime.combine(sd, time.min)
+        prog.end_date = datetime.combine(ed, time.min) if ed else None
+        prog.block_weeks = bw
+        prog.block_multipliers_json = json.dumps(mults)
+        prog.template_json = json.dumps(template)
+        prog.routines_json = json.dumps(routines)
+        prog.absences_json = json.dumps(absences)
+        prog.equipment_json = json.dumps([x.strip()[:60] for x in g("equipment").splitlines()
+                                          if x.strip()])
+        prog.notes = g("notes")[:3000]
+        session.add(prog)
+        session.commit()
+    st, err = await _program_recalc_now("impostazioni")
+    return _program_redirect(msg="Impostazioni salvate" + (f" · {_recalc_msg(st)}" if st else ""),
+                             error=err)
+
+
+def _recalc_msg(st: dict | None) -> str:
+    if not st:
+        return "nessun programma attivo"
+    parts = [f"{st[k]} {lbl}" for k, lbl in (("created", "create"), ("updated", "aggiornate"),
+                                              ("proposals", "proposte"), ("removed", "tolte"),
+                                              ("linked", "agganciate")) if st.get(k)]
+    return "ricalcolo: " + (", ".join(parts) or "nessuna modifica")
+
+
+@app.post("/program/recalc", dependencies=[Depends(require_auth)])
+async def program_recalc():
+    st, err = await _program_recalc_now("manuale")
+    return _program_redirect(msg=_recalc_msg(st) if not err else "", error=err)
+
+
+@app.post("/program/session/{sid}/{action}", dependencies=[Depends(require_auth)])
+async def program_session_action(sid: int, action: str):
+    fn = {"skip": program_runner.skip_session, "unskip": program_runner.unskip_session,
+          "accept": program_runner.accept_proposal,
+          "reject": program_runner.reject_proposal}.get(action)
+    if not fn or not fn(sid):
+        return _program_redirect(error="Azione non valida su questa seduta")
+    if action in ("skip", "unskip"):
+        st, err = await _program_recalc_now("seduta saltata" if action == "skip" else "seduta ripristinata")
+        return _program_redirect(msg=_recalc_msg(st) if not err else "", error=err)
+    if action == "accept" and nutrition.is_configured():
+        _fire_and_forget(nutrition.recompute_and_push())
+    return _program_redirect(msg="Proposta accettata" if action == "accept"
+                             else "Ok, la seduta resta com'era")
+
+
+def _program_action_label(a: dict) -> str:
+    t = a.get("tipo")
+    if t == "assenza":
+        ok = ", ".join(a.get("allowed") or []) or "nessun allenamento"
+        return f"assenza {a.get('start')} → {a.get('end')} ({ok})"
+    if t == "rimuovi_assenza":
+        return f"togli assenza #{a.get('index')}"
+    if t == "salta":
+        return f"salta seduta {a.get('session_id')}"
+    if t == "slot":
+        ch = {k: v for k, v in a.items() if k not in ("tipo", "slot_id")}
+        return f"slot {a.get('slot_id')}: {json.dumps(ch, ensure_ascii=False)}"
+    if t == "attrezzatura":
+        return ("attrezzatura " + " ".join([f"+{x}" for x in a.get("aggiungi") or []]
+                                           + [f"−{x}" for x in a.get("rimuovi") or []]))
+    if t == "fine":
+        return f"fine programma {a.get('date')}"
+    if t == "nota":
+        return f"nota: {a.get('testo')}"
+    return str(t)
+
+
+@app.post("/program/chat", dependencies=[Depends(require_auth)])
+async def program_chat(request: Request):
+    """Chat del programma: "sabato salto", "via dal 23/12 al 7/01"… → azioni da
+    confermare, poi ricalcolo."""
+    try:
+        body = await request.json()
+    except json.JSONDecodeError:
+        return JSONResponse({"error": "richiesta non valida"}, status_code=400)
+    msg = str(body.get("message", "")).strip()[:2000]
+    if not msg:
+        return JSONResponse({"error": "nessuna domanda"}, status_code=400)
+    ctx = program_runner.chat_context(_program_ctx())
+    if not ctx:
+        return JSONResponse({"error": "nessun programma attivo"}, status_code=404)
+    with Session(engine) as session:
+        prog = program_runner.active_program(session)
+        conv = session.get(Conversation, prog.conversation_id) if prog.conversation_id else None
+        if conv is None:
+            conv = Conversation(title=f"Programma · {prog.title}"[:60])
+            session.add(conv)
+            session.commit()
+            session.refresh(conv)
+            prog.conversation_id = conv.id
+            session.add(prog)
+            session.commit()
+        conv_id = conv.id
+        prior = list(session.exec(select(ChatMessage).where(
+            ChatMessage.conversation_id == conv_id).order_by(ChatMessage.created_at)))
+    history = ([{"role": m.role, "content": m.content} for m in prior]
+               + [{"role": "user", "content": msg}])[-12:]
+    try:
+        out = await anthropic_client.chat_program(ctx, history)
+    except anthropic_client.AnthropicError as e:
+        return JSONResponse({"error": str(e)}, status_code=502)
+    actions = [a for a in out.get("azioni") or [] if isinstance(a, dict) and a.get("tipo")]
+    for a in actions:
+        a["label"] = _program_action_label(a)
+    stored = (out.get("risposta") or "") + (
+        "\n\n[Proposte] " + "; ".join(a["label"] for a in actions) if actions else "")
+    with Session(engine) as session:
+        session.add(ChatMessage(conversation_id=conv_id, role="user", content=msg))
+        session.add(ChatMessage(conversation_id=conv_id, role="assistant", content=stored))
+        c = session.get(Conversation, conv_id)
+        c.updated_at = datetime.utcnow()
+        session.add(c)
+        session.commit()
+    return JSONResponse({"reply": out.get("risposta") or "", "actions": actions})
+
+
+@app.post("/program/apply", dependencies=[Depends(require_auth)])
+async def program_apply(request: Request):
+    """Applica le azioni confermate dalla chat e ricalcola."""
+    try:
+        body = await request.json()
+    except json.JSONDecodeError:
+        return JSONResponse({"error": "richiesta non valida"}, status_code=400)
+    done = program_runner.apply_actions(body.get("actions") or [])
+    if not done:
+        return JSONResponse({"done": [], "msg": "Nessuna modifica applicabile"})
+    st, err = await _program_recalc_now("chat")
+    return JSONResponse({"done": done, "msg": err or _recalc_msg(st)})
 
 
 def _session_load(sport: str, minutes: float, rpe: float | None = None) -> float:
@@ -2102,6 +2456,7 @@ async def _process_webhook(payload: dict) -> None:
             reconcile_plan_duplicates()
         except Exception as e:
             logger.warning("Plan duplicate reconcile failed: %s", e)
+        _kick_program("nuova attività")
     except Exception:
         logger.exception("Webhook background processing failed")
 
@@ -2881,6 +3236,7 @@ async def sync(full: str = Form(default="")):
             msg += f", {fused} doppioni del piano uniti"
     except Exception as e:
         logger.warning("Plan duplicate reconcile failed: %s", e)
+    _kick_program("sync")
     return RedirectResponse(f"/?{urlencode({'msg': msg})}", status_code=303)
 
 
@@ -3129,6 +3485,7 @@ async def upload_fit(file: UploadFile = File(...)):
                     wid = surv.id
     except Exception as e:
         logger.warning("Reconcile after FIT upload failed: %s", e)
+    _kick_program("FIT caricato")
     logger.info("Ingested uploaded FIT -> workout %s (%s)", wid,
                 "merge-manual" if merged_manual else "match" if match else "new")
     msg = ("FIT fuso con l'allenamento del piano: dati reali e FC uniti alla "

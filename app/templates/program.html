@@ -1,0 +1,258 @@
+{% extends "base.html" %}
+{% block title %}Programma — {{ app_name }}{% endblock %}
+{% block content %}
+
+{% if not prog %}
+<div class="page-head"><h1>Programma adattivo</h1></div>
+{% if error %}<div class="alert error">{{ error }}</div>{% endif %}
+<section class="card">
+  <p>Un programma a lungo termine che si ricalcola da solo: settimana tipo, blocchi da 4
+    settimane con scarico, sedute dei prossimi giorni ribilanciate su quello che fai davvero
+    (nuoto del coach incluso), assenze e imprevisti dalla chat.</p>
+  {% if has_notes %}
+  <form method="post" action="/program/create" class="plan-form"
+        onsubmit="const b=this.querySelector('button');b.disabled=true;b.textContent='Preparo il programma…';">
+    <div class="plan-form-row">
+      <label style="flex:1">Obiettivo <span class="muted">(facoltativo: se vuoto lo ricavo dalla memoria AI)</span>
+        <input type="text" name="goal" placeholder="es. perdere grasso, più tono, alzare l'FTP">
+      </label>
+    </div>
+    <div><button class="btn" type="submit">Crea dalla mia memoria AI</button></div>
+  </form>
+  {% else %}
+  <p class="muted">Scrivi prima la tua memoria AI in <a href="/settings">Impostazioni</a>
+    (attrezzatura, settimana tipo, routine fisse): il programma si precompila da lì.</p>
+  {% endif %}
+</section>
+
+{% else %}
+<div class="page-head">
+  <h1>{{ prog.title }}</h1>
+  <div class="sync-buttons">
+    <form method="post" action="/program/recalc"
+          onsubmit="const b=this.querySelector('button');b.disabled=true;b.textContent='Ricalcolo…';">
+      <button class="btn btn-secondary" type="submit">↻ Ricalcola</button>
+    </form>
+    <a class="btn btn-secondary" href="/program/settings">⚙ Impostazioni</a>
+  </div>
+</div>
+
+{% if message %}<div class="alert ok">{{ message }}</div>{% endif %}
+{% if error %}<div class="alert error">{{ error }}</div>{% endif %}
+
+<section class="card">
+  {% if prog.goal %}<p class="muted">{{ prog.goal }}</p>{% endif %}
+  <section class="kpi-row">
+    <div class="kpi"><span class="kpi-value prog-block">{{ block_label }}</span>
+      <span class="kpi-label">fino al {{ prog.end_date.strftime('%d/%m/%Y') if prog.end_date else '—' }}</span></div>
+    <div class="kpi"><span class="kpi-value">{{ done_load }}<small> / {{ target }}</small></span>
+      <span class="kpi-label">carico della settimana (TRIMP)</span></div>
+    {% if ftp %}<div class="kpi"><span class="kpi-value">{{ ftp }}<small> W</small></span>
+      <span class="kpi-label">FTP stimato (per gli intervalli)</span></div>{% endif %}
+  </section>
+  <div class="plan-progress">
+    <div class="plan-progress-bar">
+      <span style="width: {{ [100, (100 * done_load / target) if target else 0] | min }}%"></span>
+    </div>
+  </div>
+  {% if prog.last_recalc_log %}<p class="muted prog-reason">Ultimo ricalcolo · {{ prog.last_recalc_log }}</p>{% endif %}
+</section>
+
+{% if proposals %}
+<section class="card prog-proposals">
+  <h3>Proposte da confermare</h3>
+  {% for v in proposals %}{% set p = v.proposal %}{% set s = v.ps %}
+  <div class="prog-proposal">
+    <strong>{{ s.day_label }} · {{ s.title }}</strong>
+    {% if p.remove %}
+    <p>Togliere questa seduta: <span class="muted">{{ p.reason }}</span></p>
+    {% else %}
+    <p class="muted prog-reason">{{ p.reason }}</p>
+    <p>Ora: {{ s.duration_min }}′{% if s.rpe_target %} · RPE {{ '%g'|format(s.rpe_target) }}{% endif %}
+      → proposta: <strong>{{ p.title }}</strong> · {{ p.duration_min }}′ · RPE {{ '%g'|format(p.rpe_target) }}</p>
+    <details><summary class="muted">Vedi la seduta proposta</summary>
+      <p class="plan-session-desc">{{ v.prop_desc }}</p></details>
+    {% endif %}
+    <div class="prog-actions">
+      <form method="post" action="/program/session/{{ s.id }}/accept"><button class="btn" type="submit">Accetta</button></form>
+      <form method="post" action="/program/session/{{ s.id }}/reject"><button class="btn btn-secondary" type="submit">Tieni com'era</button></form>
+    </div>
+  </div>
+  {% endfor %}
+</section>
+{% endif %}
+
+{% if not days %}
+<section class="card"><p class="muted">Nessuna seduta ancora: premi <strong>Ricalcola</strong>
+  o controlla la settimana tipo nelle impostazioni.</p></section>
+{% endif %}
+
+{% for iso, day in days.items() %}
+<h2 class="seg-h2">{{ day.label }}{% if iso == today %} · oggi{% endif %}</h2>
+{% for v in day["items"] %}{% set s = v.ps %}
+<section class="card plan-session {% if s.done or s.skipped %}plan-session-done{% endif %}">
+  <div class="plan-session-head">
+    <span class="plan-session-icon">{{ sport_icon(s.sport) }}</span>
+    <div class="plan-session-info">
+      <strong>{{ s.title }}</strong>
+      <span class="muted">{{ s.sport | sport_label }} · {{ s.duration_min }} min
+        {%- if s.rpe_target %} · RPE {{ '%g'|format(s.rpe_target) }}{% endif %}
+        {%- if s.kind == 'external' %} · <span class="tag">esterna</span>{% endif %}
+        {%- if v.indoor %} · <span class="tag">rulli</span>{% endif %}
+        {%- if s.skipped %} · saltata{% elif s.done %} · fatta ✓{% elif v.past %} · non fatta{% endif %}
+        {%- if v.proposal %} · <span class="tag">proposta in attesa</span>{% endif %}
+      </span>
+    </div>
+  </div>
+  {% if s.reason %}<p class="muted prog-reason">{{ s.reason }}</p>{% endif %}
+
+  {% for r in v.routines %}
+  <details class="prog-routine">
+    <summary>🔁 {{ r.name }} · {{ r.duration_min }}′{% if r.video_url %} · <a href="{{ r.video_url }}" target="_blank" rel="noopener">▶ video</a>{% endif %}</summary>
+    <p class="plan-session-desc">{{ r.html }}</p>
+  </details>
+  {% endfor %}
+
+  {% if s.description %}<p class="plan-session-desc">{{ v.desc }}</p>{% endif %}
+
+  {% if v.steps %}
+  <div class="nutri-table-wrap">
+    <table class="nutri-table prog-steps">
+      <thead><tr><th>Step</th><th>Min</th><th>% FTP</th><th>Watt</th><th>Cadenza</th><th>Nota</th></tr></thead>
+      <tbody>
+      {% for st in v.steps %}
+        <tr><td>{{ loop.index }}</td><td>{{ '%g'|format(st.min) }}</td><td>{{ st.pct_ftp }}%</td>
+          <td>{{ st.watt or '—' }}</td><td>{{ st.rpm or '—' }}</td><td class="nutri-act">{{ st.note }}</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+
+  {% if s.done and s.workout_id %}
+  <p class="muted"><a href="/workout/{{ s.workout_id }}">→ allenamento registrato</a></p>
+  {% endif %}
+
+  {% if not s.done and not s.skipped %}
+  <div class="prog-actions">
+    <details class="plan-done">
+      <summary class="btn">Fatta</summary>
+      <form method="post" action="/plans/{{ prog.plan_id }}/session/{{ s.id }}/done" class="plan-edit-form">
+        <input type="hidden" name="next" value="/program">
+        <label>{% if s.kind == 'external' %}Com'è andata? <span class="muted">(due parole a spanne: l'AI ne ricava lo sforzo)</span>
+          {% else %}Cosa hai fatto davvero <span class="muted">(l'AI la usa per carico e forma)</span>{% endif %}
+          <textarea name="done_notes" rows="3" class="nw-desc"
+            placeholder="es. molto pesante, tante ripetute da 100 a ritmo gara">{% if s.kind != 'external' %}{{ s.description }}{% endif %}</textarea>
+        </label>
+        <div class="plan-edit-row">
+          <label>Durata (min) <input type="number" name="done_min" value="{{ s.duration_min }}" min="0"></label>
+          <label>Quando <input type="date" name="done_date" value="{{ s.date.strftime('%Y-%m-%d') if s.date else '' }}"></label>
+        </div>
+        <button type="submit" class="btn">Conferma</button>
+      </form>
+    </details>
+    <form method="post" action="/program/session/{{ s.id }}/skip"
+          onsubmit="const b=this.querySelector('button');b.disabled=true;b.textContent='Ricalcolo…';">
+      <button class="btn btn-secondary" type="submit">Salta</button>
+    </form>
+    <a class="btn btn-secondary" href="/plans/{{ prog.plan_id }}#edit{{ s.id }}">Modifica / chiedi all'AI</a>
+  </div>
+  {% elif s.skipped %}
+  <form method="post" action="/program/session/{{ s.id }}/unskip">
+    <button class="btn btn-secondary" type="submit">↩ Ripristina</button>
+  </form>
+  {% endif %}
+</section>
+{% endfor %}
+{% endfor %}
+
+<section class="card">
+  <h3>Assenze</h3>
+  {% if absences %}
+  <ul class="prog-list">
+    {% for a in absences %}
+    <li>{{ a.start }} → {{ a.end }}{% if a.note %} · {{ a.note }}{% endif %}
+      <span class="muted">· {{ a.allowed | join(', ') if a.allowed else 'nessun allenamento' }}</span></li>
+    {% endfor %}
+  </ul>
+  {% else %}<p class="muted">Nessuna. Dillo in chat («sono via dal 23/12 al 7/01») o aggiungile nelle impostazioni.</p>{% endif %}
+  {% if equipment %}<p class="muted">Attrezzatura: {{ equipment | join(', ') }}</p>{% endif %}
+</section>
+
+<section class="card">
+  <details class="plan-chat" id="progChat" open>
+    <summary class="muted">💬 Parla col programma</summary>
+    <p class="muted">Es. «sabato salto, ho un impegno», «sono via dal 23/12 al 7/01, posso fare
+      solo corpo libero», «ho comprato i rulli», «giovedì sono stanco, sposta le gambe a venerdì».
+      Le modifiche vanno confermate, poi il programma si ricalcola.</p>
+    <div class="chat-log" id="progChatLog"></div>
+    <div id="progActions"></div>
+    <form class="chat-input chat-form" id="progChatForm">
+      <input type="text" placeholder="Scrivi qui…" autocomplete="off">
+      <button class="btn" type="submit">Invia</button>
+    </form>
+  </details>
+</section>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+{% if prog %}
+<script>
+(function () {
+  const log = document.getElementById("progChatLog");
+  const box = document.getElementById("progActions");
+  const form = document.getElementById("progChatForm");
+  const input = form.querySelector("input");
+
+  function add(role, text) {
+    const d = document.createElement("div");
+    d.className = "chat-msg chat-" + role;
+    if (role === "assistant") d.innerHTML = window.renderMd(text);
+    else d.textContent = text;
+    log.appendChild(d);
+    log.scrollTop = log.scrollHeight;
+    return d;
+  }
+  ({{ chat_json | safe }}).forEach(m => add(m.role, m.content));
+
+  function showActions(actions) {
+    box.innerHTML = "";
+    if (!actions || !actions.length) return;
+    const ul = document.createElement("ul");
+    ul.className = "plan-action-list";
+    actions.forEach(a => { const li = document.createElement("li"); li.textContent = a.label; ul.appendChild(li); });
+    const btn = document.createElement("button");
+    btn.className = "btn"; btn.textContent = "Applica e ricalcola";
+    btn.onclick = async () => {
+      btn.disabled = true; btn.textContent = "Applico e ricalcolo…";
+      try {
+        const r = await fetch("/program/apply", { method: "POST",
+          headers: { "Content-Type": "application/json" }, body: JSON.stringify({ actions }) });
+        const d = await r.json();
+        location.href = "/program?" + new URLSearchParams({ msg: d.msg || d.error || "fatto" });
+      } catch (e) { btn.disabled = false; btn.textContent = "Riprova"; }
+    };
+    box.appendChild(ul); box.appendChild(btn);
+  }
+
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const msg = input.value.trim();
+    if (!msg) return;
+    input.value = "";
+    add("user", msg);
+    const thinking = add("assistant", "…");
+    try {
+      const r = await fetch("/program/chat", { method: "POST",
+        headers: { "Content-Type": "application/json" }, body: JSON.stringify({ message: msg }) });
+      const d = await r.json();
+      if (d.error) { thinking.textContent = "⚠️ " + d.error; return; }
+      thinking.innerHTML = window.renderMd(d.reply || "(nessuna risposta)");
+      showActions(d.actions);
+    } catch (err) { thinking.textContent = "⚠️ errore di rete"; }
+  });
+})();
+</script>
+{% endif %}
+{% endblock %}

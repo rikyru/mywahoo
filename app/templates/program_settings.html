@@ -1,0 +1,125 @@
+{% extends "base.html" %}
+{% block title %}Impostazioni programma — {{ app_name }}{% endblock %}
+{% block content %}
+
+<div class="page-head">
+  <h1>Impostazioni programma</h1>
+  <a class="btn btn-secondary" href="/program">← Programma</a>
+</div>
+
+{% if message %}<div class="alert ok">{{ message }}</div>{% endif %}
+{% if error %}<div class="alert error">{{ error }}</div>{% endif %}
+
+<form method="post" action="/program/settings" class="plan-edit-form prog-settings"
+      onsubmit="const b=this.querySelector('button[type=submit]');b.disabled=true;b.textContent='Salvo e ricalcolo…';">
+
+<section class="card">
+  <h3>Obiettivo e durata</h3>
+  <label>Titolo <input type="text" name="title" value="{{ prog.title }}"></label>
+  <label>Obiettivo <textarea name="goal" rows="2" class="nw-desc">{{ prog.goal }}</textarea></label>
+  <div class="plan-edit-row">
+    <label>Inizio <input type="date" name="start" value="{{ prog.start_date.strftime('%Y-%m-%d') }}"></label>
+    <label>Fine <input type="date" name="end" value="{{ prog.end_date.strftime('%Y-%m-%d') if prog.end_date else '' }}"></label>
+    <label>Settimane per blocco <input type="number" name="block_weeks" min="1" max="8" value="{{ prog.block_weeks }}"></label>
+    <label>Moltiplicatori di carico <input type="text" name="multipliers" value="{{ multipliers }}"></label>
+  </div>
+  <p class="muted">Il carico target di ogni settimana è quello che sostieni oggi (fitness × 7) per il
+    moltiplicatore della settimana nel blocco: es. 1, 1.05, 1.1 crescono, l'ultimo &lt; 1 è lo scarico.</p>
+</section>
+
+<section class="card">
+  <h3>Settimana tipo</h3>
+  <p class="muted"><strong>Pianificato</strong> = il contenuto lo decide il programma ·
+    <strong>esterno</strong> = lo decide qualcun altro (corso, coach): viene solo contato.
+    «Uno solo dei giorni» = alternativa (es. bici sab <em>o</em> dom).</p>
+  {% set blank = {"id": "", "days": [], "pick": "each", "sport": "", "kind": "planned", "duration": 45,
+                  "focus": "", "routines": [], "indoor": false, "enabled": true, "new": true} %}
+  {% for s in template + [blank] %}{% set i = loop.index0 %}
+  <div class="prog-slot {% if s.new %}prog-new{% endif %}">
+    <input type="hidden" name="s-{{ i }}-id" value="{{ s.id }}">
+    <div class="plan-edit-row">
+      <label>Sport <input type="text" name="s-{{ i }}-sport" value="{{ s.sport }}"
+                          placeholder="{{ 'aggiungi uno slot…' if s.new else '' }}"></label>
+      <label>Tipo
+        <select name="s-{{ i }}-kind">
+          <option value="planned">pianificato</option>
+          <option value="external" {% if s.kind == 'external' %}selected{% endif %}>esterno</option>
+        </select></label>
+      <label>Durata (min) <input type="number" name="s-{{ i }}-duration" value="{{ s.duration }}" min="5"></label>
+      <label>Intensità
+        <select name="s-{{ i }}-intensity">
+          {% for v in ["leggera", "media", "intensa"] %}
+          <option value="{{ v }}" {% if (s.intensity or 'media') == v %}selected{% endif %}>{{ v }}</option>
+          {% endfor %}
+        </select></label>
+    </div>
+    <div class="prog-days">
+      {% for d in weekdays %}
+      <label><input type="checkbox" name="s-{{ i }}-day-{{ loop.index0 }}" {% if loop.index0 in s.days %}checked{% endif %}> {{ d }}</label>
+      {% endfor %}
+      <label class="muted"><input type="checkbox" name="s-{{ i }}-pick" {% if s.pick == 'one' %}checked{% endif %}> uno solo dei giorni</label>
+    </div>
+    <label>Intenzione del giorno <input type="text" name="s-{{ i }}-focus" value="{{ s.focus }}"
+           placeholder="es. solo core / gambe carico / scarico gambe"></label>
+    <div class="prog-flags">
+      {% for r in routines %}
+      <label><input type="checkbox" name="s-{{ i }}-rt-{{ r.id }}" {% if r.id in s.routines %}checked{% endif %}> 🔁 {{ r.name }}</label>
+      {% endfor %}
+      <label><input type="checkbox" name="s-{{ i }}-indoor" {% if s.indoor %}checked{% endif %}> indoor / rulli</label>
+      <label><input type="checkbox" name="s-{{ i }}-enabled" {% if s.enabled %}checked{% endif %}> attivo</label>
+      {% if not s.new %}<label class="muted"><input type="checkbox" name="s-{{ i }}-del"> elimina</label>{% endif %}
+    </div>
+  </div>
+  {% endfor %}
+</section>
+
+<section class="card">
+  <h3>Routine fisse</h3>
+  <p class="muted">Blocchi che non cambiano (es. il core del tuo PT): entrano negli slot dove li spunti,
+    l'AI programma il resto attorno senza toccarli.</p>
+  {% set rblank = {"id": "", "name": "", "duration_min": 15, "content": "", "video_url": "", "new": true} %}
+  {% for r in routines + [rblank] %}{% set i = loop.index0 %}
+  <div class="prog-slot {% if r.new %}prog-new{% endif %}">
+    <input type="hidden" name="r-{{ i }}-id" value="{{ r.id }}">
+    <div class="plan-edit-row">
+      <label>Nome <input type="text" name="r-{{ i }}-name" value="{{ r.name }}"
+                         placeholder="{{ 'aggiungi una routine…' if r.new else '' }}"></label>
+      <label>Durata (min) <input type="number" name="r-{{ i }}-duration" value="{{ r.duration_min }}" min="1"></label>
+      <label>Video (link) <input type="url" name="r-{{ i }}-video" value="{{ r.video_url }}" placeholder="https://…"></label>
+    </div>
+    <label>Contenuto <textarea name="r-{{ i }}-content" rows="5" class="nw-desc">{{ r.content }}</textarea></label>
+    {% if not r.new %}<label class="muted"><input type="checkbox" name="r-{{ i }}-del"> elimina</label>{% endif %}
+  </div>
+  {% endfor %}
+</section>
+
+<section class="card">
+  <h3>Attrezzatura</h3>
+  <label>Una per riga <span class="muted">(aggiungi «rulli smart» quando li compri)</span>
+    <textarea name="equipment" rows="4" class="nw-desc">{{ equipment }}</textarea></label>
+</section>
+
+<section class="card">
+  <h3>Assenze</h3>
+  {% set ablank = {"start": "", "end": "", "note": "", "allowed": [], "new": true} %}
+  {% for a in absences + [ablank] %}{% set i = loop.index0 %}
+  <div class="plan-edit-row prog-slot {% if a.new %}prog-new{% endif %}">
+    <label>Dal <input type="date" name="a-{{ i }}-start" value="{{ a.start }}"></label>
+    <label>Al <input type="date" name="a-{{ i }}-end" value="{{ a.end }}"></label>
+    <label>Nota <input type="text" name="a-{{ i }}-note" value="{{ a.note }}" placeholder="es. vacanze"></label>
+    <label>Sport ancora possibili <input type="text" name="a-{{ i }}-allowed" value="{{ a.allowed | join(', ') }}"
+           placeholder="vuoto = niente; es. Corpo libero"></label>
+    {% if not a.new %}<label class="muted"><input type="checkbox" name="a-{{ i }}-del"> elimina</label>{% endif %}
+  </div>
+  {% endfor %}
+</section>
+
+<section class="card">
+  <h3>Note del programma</h3>
+  <label>Indicazioni in più per l'AI <span class="muted">(la tua memoria AI generale viene comunque letta)</span>
+    <textarea name="notes" rows="4" class="nw-desc">{{ prog.notes }}</textarea></label>
+</section>
+
+<div><button class="btn" type="submit">Salva e ricalcola</button></div>
+</form>
+{% endblock %}
