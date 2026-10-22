@@ -21,7 +21,9 @@ seduta trasformata in test FTP (l'FTP attuale, 145 W, è stimato dal GPS).
 3. L'RPE target mi diceva qualcosa, o guardavo solo il contenuto?
 4. Cose fastidiose: sedute assurde, motivi incomprensibili, cose fatte a mano.
 
-## Note:
+## Diario del test
+- Settimana 1 (22/10 → 01/11):
+- Settimana 2 (02/11 → 08/11):
 
 ## Dubbi aperti (dal confronto sull'overengineering)
 - **Il motore è più preciso dei dati.** TRIMP di sedute a casa da RPE stimato, nuoto da
