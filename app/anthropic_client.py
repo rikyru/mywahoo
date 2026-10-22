@@ -248,6 +248,8 @@ def _log_usage(label: str, data: dict, provider: str) -> None:
     if tok_in and tok_cached:
         cached_note = f" ({tok_cached} da cache, {round(100 * tok_cached / tok_in)}% dell'input)"
     logger.info("AI call ok (%s): %s in / %s out tokens%s", label, tok_in, tok_out, cached_note)
+    from . import ai_usage   # lazy: keeps the import graph simple
+    ai_usage.record(provider, effective_model(), tok_in, tok_out, tok_cached)
 
 
 async def _call_messages(system: str, messages: list, cache: bool = False) -> str:
@@ -309,6 +311,7 @@ async def _openai_tools(system, messages, tools, executor, model, max_rounds) ->
                          "content": _run_tool(executor, fn.get("name") or "", args)})
     # out of rounds: one last answer without offering tools
     data = await _post(OPENAI_API_URL, _payload(False), headers, "OpenAI")
+    _log_usage("OpenAI", data, "openai")
     return ((data.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
 
 
@@ -343,6 +346,7 @@ async def _anthropic_tools(system, messages, tools, executor, model, cache, max_
              "content": _run_tool(executor, tu.get("name") or "", tu.get("input") or {})}
             for tu in tool_uses]})
     data = await _post(API_URL, _payload(False), headers, "Anthropic")
+    _log_usage("Anthropic", data, "anthropic")
     return "".join(b.get("text", "") for b in (data.get("content") or [])
                    if b.get("type") == "text")
 

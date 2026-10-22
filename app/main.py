@@ -19,7 +19,7 @@ from sqlalchemy import func
 from sqlmodel import Session, select
 from starlette.middleware.sessions import SessionMiddleware
 
-from . import (anthropic_client, bodycomp, cycling as cyclingmod,
+from . import (ai_usage, anthropic_client, bodycomp, cycling as cyclingmod,
                exercises as exercisesmod, fit as fitmod, form as formmod,
                google_health, gpx as gpxmod, nutrition, profile as profilemod,
                program as programmod, program_runner, progress as progressmod,
@@ -2288,9 +2288,20 @@ async def settings_page(request: Request):
         "measured_max_hr": round(measured_max) if measured_max else None,
         "nutrition_cfg": profilemod.nutrition_cfg(),
         "planmydinner_on": nutrition.is_configured(),
+        "credit": ai_usage.credit_status(),
         "message": request.query_params.get("msg"),
         "error": request.query_params.get("error"),
     })
+
+
+@app.post("/settings/credit", dependencies=[Depends(require_auth)])
+def settings_credit(amount: str = Form(""), since: str = Form(""), alert: str = Form(""),
+                    price_in: str = Form(""), price_cached: str = Form(""),
+                    price_out: str = Form("")):
+    """Credito OpenAI caricato (per stimare il residuo) e prezzi del modello."""
+    ai_usage.save_credit(amount, since, alert, price_in, price_cached, price_out)
+    return RedirectResponse(f"/settings?{urlencode({'msg': 'Credito AI salvato'})}#credito",
+                            status_code=303)
 
 
 @app.post("/settings/profile", dependencies=[Depends(require_auth)])
@@ -2637,6 +2648,7 @@ def dashboard(request: Request, win: str = "30", end: str = "",
 
     return templates.TemplateResponse(request, "dashboard.html", {
         "user": wahoo.get_user_name(),
+        "credit": ai_usage.credit_status(),
         "form": form_summary, "upcoming": upcoming,
         "last_workout": max(workouts, key=lambda w: w.start_date) if workouts else None,
         "window": window, "windows": WINDOWS,

@@ -23,6 +23,12 @@
   </div>
 </div>
 
+{% if credit and credit.low %}
+<div class="alert error">💳 Credito OpenAI stimato: <strong>${{ '%.2f'|format(credit.remaining) }}</strong>
+  {%- if credit.days_left is not none %} (~{{ credit.days_left }} giorni al consumo attuale){% endif %}.
+  È ora di ricaricare — poi aggiorna il saldo in <a href="/settings#credito">Impostazioni</a>.</div>
+{% endif %}
+
 {% if message %}<div class="alert ok">{{ message }}</div>{% endif %}
 {% if error %}<div class="alert error">{{ error }}</div>{% endif %}
 

@@ -289,6 +289,18 @@ class AiAnalysis(SQLModel, table=True):
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 
+class AiUsage(SQLModel, table=True):
+    """One AI call: tokens and estimated cost (to know when to top up credit)."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    at: datetime = Field(default_factory=datetime.utcnow, index=True)
+    provider: str = ""
+    model: str = ""
+    tok_in: int = 0
+    tok_cached: int = 0
+    tok_out: int = 0
+    cost_usd: float = 0.0
+
+
 class PeriodSummary(SQLModel, table=True):
     """Cached Claude summary for a period, keyed by period+start date."""
     key: str = Field(primary_key=True)  # e.g. "week:2026-06-08"
