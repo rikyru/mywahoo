@@ -86,19 +86,20 @@
   </div>
 
   <div class="card glance-card">
-    <div class="card-head"><h3>In programma</h3><a class="muted" href="/plans">Piani →</a></div>
+    <div class="card-head"><h3>In programma</h3><a class="muted" href="/program">Programma →</a></div>
     {% for u in upcoming %}
-    <a class="glance-next" href="/plans/{{ u.plan.id }}">
+    <a class="glance-next" href="{{ u.url }}">
       <span class="glance-next-icon">{{ sport_icon(u.s.sport) }}</span>
       <span class="glance-next-info">
         <strong>{{ u.s.title }}</strong>
         <span class="muted">{{ u.s.date | it_day }}
-          {%- if u.s.duration_min %} · {{ u.s.duration_min }} min{% endif %}</span>
+          {%- if u.s.duration_min %} · {{ u.s.duration_min }} min{% endif %}
+          {%- if u.s.rpe_target %} · RPE {{ '%g'|format(u.s.rpe_target) }}{% endif %}</span>
       </span>
     </a>
     {% else %}
-    <p class="muted">Niente in programma nei prossimi 7 giorni.
-      <a href="/plans">Crea un piano</a> e le sessioni compaiono qui.</p>
+    <p class="muted">Niente da fare nei prossimi 7 giorni.
+      <a href="/program">Apri il programma</a>.</p>
     {% endfor %}
   </div>
 </section>
@@ -211,7 +212,7 @@
     <div id="coachPlan"></div>
     <form id="coachForm" class="chat-input">
       <input type="text" id="coachMsg" autocomplete="off"
-             placeholder="Es. sto recuperando bene? fammi un piano per la settimana">
+             placeholder="Es. sto recuperando bene? domani non ci sono, sposta l'allenamento">
       <button class="btn" type="submit">Invia</button>
     </form>
   </div>

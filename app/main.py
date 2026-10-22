@@ -1348,6 +1348,7 @@ def calendar_page(request: Request, month: str = ""):
         planned = session.exec(
             select(PlanSession).where(
                 PlanSession.done == False,  # noqa: E712
+                PlanSession.skipped == False,  # noqa: E712
                 PlanSession.date >= datetime.combine(first, time.min),
                 PlanSession.date <= datetime.combine(last, time.max))).all()
     byday: dict = defaultdict(list)
@@ -1445,15 +1446,19 @@ def workout_manual(name: str = Form(""), sport: str = Form(""), date_: str = For
 @app.get("/plans", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
 def plans_page(request: Request):
     with Session(engine) as session:
-        plans = session.exec(select(TrainingPlan).order_by(
-            TrainingPlan.created_at.desc())).all()
+        # i "piani" che ospitano le sedute dei programmi non sono piani da mostrare
+        # (cancellarli romperebbe il programma)
+        program_plans = {p.plan_id for p in session.exec(select(Program)).all() if p.plan_id}
+        has_program = program_runner.active_program(session) is not None
+        plans = [p for p in session.exec(select(TrainingPlan).order_by(
+            TrainingPlan.created_at.desc())).all() if p.id not in program_plans]
         counts = {}
         for p in plans:
             sess = session.exec(select(PlanSession).where(
                 PlanSession.plan_id == p.id)).all()
             counts[p.id] = (sum(1 for s in sess if s.done), len(sess))
     return templates.TemplateResponse(request, "plans.html", {
-        "plans": plans, "counts": counts,
+        "plans": plans, "counts": counts, "has_program": has_program,
         "today": date.today().isoformat(),
         "message": request.query_params.get("msg"),
         "error": request.query_params.get("err")})
@@ -2710,17 +2715,22 @@ async def webhook_body(request: Request, background: BackgroundTasks):
 # ---------------------------------------------------------------- pages
 
 def _upcoming_sessions(days: int = 7, limit: int = 4) -> list:
-    """Planned, not-yet-done plan sessions from today onwards."""
+    """Sedute da fare da oggi in avanti (non fatte, non saltate). Con un programma
+    attivo solo le sue: i piani vecchi sono archivio e confonderebbero."""
     start = datetime.combine(date.today(), time.min)
     with Session(engine) as session:
-        rows = session.exec(
-            select(PlanSession, TrainingPlan)
-            .join(TrainingPlan, TrainingPlan.id == PlanSession.plan_id)
-            .where(PlanSession.done == False,  # noqa: E712
-                   PlanSession.date >= start,
-                   PlanSession.date <= start + timedelta(days=days))
-            .order_by(PlanSession.date)).all()
-    return [{"s": s, "plan": p} for s, p in rows][:limit]
+        prog = program_runner.active_program(session)
+        q = (select(PlanSession, TrainingPlan)
+             .join(TrainingPlan, TrainingPlan.id == PlanSession.plan_id)
+             .where(PlanSession.done == False,  # noqa: E712
+                    PlanSession.skipped == False,  # noqa: E712
+                    PlanSession.date >= start,
+                    PlanSession.date <= start + timedelta(days=days)))
+        if prog and prog.plan_id:
+            q = q.where(PlanSession.plan_id == prog.plan_id)
+        rows = session.exec(q.order_by(PlanSession.date)).all()
+    return [{"s": s, "plan": p, "url": "/program" if s.kind else f"/plans/{p.id}"}
+            for s, p in rows][:limit]
 
 
 # Google Health needs ~9s per call, far too slow to block the dashboard: the card

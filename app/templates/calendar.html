@@ -33,7 +33,7 @@
         </a>
         {% endfor %}
         {% for ps in planned[day] %}
-        <a href="/plans/{{ ps.plan_id }}" class="cal-act cal-planned" title="Pianificato: {{ ps.title }} · {{ ps.sport | sport_label }}{% if ps.duration_min %} · {{ ps.duration_min }} min{% endif %}">
+        <a href="{{ '/program' if ps.kind else '/plans/' ~ ps.plan_id }}" class="cal-act cal-planned" title="Pianificato: {{ ps.title }} · {{ ps.sport | sport_label }}{% if ps.duration_min %} · {{ ps.duration_min }} min{% endif %}">
           {{ sport_icon(ps.sport) }}
         </a>
         {% endfor %}
@@ -46,5 +46,5 @@
 </section>
 
 <p class="muted">🚴 bici · 🏊 nuoto · 🏃 corsa · 🥾 camminata/escursione · 🏋️ forza/corpo libero · 🧘 yoga/mobilità · 😴 riposo.
-  Le icone sbiadite sono sessioni <a href="/plans">pianificate</a>. Tocca un'icona per aprirla.</p>
+  Le icone sbiadite sono sedute in <a href="/program">programma</a>. Tocca un'icona per aprirla.</p>
 {% endblock %}
