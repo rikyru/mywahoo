@@ -38,3 +38,13 @@ def test_multiple_sessions_same_day_summed():
     assert out["2026-10-23"]["kcal"] == round(1000 + exp)
     assert "Forza 50′" in out["2026-10-23"]["training_note"]
     assert "Corpo libero 20′" in out["2026-10-23"]["training_note"]
+
+
+def test_free_meal_quota_is_prorated_to_the_period():
+    # caso reale: Salute su ~un mese mostrava "8/2 pasti liberi" (quota 2 è SETTIMANALE)
+    from datetime import date
+    from app.nutrition import free_meal_quota_period
+    q = free_meal_quota_period(2, date(2026, 9, 24), date(2026, 10, 23))      # 30 giorni
+    assert q == {"quota_pasti_liberi": 9, "quota_pasti_liberi_settimana": 2}
+    assert free_meal_quota_period(2, date(2026, 10, 19), date(2026, 10, 25))["quota_pasti_liberi"] == 2
+    assert free_meal_quota_period(2, date(2026, 10, 23), date(2026, 10, 23))["quota_pasti_liberi"] == 1

@@ -409,9 +409,14 @@ def _shape(summary, profile, start: date, end: date, weight_kg) -> dict | None:
             "pasti_pianificati": adh.get("planned_slots"),
             "pasti_da_piano_consumati": adh.get("in_plan_consumed"),
             "pasti_liberi_usati": adh.get("free_meals"),
-            "quota_pasti_liberi": adh.get("free_meal_quota"),
             "pasti_saltati": adh.get("not_eaten_slots"),
         }
+        weekly = adh.get("free_meal_quota")
+        if weekly:
+            # la quota del piano è SETTIMANALE: sul periodo va proporzionata, altrimenti
+            # un mese con 8 pasti liberi (2/sett) sembra "8 su 2"
+            out["aderenza_al_piano"].update(
+                free_meal_quota_period(weekly, start, end))
 
     if avg.get("days_with_data"):
         prot = avg.get("protein_g")
@@ -480,6 +485,13 @@ def _shape(summary, profile, start: date, end: date, weight_kg) -> dict | None:
         if prefs:
             out["profilo"] = prefs
     return out
+
+
+def free_meal_quota_period(weekly: float, start: date, end: date) -> dict:
+    """Quota pasti liberi del periodo [start, end] da quella settimanale del piano."""
+    days = max(1, (end - start).days + 1)
+    return {"quota_pasti_liberi": max(1, round(weekly * days / 7)),
+            "quota_pasti_liberi_settimana": weekly}
 
 
 def _r(v, nd: int = 0):
