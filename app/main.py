@@ -361,6 +361,67 @@ def _energy_series(data: dict | None, nutri: dict | None) -> list[dict]:
             for p in burned]
 
 
+KCAL_PER_KG = 7700      # energia di ~1 kg di grasso corporeo
+
+
+def _energy_balance(data: dict | None, nutri: dict | None) -> dict | None:
+    """Assunte (pasti mangiati su planmydinner) vs bruciate (dispendio totale Google)
+    per giorno, deficit medio sui giorni CHIUSI e macro vs obiettivi. Lo aggancia
+    anche a `nutri["bilancio_energetico"]` così lo vede il coach."""
+    at = (nutri or {}).get("alimentazione_tracciata") or {}
+    per_day = at.get("per_giorno") or []
+    if not per_day:
+        return None
+    burned_by = {p["date"]: p["value"] for p in
+                 ((data or {}).get("metrics", {}).get("calories_burned") or {}).get("series") or []
+                 if p.get("value")}
+    tg = (nutri or {}).get("obiettivi") or {}
+    rows = []
+    for d in per_day:
+        burned = burned_by.get(d["data"])
+        r = {**d, "bruciate": round(burned) if burned else None}
+        if burned and d.get("kcal") is not None:
+            r["saldo"] = round(d["kcal"] - burned)
+        rows.append(r)
+    closed = [r for r in rows if not r.get("in_corso")]
+    both = [r for r in closed if r.get("saldo") is not None]
+    out = {"giorni": rows[-14:][::-1], "obiettivi": tg}
+    if both:
+        avg = round(sum(r["saldo"] for r in both) / len(both))
+        out["sintesi"] = {
+            "giorni": len(both),
+            "assunte_medie": round(sum(r["kcal"] for r in both) / len(both)),
+            "bruciate_medie": round(sum(r["bruciate"] for r in both) / len(both)),
+            "saldo_medio": avg,
+            "kg_settimana": round(avg * 7 / KCAL_PER_KG, 2),
+            "giorni_deficit": sum(1 for r in both if r["saldo"] < -150),
+            "giorni_surplus": sum(1 for r in both if r["saldo"] > 150),
+        }
+    macro = []
+    for key, label in (("proteine_g", "Proteine"), ("carboidrati_g", "Carboidrati"),
+                       ("grassi_g", "Grassi")):
+        vals = [r[key] for r in closed if r.get(key) is not None]
+        if not vals:
+            continue
+        m = {"nome": label, "media_g": round(sum(vals) / len(vals)), "obiettivo_g": tg.get(key)}
+        if m["obiettivo_g"]:
+            m["pct"] = round(m["media_g"] / m["obiettivo_g"] * 100)
+        macro.append(m)
+    out["macro"] = macro
+    if nutri is not None:
+        nutri["bilancio_energetico"] = {
+            "nota": "assunte = pasti segnati come mangiati; bruciate = dispendio totale "
+                    "misurato da Google (metabolismo + attività); saldo = assunte − "
+                    "bruciate, negativo = deficit. Medie sui soli giorni chiusi (non oggi).",
+            **({"sintesi": out["sintesi"]} if "sintesi" in out else {}),
+            "macro_medie_vs_obiettivo": macro,
+            "per_giorno": [{"data": r["data"], "assunte": r.get("kcal"),
+                            "bruciate": r["bruciate"], "saldo": r.get("saldo")}
+                           for r in closed if r["bruciate"]],
+        }
+    return out
+
+
 HEALTH_STALE_DAYS = 2   # data not refreshed for longer than this -> warn
 
 
@@ -557,6 +618,7 @@ async def health_page(request: Request, win: str = "30", end: str = ""):
         "last_data": _latest_health_date(data),
         "vo2max": _vo2max_estimate(data),
         "energy_json": json.dumps(_energy_series(data, nutri)),
+        "balance": _energy_balance(data, nutri),
         "insight_html": md.markdown(insight.content, extensions=["tables"]) if insight else None,
         "insight_date": insight.created_at if insight else None,
         "error": request.query_params.get("error"),
@@ -582,6 +644,7 @@ async def health_insight(request: Request, regenerate: str = Form(default=""),
         data = await google_health.fetch_health_overview(window["start"].date(),
                                                          window["end"].date())
         _attach_vo2max(data)
+        _energy_balance(data, nutri)
         content = await anthropic_client.summarize_health(data, workouts, nutri)
     except google_health.GoogleHealthError as e:
         return RedirectResponse(f"/health?{_window_qs(window)}&{urlencode({'error': str(e)})}",
@@ -645,6 +708,7 @@ async def _coach_turn(request: Request, title_prefix: str = "") -> JSONResponse:
         workouts = [w.model_dump(exclude={"raw_summary", "fit_path", "updated_at"})
                     for w in query_range(session, window["start"], window["end"], None)]
     nutri = await nutrition.fetch_nutrition(window["start"].date(), window["end"].date())
+    _energy_balance(data, nutri)
     _, form_summary = _fitness_series()
     program = program_runner.chat_context(_program_ctx()) if has_program else None
     try:

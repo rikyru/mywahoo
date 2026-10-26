@@ -479,6 +479,11 @@ def _shape(summary, profile, start: date, end: date, weight_kg) -> dict | None:
             }
         out["alimentazione_tracciata"] = macros
 
+    tg = summary.get("targets") or {}
+    if tg.get("kcal"):
+        out["obiettivi"] = {"kcal": _r(tg.get("kcal")), "proteine_g": _r(tg.get("protein_g")),
+                            "carboidrati_g": _r(tg.get("carbs_g")), "grassi_g": _r(tg.get("fat_g"))}
+
     if profile:
         prefs = {k: v for k in ("preferences", "allergies", "excluded_foods")
                  if (v := profile.get(k))}
