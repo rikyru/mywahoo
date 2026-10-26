@@ -73,15 +73,17 @@ _KCAL_PER_KG = 7700.0          # energy in ~1 kg of body mass
 _WF_MAX_KCAL = 350.0           # cap per-cycle correction so it can't swing wildly
 
 
-def weight_trend_kg_per_week(days: int = 28) -> dict | None:
-    """Linear fit of the weigh-ins over the last `days` → kg/week. None unless
-    there are enough readings spanning enough time to be meaningful."""
-    cutoff = datetime.utcnow() - timedelta(days=days)
+def weight_trend_kg_per_week(days: int = 28, start: datetime | None = None,
+                             end: datetime | None = None) -> dict | None:
+    """Linear fit of the weigh-ins over the last `days` (or [start, end)) → kg/week.
+    None unless there are enough readings spanning enough time to be meaningful."""
+    cutoff = start or datetime.utcnow() - timedelta(days=days)
+    q = select(BodyMeasure).where(BodyMeasure.measured_at >= cutoff,
+                                  BodyMeasure.weight_kg != None)  # noqa: E711
+    if end:
+        q = q.where(BodyMeasure.measured_at < end)
     with Session(engine) as session:
-        rows = session.exec(select(BodyMeasure)
-                            .where(BodyMeasure.measured_at >= cutoff,
-                                   BodyMeasure.weight_kg != None)  # noqa: E711
-                            .order_by(BodyMeasure.measured_at)).all()
+        rows = session.exec(q.order_by(BodyMeasure.measured_at)).all()
     pts = [(r.measured_at, r.weight_kg) for r in rows if r.weight_kg]
     if len(pts) < 4:
         return None
@@ -97,7 +99,8 @@ def weight_trend_kg_per_week(days: int = 28) -> dict | None:
     if denom == 0:
         return None
     slope = (n * sum(a * b for a, b in zip(xs, ys)) - sx * sy) / denom   # kg/day
-    return {"rate": slope * 7.0, "n": n, "span_days": round(span)}
+    return {"rate": slope * 7.0, "n": n, "span_days": round(span),
+            "first_kg": ys[0], "last_kg": ys[-1]}
 
 
 def weight_feedback(base_tdee: float, cfg: dict) -> tuple:

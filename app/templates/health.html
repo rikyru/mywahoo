@@ -310,6 +310,18 @@
       <div class="kpi"><span class="kpi-value">{{ b.giorni_deficit }}/{{ b.giorni }}</span><span class="kpi-label">giorni in deficit</span></div>
     </section>
     {% endif %}
+    {% if balance.bilancia %}{% set w = balance.bilancia %}
+    <h4>Verifica con la bilancia <small class="muted">· stessi giorni · {{ w.pesate }} pesate, {{ w.da_kg }} → {{ w.a_kg }} kg</small></h4>
+    <section class="kpi-row">
+      <div class="kpi"><span class="kpi-value">{{ '%+.2f'|format(w.kg_settimana) }}</span><span class="kpi-label">kg/settimana reali</span></div>
+      <div class="kpi"><span class="kpi-value">{{ '%+d'|format(w.saldo_reale) }}</span><span class="kpi-label">saldo reale kcal/g</span></div>
+      <div class="kpi"><span class="kpi-value">{{ w.bruciate_reali }}</span><span class="kpi-label">bruciate reali/g</span></div>
+      <div class="kpi"><span class="kpi-value">{{ '%+d'|format(w.scarto_google) }}</span><span class="kpi-label">Google vs reale</span></div>
+    </section>
+    <p class="muted">Il calo reale della bilancia (retta sulle pesate) dice quanto è il deficit <strong>vero</strong>:
+      bruciate reali = assunte medie − deficit reale. Se «Google vs reale» è molto positivo, l'orologio sovrastima
+      il dispendio (o mancano pasti registrati). Su poche settimane l'acqua sposta il peso: prendilo come indicativo.</p>
+    {% endif %}
     {% if balance.macro %}
     <section class="kpi-row">
       {% for m in balance.macro %}

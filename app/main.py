@@ -397,6 +397,22 @@ def _energy_balance(data: dict | None, nutri: dict | None) -> dict | None:
             "giorni_deficit": sum(1 for r in both if r["saldo"] < -150),
             "giorni_surplus": sum(1 for r in both if r["saldo"] > 150),
         }
+        # verifica con la bilancia sugli stessi giorni: il calo reale dice quanto
+        # è il deficit VERO, e quindi quanto bruci davvero (vs la stima Google)
+        first = date.fromisoformat(both[0]["data"])
+        last = date.fromisoformat(both[-1]["data"]) + timedelta(days=1)
+        tr = nutrition.weight_trend_kg_per_week(start=datetime.combine(first, datetime.min.time()),
+                                                end=datetime.combine(last, datetime.min.time()))
+        if tr:
+            s = out["sintesi"]
+            real_deficit = round(tr["rate"] * KCAL_PER_KG / 7)          # kcal/g (neg = deficit)
+            tdee_real = s["assunte_medie"] - real_deficit
+            out["bilancia"] = {
+                "kg_settimana": round(tr["rate"], 2), "pesate": tr["n"], "giorni": tr["span_days"],
+                "da_kg": round(tr["first_kg"], 1), "a_kg": round(tr["last_kg"], 1),
+                "saldo_reale": real_deficit, "bruciate_reali": round(tdee_real),
+                "scarto_google": s["bruciate_medie"] - round(tdee_real),
+            }
     macro = []
     for key, label in (("proteine_g", "Proteine"), ("carboidrati_g", "Carboidrati"),
                        ("grassi_g", "Grassi")):
@@ -414,6 +430,12 @@ def _energy_balance(data: dict | None, nutri: dict | None) -> dict | None:
                     "misurato da Google (metabolismo + attività); saldo = assunte − "
                     "bruciate, negativo = deficit. Medie sui soli giorni chiusi (non oggi).",
             **({"sintesi": out["sintesi"]} if "sintesi" in out else {}),
+            **({"verifica_bilancia": {**out["bilancia"], "nota":
+                "calo di peso reale (fit lineare delle pesate) sugli stessi giorni; "
+                "bruciate_reali = assunte medie − deficit reale; scarto_google = "
+                "bruciate Google − bruciate reali (positivo = Google sovrastima o pasti "
+                "non registrati). Su poche settimane l'acqua pesa: indicativo."}}
+               if "bilancia" in out else {}),
             "macro_medie_vs_obiettivo": macro,
             "per_giorno": [{"data": r["data"], "assunte": r.get("kcal"),
                             "bruciate": r["bruciate"], "saldo": r.get("saldo")}

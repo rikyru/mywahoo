@@ -1,6 +1,15 @@
 """Bilancio assunte vs bruciate (Salute): saldo per giorno, medie sui giorni chiusi,
 macro vs obiettivi e copia compatta per il coach."""
+import pytest
+
+from app import nutrition
 from app.main import _energy_balance
+
+
+@pytest.fixture(autouse=True)
+def _no_scale(monkeypatch):
+    # niente DB nei test: di default nessuna pesata
+    monkeypatch.setattr(nutrition, "weight_trend_kg_per_week", lambda **kw: None)
 
 
 def _data(**burned):
@@ -38,3 +47,15 @@ def test_no_burned_data_still_shows_macros():
     b = _energy_balance({}, _nutri())
     assert "sintesi" not in b and b["macro"]
     assert _energy_balance({}, {}) is None
+
+
+def test_scale_check_derives_real_expenditure(monkeypatch):
+    # bilancia: -0.35 kg/sett -> deficit reale -385 kcal/g (×7700/7); assunte medie 1800
+    monkeypatch.setattr(nutrition, "weight_trend_kg_per_week",
+                        lambda **kw: {"rate": -0.35, "n": 8, "span_days": 20,
+                                      "first_kg": 80.0, "last_kg": 79.0})
+    b = _energy_balance(_data(**{"2026-10-24": 2400, "2026-10-25": 2300}), _nutri())
+    w = b["bilancia"]
+    assert w["saldo_reale"] == -385
+    assert w["bruciate_reali"] == 1800 + 385
+    assert w["scarto_google"] == 2350 - 2185          # Google sovrastima di 165
