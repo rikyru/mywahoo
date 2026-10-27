@@ -618,7 +618,8 @@ async def swim_add(request: Request, date_: str = Form("", alias="date"),
                    distance_m: int = Form(...), style: str = Form(...), time: str = Form(...),
                    pool_m: int = Form(25), note: str = Form("")):
     """Aggiunge un tempo (anche vecchio, con la sua data). Passaggi facoltativi
-    dalle caselle p_<metri>: tempo letto sul cronometro a quel punto."""
+    dalle caselle p_<metri>: con p_mode=lap il tempo di ogni vasca, altrimenti il
+    tempo letto sul cronometro a quel punto."""
     def back(**q):
         return RedirectResponse(f"/progress/swim?{urlencode(q)}", status_code=303)
     t = swimmod.parse_time(time)
@@ -628,7 +629,9 @@ async def swim_add(request: Request, date_: str = Form("", alias="date"),
         return back(error="Stile, distanza o vasca non validi")
     form = await request.form()
     raw = {int(k[2:]): v for k, v in form.items() if k.startswith("p_") and k[2:].isdigit()}
-    passages, err = swimmod.parse_passages(raw, t, distance_m)
+    parse = (swimmod.laps_to_passages if form.get("p_mode") == "lap"
+             else swimmod.parse_passages)
+    passages, err = parse(raw, t, distance_m)
     if err:
         return back(error=err)
     with Session(engine) as session:

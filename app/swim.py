@@ -30,6 +30,39 @@ def parse_time(text) -> float | None:
     return round(total, 2) if total > 0 else None
 
 
+def laps_to_passages(values: dict, total_s: float, distance_m: int) -> tuple[list, str | None]:
+    """Tempi delle singole vasche dal form {metri a fine vasca: "tempo vasca"} ->
+    passaggi cumulativi [[metri, s], ...]. Vanno compilate dall'inizio senza buchi;
+    l'ultima vasca, se vuota, si ricava dal tempo finale."""
+    laps = []
+    for m, txt in sorted(values.items()):
+        if not str(txt or "").strip():
+            continue
+        t = parse_time(txt)
+        if not t or not 0 < m <= distance_m:
+            return [], f"Vasca ai {m} m non valida: «{txt}»"
+        laps.append((m, t))
+    if not laps:
+        return [], None
+    pool = laps[0][0]
+    for i, (m, _) in enumerate(laps):
+        if m != (i + 1) * pool:
+            return [], (f"Manca il tempo della vasca ai {(i + 1) * pool} m: con i tempi per "
+                        "vasca vanno messi in ordine dalla prima, senza buchi.")
+    pts, cum = [], 0.0
+    for m, t in laps:
+        cum = round(cum + t, 2)
+        pts.append([m, cum])
+    if pts[-1][0] == distance_m:
+        if abs(cum - total_s) > 1.0:
+            return [], (f"Le vasche sommano {fmt(cum)} ma il tempo finale è {fmt(total_s)}: "
+                        "controlla i tempi (o lascia vuota l'ultima vasca).")
+        pts.pop()          # l'arrivo è il tempo finale
+    elif cum >= total_s:
+        return [], f"Le vasche inserite sommano già {fmt(cum)}, oltre il tempo finale {fmt(total_s)}."
+    return pts, None
+
+
 def parse_passages(values: dict, total_s: float, distance_m: int) -> tuple[list, str | None]:
     """Passaggi dal form: {metri: "tempo letto al cronometro"} (vuoti ammessi) ->
     ([[metri, secondi], ...] crescenti, errore|None). Il tempo finale non serve: è

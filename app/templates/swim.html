@@ -9,6 +9,8 @@
   .passages .hint { font-size: .82rem; margin: .1rem 0 .5rem; }
   .passage-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: .5rem; }
   .passage-grid input { width: 100%; }
+  .mode-row { display: flex; flex-wrap: wrap; gap: .3rem 1rem; margin: .1rem 0 .3rem; }
+  .swim-form .mode { flex-direction: row; align-items: center; gap: .35rem; color: inherit; }
   .ev-head { display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: .4rem; }
   .ev-head h3 { margin: 0; }
   .laps { display: flex; flex-wrap: wrap; gap: .25rem; }
@@ -44,9 +46,14 @@
     <label>Tempo <input name="time" placeholder="1:23.45 o 38.2" required inputmode="decimal"></label>
     <fieldset class="wide passages">
       <legend>Passaggi <small class="muted">· facoltativi</small></legend>
-      <p class="muted hint">Il tempo che segnava il cronometro <strong>quando hai toccato</strong> a quella distanza
-        (es. 100 m: ai 25 «17.5», ai 50 «37.0», ai 75 «58.9»; l'arrivo è il tempo finale).
-        Puoi lasciarne vuoti: se hai solo il passaggio ai 50, metti solo quello.</p>
+      <div class="mode-row">
+        <label class="mode"><input type="radio" name="p_mode" value="lap" checked> tempo di ogni vasca</label>
+        <label class="mode"><input type="radio" name="p_mode" value="cum"> tempo al passaggio (cronometro)</label>
+      </div>
+      <p class="muted hint" id="hintLap">Il tempo della <strong>singola vasca</strong> (es. 100 m: 1ª «17.5», 2ª «19.5»,
+        3ª «21.9», 4ª «20.1»). In ordine dalla prima; l'ultima puoi lasciarla vuota, la ricavo dal tempo finale.</p>
+      <p class="muted hint" id="hintCum" hidden>Il tempo che segnava il cronometro <strong>quando hai toccato</strong>
+        (es. 100 m: ai 25 «17.5», ai 50 «37.0», ai 75 «58.9»; l'arrivo è il tempo finale). Puoi lasciarne vuoti.</p>
       <div id="passageBox" class="passage-grid"></div>
     </fieldset>
     <label class="wide">Note <input name="note" placeholder="es. partenza dal blocco, virate a capriola, stanco…"></label>
@@ -100,22 +107,31 @@
   const dist = document.getElementById("fDist"), pool = document.getElementById("fPool"),
         style = document.getElementById("fStyle"), box = document.getElementById("passageBox");
   const LEGS = ["delfino", "dorso", "rana", "libero"];
+  const modeOf = () => document.querySelector("input[name=p_mode]:checked").value;
   function render() {
-    const d = +dist.value, p = +pool.value, keep = {};
+    const d = +dist.value, p = +pool.value, keep = {}, lap = modeOf() === "lap";
+    document.getElementById("hintLap").hidden = !lap;
+    document.getElementById("hintCum").hidden = lap;
     box.querySelectorAll("input").forEach(i => { keep[i.name] = i.value; });
     box.innerHTML = "";
-    for (let m = p; m < d; m += p) {
+    for (let m = p; lap ? m <= d : m < d; m += p) {
       const leg = style.value === "misti" ? ` · ${LEGS[Math.min(3, Math.ceil(m * 4 / d) - 1)]}` : "";
       const lab = document.createElement("label");
-      lab.textContent = `ai ${m} m${leg}`;
+      lab.textContent = lap ? `${m / p}ª vasca${leg}` : `ai ${m} m${leg}`;
       const inp = document.createElement("input");
-      inp.name = `p_${m}`; inp.placeholder = "es. 37.0"; inp.inputMode = "decimal";
+      inp.name = `p_${m}`; inp.inputMode = "decimal";
+      inp.placeholder = lap ? (m === d ? "dal finale" : "es. 19.5") : "es. 37.0";
       inp.value = keep[inp.name] || "";
       lab.appendChild(inp); box.appendChild(lab);
     }
     if (!box.children.length) box.innerHTML = '<span class="muted">nessun passaggio per questa distanza</span>';
   }
-  [dist, pool, style].forEach(el => el.addEventListener("change", render));
+  [dist, pool, style, ...document.querySelectorAll("input[name=p_mode]")]
+    .forEach(el => el.addEventListener("change", (ev) => {
+      // cambiando modalità i numeri scritti non hanno più senso: si ripulisce
+      if (ev.target.name === "p_mode") box.querySelectorAll("input").forEach(i => { i.value = ""; });
+      render();
+    }));
   render();
 })();
 </script>

@@ -54,3 +54,18 @@ def test_events_best_and_progress():
     assert free["delta_s"] == -1.9
     assert [a["pb"] for a in free["attempts"]] == [False, True, False]   # recenti prima; la prima non è un PB
     assert ev[1]["delta_s"] is None and fmt(101.0) == "1:41.00"
+
+
+def test_lap_times_mode():
+    from app.swim import laps_to_passages
+    # tempi delle singole vasche, ultima vuota -> dal finale
+    assert laps_to_passages({25: "17.5", 50: "19.5", 75: "21.9", 100: ""}, 79.0, 100) == \
+        ([[25, 17.5], [50, 37.0], [75, 58.9]], None)
+    # tutte e quattro: la somma deve tornare col tempo finale (±1 s)
+    assert laps_to_passages({25: "17.5", 50: "19.5", 75: "21.9", 100: "20.1"}, 79.0, 100)[0] == \
+        [[25, 17.5], [50, 37.0], [75, 58.9]]
+    _, err = laps_to_passages({25: "17.5", 50: "19.5", 75: "21.9", 100: "25"}, 79.0, 100)
+    assert "sommano" in err
+    _, err = laps_to_passages({25: "17.5", 75: "21.9"}, 79.0, 100)     # buco
+    assert "Manca" in err
+    assert laps_to_passages({}, 79.0, 100) == ([], None)
