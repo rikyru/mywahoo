@@ -614,10 +614,11 @@ def swim_page(request: Request):
 
 
 @app.post("/progress/swim", dependencies=[Depends(require_auth)])
-def swim_add(date_: str = Form("", alias="date"), distance_m: int = Form(...),
-             style: str = Form(...), time: str = Form(...), splits: str = Form(""),
-             pool_m: int = Form(25), note: str = Form("")):
-    """Aggiunge un tempo (anche vecchio, con la sua data); passaggi facoltativi."""
+async def swim_add(request: Request, date_: str = Form("", alias="date"),
+                   distance_m: int = Form(...), style: str = Form(...), time: str = Form(...),
+                   pool_m: int = Form(25), note: str = Form("")):
+    """Aggiunge un tempo (anche vecchio, con la sua data). Passaggi facoltativi
+    dalle caselle p_<metri>: tempo letto sul cronometro a quel punto."""
     def back(**q):
         return RedirectResponse(f"/progress/swim?{urlencode(q)}", status_code=303)
     t = swimmod.parse_time(time)
@@ -625,19 +626,19 @@ def swim_add(date_: str = Form("", alias="date"), distance_m: int = Form(...),
         return back(error=f"Tempo non valido: «{time}» (es. 1:23.45 o 38.2)")
     if style not in swimmod.STYLES or distance_m <= 0 or pool_m not in (25, 50):
         return back(error="Stile, distanza o vasca non validi")
-    laps = swimmod.parse_splits(splits, t, distance_m, pool_m)
+    form = await request.form()
+    raw = {int(k[2:]): v for k, v in form.items() if k.startswith("p_") and k[2:].isdigit()}
+    passages, err = swimmod.parse_passages(raw, t, distance_m)
+    if err:
+        return back(error=err)
     with Session(engine) as session:
         session.add(SwimTime(swum_on=_parse_date(date_) or date.today(), distance_m=distance_m,
                              style=style, time_s=t, pool_m=pool_m,
-                             splits_json=json.dumps(laps) if laps else None,
+                             splits_json=json.dumps(passages) if passages else None,
                              note=(note or "").strip() or None))
         session.commit()
-    msg = f"Aggiunto {distance_m} {style} in {swimmod.fmt(t)}"
-    if splits.strip() and not laps:
-        msg += " (passaggi non letti)"
-    elif laps and abs(sum(laps) - t) > 0.6:
-        msg += f" · attenzione: i passaggi sommano {swimmod.fmt(sum(laps))}"
-    return back(msg=msg)
+    return back(msg=f"Aggiunto {distance_m} {style} in {swimmod.fmt(t)}"
+                    + (f" con {len(passages)} passaggi" if passages else ""))
 
 
 @app.post("/progress/swim/{sid}/delete", dependencies=[Depends(require_auth)])

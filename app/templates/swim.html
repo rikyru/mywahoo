@@ -5,6 +5,10 @@
   .swim-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: .6rem; align-items: end; }
   .swim-form label { display: flex; flex-direction: column; gap: .2rem; font-size: .85rem; color: var(--muted); }
   .swim-form .wide { grid-column: 1 / -1; }
+  .passages { border: 1px solid var(--border); border-radius: 10px; padding: .5rem .8rem .7rem; margin: 0; }
+  .passages .hint { font-size: .82rem; margin: .1rem 0 .5rem; }
+  .passage-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: .5rem; }
+  .passage-grid input { width: 100%; }
   .ev-head { display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: .4rem; }
   .ev-head h3 { margin: 0; }
   .laps { display: flex; flex-wrap: wrap; gap: .25rem; }
@@ -28,18 +32,23 @@
   <form method="post" action="/progress/swim" class="swim-form">
     <label>Data <input type="date" name="date" value="{{ today }}" max="{{ today }}" required></label>
     <label>Distanza (m)
-      <select name="distance_m">
+      <select name="distance_m" id="fDist">
         {% for d in (25, 50, 100, 200, 400) %}<option value="{{ d }}" {{ 'selected' if d == 50 }}>{{ d }}</option>{% endfor %}
       </select></label>
     <label>Stile
-      <select name="style">
+      <select name="style" id="fStyle">
         {% for k, v in styles.items() %}<option value="{{ k }}">{{ v }}</option>{% endfor %}
       </select></label>
     <label>Vasca
-      <select name="pool_m"><option value="25">25 m</option><option value="50">50 m</option></select></label>
+      <select name="pool_m" id="fPool"><option value="25">25 m</option><option value="50">50 m</option></select></label>
     <label>Tempo <input name="time" placeholder="1:23.45 o 38.2" required inputmode="decimal"></label>
-    <label class="wide">Passaggi (facoltativi)
-      <input name="splits" placeholder="cumulativi «0:17.5 0:37.0 0:58.9» oppure per vasca «17.5 19.5 21.9» — l'ultimo si ricava dal tempo finale"></label>
+    <fieldset class="wide passages">
+      <legend>Passaggi <small class="muted">· facoltativi</small></legend>
+      <p class="muted hint">Il tempo che segnava il cronometro <strong>quando hai toccato</strong> a quella distanza
+        (es. 100 m: ai 25 «17.5», ai 50 «37.0», ai 75 «58.9»; l'arrivo è il tempo finale).
+        Puoi lasciarne vuoti: se hai solo il passaggio ai 50, metti solo quello.</p>
+      <div id="passageBox" class="passage-grid"></div>
+    </fieldset>
     <label class="wide">Note <input name="note" placeholder="es. partenza dal blocco, virate a capriola, stanco…"></label>
     <div><button type="submit">Salva</button></div>
   </form>
@@ -67,14 +76,14 @@
   {% if e.n > 1 %}<canvas class="swim-chart" data-key="{{ e.key }}" height="90"></canvas>{% endif %}
   <div class="nutri-table-wrap">
     <table class="nutri-table swim-table">
-      <thead><tr><th>Data</th><th>Tempo</th><th>Passo /100</th><th>Passaggi</th><th></th></tr></thead>
+      <thead><tr><th>Data</th><th>Tempo</th><th>Passo /100</th><th>Passaggi <small class="muted">· al passaggio (tratto)</small></th><th></th></tr></thead>
       <tbody>
       {% for a in e.attempts %}
         <tr>
           <td>{{ a.date }}</td>
           <td><strong>{{ a.fmt }}</strong> {% if a.pb %}<span class="tag-pr">PB</span>{% endif %}</td>
           <td>{{ a.pace_100 }}</td>
-          <td>{% if a.laps %}<div class="laps">{% for lab, t in a.laps %}<span class="lap">{{ lab }} <b>{{ t }}</b></span>{% endfor %}</div>{% endif %}
+          <td>{% if a.segments %}<div class="laps">{% for g in a.segments %}<span class="lap" title="tempo del tratto di {{ g.span }} m">{{ g.at }} <b>{{ g.cum }}</b> <span class="muted">({{ g.split }})</span></span>{% endfor %}</div>{% endif %}
             {% if a.note %}<div class="muted">{{ a.note }}</div>{% endif %}</td>
           <td><form method="post" action="/progress/swim/{{ a.id }}/delete" class="inline-del"
                     onsubmit="return confirm('Eliminare questo tempo?')"><button title="Elimina">✕</button></form></td>
@@ -85,6 +94,31 @@
   </div>
 </section>
 {% endfor %}
+
+<script>
+(() => {
+  const dist = document.getElementById("fDist"), pool = document.getElementById("fPool"),
+        style = document.getElementById("fStyle"), box = document.getElementById("passageBox");
+  const LEGS = ["delfino", "dorso", "rana", "libero"];
+  function render() {
+    const d = +dist.value, p = +pool.value, keep = {};
+    box.querySelectorAll("input").forEach(i => { keep[i.name] = i.value; });
+    box.innerHTML = "";
+    for (let m = p; m < d; m += p) {
+      const leg = style.value === "misti" ? ` · ${LEGS[Math.min(3, Math.ceil(m * 4 / d) - 1)]}` : "";
+      const lab = document.createElement("label");
+      lab.textContent = `ai ${m} m${leg}`;
+      const inp = document.createElement("input");
+      inp.name = `p_${m}`; inp.placeholder = "es. 37.0"; inp.inputMode = "decimal";
+      inp.value = keep[inp.name] || "";
+      lab.appendChild(inp); box.appendChild(lab);
+    }
+    if (!box.children.length) box.innerHTML = '<span class="muted">nessun passaggio per questa distanza</span>';
+  }
+  [dist, pool, style].forEach(el => el.addEventListener("change", render));
+  render();
+})();
+</script>
 
 {% if events %}
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
