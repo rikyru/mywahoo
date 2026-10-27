@@ -24,11 +24,12 @@ from . import (ai_usage, anthropic_client, bodycomp, cycling as cyclingmod,
                exercises as exercisesmod, fit as fitmod, form as formmod,
                google_health, gpx as gpxmod, nutrition, profile as profilemod,
                program as programmod, program_runner, progress as progressmod,
-               vo2max as vo2maxmod, wahoo)
+               swim as swimmod, vo2max as vo2maxmod, wahoo)
 from .config import settings, setup_logging
 from .db import (AiAnalysis, BodyGirth, BodyMeasure, ChatMessage, ClimbEffort,
                  Conversation, CustomEffort, CustomSegment, IgnoredImport,
-                 PeriodSummary, PlanSession, Program, RouteAssessment, TrainingPlan, Workout,
+                 PeriodSummary, PlanSession, Program, RouteAssessment, SwimTime, TrainingPlan,
+                 Workout,
                  WorkoutStream, engine, get_setting, init_db, set_setting)
 
 setup_logging()
@@ -590,6 +591,62 @@ def girth_delete(gid: int):
             session.delete(g)
             session.commit()
     return RedirectResponse(f"/health?{urlencode({'msg': 'Misura eliminata'})}",
+                            status_code=303)
+
+
+def _swim_rows() -> list[dict]:
+    with Session(engine) as session:
+        rows = session.exec(select(SwimTime).order_by(SwimTime.swum_on)).all()
+    return [{"id": r.id, "date": r.swum_on.isoformat(), "distance_m": r.distance_m,
+             "style": r.style, "time_s": r.time_s, "pool_m": r.pool_m, "note": r.note,
+             "splits": json.loads(r.splits_json) if r.splits_json else []} for r in rows]
+
+
+@app.get("/progress/swim", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
+def swim_page(request: Request):
+    """Tempi cronometrati a nuoto (prove al corso) e progressi per gara."""
+    evs = swimmod.events(_swim_rows())
+    return templates.TemplateResponse(request, "swim.html", {
+        "events": evs, "styles": swimmod.STYLES, "today": date.today().isoformat(),
+        "series_json": json.dumps({e["key"]: e["series"] for e in evs}),
+        "message": request.query_params.get("msg"),
+        "error": request.query_params.get("error")})
+
+
+@app.post("/progress/swim", dependencies=[Depends(require_auth)])
+def swim_add(date_: str = Form("", alias="date"), distance_m: int = Form(...),
+             style: str = Form(...), time: str = Form(...), splits: str = Form(""),
+             pool_m: int = Form(25), note: str = Form("")):
+    """Aggiunge un tempo (anche vecchio, con la sua data); passaggi facoltativi."""
+    def back(**q):
+        return RedirectResponse(f"/progress/swim?{urlencode(q)}", status_code=303)
+    t = swimmod.parse_time(time)
+    if not t:
+        return back(error=f"Tempo non valido: «{time}» (es. 1:23.45 o 38.2)")
+    if style not in swimmod.STYLES or distance_m <= 0 or pool_m not in (25, 50):
+        return back(error="Stile, distanza o vasca non validi")
+    laps = swimmod.parse_splits(splits, t, distance_m, pool_m)
+    with Session(engine) as session:
+        session.add(SwimTime(swum_on=_parse_date(date_) or date.today(), distance_m=distance_m,
+                             style=style, time_s=t, pool_m=pool_m,
+                             splits_json=json.dumps(laps) if laps else None,
+                             note=(note or "").strip() or None))
+        session.commit()
+    msg = f"Aggiunto {distance_m} {style} in {swimmod.fmt(t)}"
+    if splits.strip() and not laps:
+        msg += " (passaggi non letti)"
+    elif laps and abs(sum(laps) - t) > 0.6:
+        msg += f" · attenzione: i passaggi sommano {swimmod.fmt(sum(laps))}"
+    return back(msg=msg)
+
+
+@app.post("/progress/swim/{sid}/delete", dependencies=[Depends(require_auth)])
+def swim_delete(sid: int):
+    with Session(engine) as session:
+        if (r := session.get(SwimTime, sid)):
+            session.delete(r)
+            session.commit()
+    return RedirectResponse(f"/progress/swim?{urlencode({'msg': 'Tempo eliminato'})}",
                             status_code=303)
 
 

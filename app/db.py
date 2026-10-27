@@ -2,7 +2,7 @@
 import gzip
 import json
 import os
-from datetime import datetime
+from datetime import date, datetime
 from typing import Optional
 
 from sqlmodel import Field, Session, SQLModel, create_engine
@@ -280,6 +280,20 @@ class BodyGirth(SQLModel, table=True):
     polpaccio_cm: Optional[float] = None       # calf
     collo_cm: Optional[float] = None           # neck
     note: Optional[str] = None
+
+
+class SwimTime(SQLModel, table=True):
+    """Tempo cronometrato in vasca (prove/«gare» al corso), inserito a mano anche
+    a posteriori. `splits_json`: tempi delle singole vasche in secondi."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    swum_on: date = Field(index=True)
+    distance_m: int
+    style: str                                 # libero, dorso, rana, delfino, misti
+    time_s: float
+    splits_json: Optional[str] = None          # [s vasca 1, s vasca 2, ...]
+    pool_m: int = 25
+    note: Optional[str] = None
+    created_at: datetime = Field(default_factory=datetime.utcnow)
 
 
 class AiAnalysis(SQLModel, table=True):

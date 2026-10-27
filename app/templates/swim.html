@@ -1,0 +1,111 @@
+{% extends "base.html" %}
+{% block title %}Tempi nuoto — {{ app_name }}{% endblock %}
+{% block head %}
+<style>
+  .swim-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: .6rem; align-items: end; }
+  .swim-form label { display: flex; flex-direction: column; gap: .2rem; font-size: .85rem; color: var(--muted); }
+  .swim-form .wide { grid-column: 1 / -1; }
+  .ev-head { display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: .4rem; }
+  .ev-head h3 { margin: 0; }
+  .laps { display: flex; flex-wrap: wrap; gap: .25rem; }
+  .lap { font-size: .78rem; padding: .08rem .45rem; border-radius: 999px; background: var(--bg-elev); white-space: nowrap; }
+  .lap b { font-weight: 600; }
+  .tag-pr { display: inline-block; font-size: .75rem; padding: .05rem .45rem; border-radius: 999px;
+            background: rgba(255,196,0,.18); color: #f0b400; }
+  .better { color: #34d399; } .worse { color: #ef6464; }
+  .swim-table td { vertical-align: top; }
+  .inline-del { display: inline; }
+  .inline-del button { background: none; border: none; color: var(--muted); cursor: pointer; padding: 0 .2rem; }
+</style>
+{% endblock %}
+{% block content %}
+<h2>Tempi nuoto <small class="muted">· prove cronometrate al corso</small></h2>
+{% if message %}<p class="alert ok">{{ message }}</p>{% endif %}
+{% if error %}<p class="alert error">{{ error }}</p>{% endif %}
+
+<section class="card">
+  <h3>Aggiungi un tempo <small class="muted">· anche vecchio, con la sua data</small></h3>
+  <form method="post" action="/progress/swim" class="swim-form">
+    <label>Data <input type="date" name="date" value="{{ today }}" max="{{ today }}" required></label>
+    <label>Distanza (m)
+      <select name="distance_m">
+        {% for d in (25, 50, 100, 200, 400) %}<option value="{{ d }}" {{ 'selected' if d == 50 }}>{{ d }}</option>{% endfor %}
+      </select></label>
+    <label>Stile
+      <select name="style">
+        {% for k, v in styles.items() %}<option value="{{ k }}">{{ v }}</option>{% endfor %}
+      </select></label>
+    <label>Vasca
+      <select name="pool_m"><option value="25">25 m</option><option value="50">50 m</option></select></label>
+    <label>Tempo <input name="time" placeholder="1:23.45 o 38.2" required inputmode="decimal"></label>
+    <label class="wide">Passaggi (facoltativi)
+      <input name="splits" placeholder="cumulativi «0:17.5 0:37.0 0:58.9» oppure per vasca «17.5 19.5 21.9» — l'ultimo si ricava dal tempo finale"></label>
+    <label class="wide">Note <input name="note" placeholder="es. partenza dal blocco, virate a capriola, stanco…"></label>
+    <div><button type="submit">Salva</button></div>
+  </form>
+</section>
+
+{% if not events %}
+<section class="card"><p class="muted">Nessun tempo ancora. Inserisci i tempi delle prove (anche quelle passate):
+  per ogni gara — es. 50 stile libero, 100 misti — vedrai record, progressi e passaggi.</p></section>
+{% endif %}
+
+{% for e in events %}
+<section class="card">
+  <div class="ev-head">
+    <h3>{{ e.label }}</h3>
+    <span class="muted">{{ e.n }} prov{{ 'a' if e.n == 1 else 'e' }}</span>
+  </div>
+  <section class="kpi-row">
+    <div class="kpi"><span class="kpi-value">{{ e.best }}</span><span class="kpi-label">record · {{ e.best_date }}</span></div>
+    <div class="kpi"><span class="kpi-value">{{ e.last }}</span><span class="kpi-label">ultima · {{ e.last_date }}</span></div>
+    {% if e.delta_s is not none %}
+    <div class="kpi"><span class="kpi-value {{ 'better' if e.delta_s < 0 else ('worse' if e.delta_s > 0 else '') }}">{{ '%+.2f'|format(e.delta_s) }} s</span>
+      <span class="kpi-label">dalla prima ({{ '%+.1f'|format(e.delta_pct) }}%)</span></div>
+    {% endif %}
+  </section>
+  {% if e.n > 1 %}<canvas class="swim-chart" data-key="{{ e.key }}" height="90"></canvas>{% endif %}
+  <div class="nutri-table-wrap">
+    <table class="nutri-table swim-table">
+      <thead><tr><th>Data</th><th>Tempo</th><th>Passo /100</th><th>Passaggi</th><th></th></tr></thead>
+      <tbody>
+      {% for a in e.attempts %}
+        <tr>
+          <td>{{ a.date }}</td>
+          <td><strong>{{ a.fmt }}</strong> {% if a.pb %}<span class="tag-pr">PB</span>{% endif %}</td>
+          <td>{{ a.pace_100 }}</td>
+          <td>{% if a.laps %}<div class="laps">{% for lab, t in a.laps %}<span class="lap">{{ lab }} <b>{{ t }}</b></span>{% endfor %}</div>{% endif %}
+            {% if a.note %}<div class="muted">{{ a.note }}</div>{% endif %}</td>
+          <td><form method="post" action="/progress/swim/{{ a.id }}/delete" class="inline-del"
+                    onsubmit="return confirm('Eliminare questo tempo?')"><button title="Elimina">✕</button></form></td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endfor %}
+
+{% if events %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<script>
+const SERIES = {{ series_json | safe }};
+const fmt = (s) => { const m = Math.floor(s / 60), r = (s - m * 60).toFixed(2);
+                     return m ? `${m}:${r.padStart(5, "0")}` : r; };
+document.querySelectorAll(".swim-chart").forEach((cv) => {
+  const pts = SERIES[cv.dataset.key] || [];
+  new Chart(cv, {
+    type: "line",
+    data: { labels: pts.map(p => p.date),
+            datasets: [{ label: "tempo", data: pts.map(p => p.s), borderColor: "#2a9d8f",
+                         backgroundColor: "#2a9d8f22", pointRadius: 3, tension: .2 }] },
+    options: { plugins: { legend: { display: false },
+                          tooltip: { callbacks: { label: (c) => fmt(c.parsed.y) } } },
+               scales: { y: { reverse: true, title: { display: true, text: "tempo (più in alto = più veloce)" },
+                              ticks: { callback: (v) => fmt(v) } } },
+               animation: false, responsive: true },
+  });
+});
+</script>
+{% endif %}
+{% endblock %}
