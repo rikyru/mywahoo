@@ -21,6 +21,8 @@
   .better { color: #34d399; } .worse { color: #ef6464; }
   .swim-table td { vertical-align: top; }
   .inline-del { display: inline; }
+  .inline-edit { background: none; border: none; color: var(--muted); cursor: pointer; padding: 0 .2rem; }
+  .nowrap { white-space: nowrap; }
   .inline-del button { background: none; border: none; color: var(--muted); cursor: pointer; padding: 0 .2rem; }
 </style>
 {% endblock %}
@@ -30,8 +32,9 @@
 {% if error %}<p class="alert error">{{ error }}</p>{% endif %}
 
 <section class="card">
-  <h3>Aggiungi un tempo <small class="muted">· anche vecchio, con la sua data</small></h3>
-  <form method="post" action="/progress/swim" class="swim-form">
+  <h3 id="formTitle">Aggiungi un tempo <small class="muted">· anche vecchio, con la sua data</small></h3>
+  <form method="post" action="/progress/swim" class="swim-form" id="swimForm">
+    <input type="hidden" name="sid" value="0">
     <label>Data <input type="date" name="date" value="{{ today }}" max="{{ today }}" required></label>
     <label>Distanza (m)
       <select name="distance_m" id="fDist">
@@ -57,7 +60,8 @@
       <div id="passageBox" class="passage-grid"></div>
     </fieldset>
     <label class="wide">Note <input name="note" placeholder="es. partenza dal blocco, virate a capriola, stanco…"></label>
-    <div><button type="submit">Salva</button></div>
+    <div><button type="submit" id="fSubmit">Salva</button>
+      <button type="button" id="fCancel" class="secondary" hidden>Annulla</button></div>
   </form>
 </section>
 
@@ -92,7 +96,11 @@
           <td>{{ a.pace_100 }}</td>
           <td>{% if a.segments %}<div class="laps">{% for g in a.segments %}<span class="lap" title="tempo del tratto di {{ g.span }} m">{{ g.at }} <b>{{ g.cum }}</b> <span class="muted">({{ g.split }})</span></span>{% endfor %}</div>{% endif %}
             {% if a.note %}<div class="muted">{{ a.note }}</div>{% endif %}</td>
-          <td><form method="post" action="/progress/swim/{{ a.id }}/delete" class="inline-del"
+          <td class="nowrap"><button type="button" class="inline-edit" title="Modifica (es. aggiungi i passaggi)"
+                data-edit='{{ {"id": a.id, "date": a.date, "distance_m": e.distance_m, "style": e.style,
+                              "pool_m": e.pool_m, "time": a.fmt, "note": a.note or "",
+                              "passages": a.passages} | tojson }}'>✏</button>
+            <form method="post" action="/progress/swim/{{ a.id }}/delete" class="inline-del"
                     onsubmit="return confirm('Eliminare questo tempo?')"><button title="Elimina">✕</button></form></td>
         </tr>
       {% endfor %}
@@ -126,6 +134,32 @@
     }
     if (!box.children.length) box.innerHTML = '<span class="muted">nessun passaggio per questa distanza</span>';
   }
+  // ✏ su una prova: carica i suoi valori nel form, il salvataggio la aggiorna
+  const form = document.getElementById("swimForm"), title = document.getElementById("formTitle"),
+        submit = document.getElementById("fSubmit"), cancel = document.getElementById("fCancel");
+  const fmt = (s) => { const m = Math.floor(s / 60), r = (s - m * 60).toFixed(2);
+                       return m ? `${m}:${r.padStart(5, "0")}` : r; };
+  const setMode = (v) => { form.querySelector(`input[name=p_mode][value=${v}]`).checked = true; };
+  document.querySelectorAll(".inline-edit").forEach((btn) => btn.addEventListener("click", () => {
+    const r = JSON.parse(btn.dataset.edit);
+    form.sid.value = r.id; form.date.value = r.date; form.time.value = r.time; form.note.value = r.note;
+    dist.value = r.distance_m; pool.value = r.pool_m; style.value = r.style;
+    // passaggi in ordine dalla prima vasca -> per vasca, altrimenti al passaggio
+    const p = r.pool_m, pts = r.passages || [];
+    const consecutive = pts.every((x, i) => x[0] === (i + 1) * p);
+    setMode(consecutive ? "lap" : "cum");
+    box.querySelectorAll("input").forEach(i => { i.value = ""; });
+    render();
+    pts.forEach((x, i) => {
+      const inp = box.querySelector(`input[name=p_${x[0]}]`);
+      if (inp) inp.value = consecutive ? fmt(x[1] - (i ? pts[i - 1][1] : 0)) : fmt(x[1]);
+    });
+    title.innerHTML = `Modifica tempo <small class="muted">· ${r.distance_m} ${r.style} del ${r.date}</small>`;
+    submit.textContent = "Salva modifiche"; cancel.hidden = false;
+    form.scrollIntoView({ behavior: "smooth", block: "start" });
+  }));
+  cancel.addEventListener("click", () => { window.location = "/progress/swim"; });
+
   [dist, pool, style, ...document.querySelectorAll("input[name=p_mode]")]
     .forEach(el => el.addEventListener("change", (ev) => {
       // cambiando modalità i numeri scritti non hanno più senso: si ripulisce

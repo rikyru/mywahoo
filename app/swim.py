@@ -144,10 +144,10 @@ def events(rows: list[dict]) -> list[dict]:
         for r in rs:
             is_pb = pb_so_far is not None and r["time_s"] < pb_so_far   # migliora il record
             pb_so_far = r["time_s"] if (is_pb or pb_so_far is None) else pb_so_far
-            attempts.append({**r, "pb": is_pb, "fmt": fmt(r["time_s"]),
+            passages = as_passages(r.get("splits"), pool)
+            attempts.append({**r, "pb": is_pb, "fmt": fmt(r["time_s"]), "passages": passages,
                              "pace_100": fmt(r["time_s"] * 100 / dist),
-                             "segments": segments(as_passages(r.get("splits"), pool),
-                                                  r["time_s"], dist, style)})
+                             "segments": segments(passages, r["time_s"], dist, style)})
         out.append({
             "key": f"{dist}-{style}-{pool}", "distance_m": dist, "style": style, "pool_m": pool,
             "label": f"{dist} {STYLES.get(style, style).lower()}" + ("" if pool == 25 else f" (vasca {pool})"),

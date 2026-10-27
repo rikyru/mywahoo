@@ -616,8 +616,9 @@ def swim_page(request: Request):
 @app.post("/progress/swim", dependencies=[Depends(require_auth)])
 async def swim_add(request: Request, date_: str = Form("", alias="date"),
                    distance_m: int = Form(...), style: str = Form(...), time: str = Form(...),
-                   pool_m: int = Form(25), note: str = Form("")):
-    """Aggiunge un tempo (anche vecchio, con la sua data). Passaggi facoltativi
+                   pool_m: int = Form(25), note: str = Form(""), sid: int = Form(0)):
+    """Aggiunge un tempo (anche vecchio, con la sua data), o con `sid` modifica uno
+    già inserito (es. per aggiungere i passaggi dopo). Passaggi facoltativi
     dalle caselle p_<metri>: con p_mode=lap il tempo di ogni vasca, altrimenti il
     tempo letto sul cronometro a quel punto."""
     def back(**q):
@@ -634,14 +635,21 @@ async def swim_add(request: Request, date_: str = Form("", alias="date"),
     passages, err = parse(raw, t, distance_m)
     if err:
         return back(error=err)
+    fields = {"swum_on": _parse_date(date_) or date.today(), "distance_m": distance_m,
+              "style": style, "time_s": t, "pool_m": pool_m,
+              "splits_json": json.dumps(passages) if passages else None,
+              "note": (note or "").strip() or None}
     with Session(engine) as session:
-        session.add(SwimTime(swum_on=_parse_date(date_) or date.today(), distance_m=distance_m,
-                             style=style, time_s=t, pool_m=pool_m,
-                             splits_json=json.dumps(passages) if passages else None,
-                             note=(note or "").strip() or None))
+        row = session.get(SwimTime, sid) if sid else None
+        if sid and not row:
+            return back(error="Tempo da modificare non trovato")
+        if row:
+            for k, v in fields.items():
+                setattr(row, k, v)
+        session.add(row or SwimTime(**fields))
         session.commit()
-    return back(msg=f"Aggiunto {distance_m} {style} in {swimmod.fmt(t)}"
-                    + (f" con {len(passages)} passaggi" if passages else ""))
+    return back(msg=f"{'Modificato' if sid else 'Aggiunto'} {distance_m} {style} in "
+                    f"{swimmod.fmt(t)}" + (f" con {len(passages)} passaggi" if passages else ""))
 
 
 @app.post("/progress/swim/{sid}/delete", dependencies=[Depends(require_auth)])
