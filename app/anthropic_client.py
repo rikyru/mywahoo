@@ -478,6 +478,29 @@ async def season_report(payload: dict) -> str:
     return await _call_claude(SEASON_SYSTEM_PROMPT, _dumps(payload))
 
 
+SWIM_SYSTEM_PROMPT = """Sei l'allenatore di nuoto di questo atleta amatore, che al corso fa ogni tanto
+prove cronometrate (25/50/100, vari stili, anche 100 misti). Ti vengono date, per
+ogni gara, le prove in ordine di data con i tempi dei singoli tratti quando ci sono.
+Rispondi in italiano, Markdown, conciso:
+
+## Come stai andando
+## Cosa dicono i passaggi
+## Su cosa lavorare
+
+Sii quantitativo (cita tempi e differenze), confronta le gare tra loro (es. stile
+più debole, frazione dei misti che costa di più, calo nella seconda vasca = gestione
+del ritmo o resistenza) e dai 2-3 indicazioni pratiche da proporre al corso. Le prove
+sono poche e distanti nel tempo: non trarre conclusioni forti da una sola prova e
+non inventare dati mancanti."""
+
+
+async def swim_report(payload: dict) -> str:
+    """Commento ai progressi delle prove cronometrate a nuoto."""
+    if (who := _profile.ai_context()):
+        payload = {**payload, "atleta": who}
+    return await _call_claude(SWIM_SYSTEM_PROMPT, _dumps(payload))
+
+
 # Sport labels the app understands: they drive the calendar icon (sport_icon) and
 # the per-sport intensity fallback (form.sport_rpe), so the AI must not invent its
 # own ("Home workout" would land on the generic icon and a wrong default RPE).
@@ -1072,7 +1095,7 @@ Rispondi SOLO con JSON valido, senza testo attorno né code fence:
 
 async def coach_chat(overview: dict, workouts: list[dict] | None, history: list[dict],
                      nutrition: dict | None = None, form: dict | None = None,
-                     program: dict | None = None) -> dict:
+                     program: dict | None = None, swim: dict | None = None) -> dict:
     """The single grounded assistant (salute + allenamento + nutrizione), used by
     the dashboard, the health page and the program page. Returns {"risposta",
     "piano_richiesto", "azioni"}.
@@ -1089,6 +1112,8 @@ async def coach_chat(overview: dict, workouts: list[dict] | None, history: list[
         compact["forma_attuale"] = full["forma_attuale"] = form
     if program:
         compact["programma"] = full["programma"] = program
+    if swim and swim.get("gare"):
+        compact["nuoto_tempi_cronometrati"] = full["nuoto_tempi_cronometrati"] = swim
 
     _detail, _detail_exec = _detail_tools(workouts)
     captured: dict = {"azioni": []}

@@ -129,33 +129,65 @@ def segments(passages: list, total_s: float, distance_m: int, style: str) -> lis
     return out
 
 
+STYLE_ORDER = list(STYLES)
+
+
 def events(rows: list[dict]) -> list[dict]:
-    """Raggruppa per gara (distanza+stile+vasca): record, ultimo, primo, progressi.
+    """Raggruppa per gara (distanza+stile+vasca): record (UNO solo: la prova più
+    veloce, a parità la prima), ultima, delta dalla prima e dalla precedente.
     `rows`: {id, date (iso), distance_m, style, time_s, splits, pool_m, note}."""
     groups: dict = {}
     for r in rows:
         groups.setdefault((r["distance_m"], r["style"], r.get("pool_m") or 25), []).append(r)
     out = []
     for (dist, style, pool), rs in groups.items():
-        rs = sorted(rs, key=lambda r: r["date"])
-        best = min(rs, key=lambda r: r["time_s"])
+        rs = sorted(rs, key=lambda r: (r["date"], r.get("id") or 0))
+        best = min(rs, key=lambda r: r["time_s"])          # min() tiene la prima a parità
         first, last = rs[0], rs[-1]
-        pb_so_far, attempts = None, []
+        attempts, prev = [], None
         for r in rs:
-            is_pb = pb_so_far is not None and r["time_s"] < pb_so_far   # migliora il record
-            pb_so_far = r["time_s"] if (is_pb or pb_so_far is None) else pb_so_far
             passages = as_passages(r.get("splits"), pool)
-            attempts.append({**r, "pb": is_pb, "fmt": fmt(r["time_s"]), "passages": passages,
+            attempts.append({**r, "pb": r is best, "fmt": fmt(r["time_s"]), "passages": passages,
                              "pace_100": fmt(r["time_s"] * 100 / dist),
+                             "vs_pb": round(r["time_s"] - best["time_s"], 2),
+                             "vs_prev": round(r["time_s"] - prev, 2) if prev is not None else None,
                              "segments": segments(passages, r["time_s"], dist, style)})
+            prev = r["time_s"]
+        n = len(rs)
         out.append({
             "key": f"{dist}-{style}-{pool}", "distance_m": dist, "style": style, "pool_m": pool,
             "label": f"{dist} {STYLES.get(style, style).lower()}" + ("" if pool == 25 else f" (vasca {pool})"),
-            "n": len(rs), "best": fmt(best["time_s"]), "best_date": best["date"],
+            "n": n, "best": fmt(best["time_s"]), "best_date": best["date"],
             "best_s": best["time_s"], "last": fmt(last["time_s"]), "last_date": last["date"],
-            "delta_s": round(last["time_s"] - first["time_s"], 2) if len(rs) > 1 else None,
-            "delta_pct": round((last["time_s"] / first["time_s"] - 1) * 100, 1) if len(rs) > 1 else None,
+            "last_is_pb": last is best and n > 1,
+            "last_vs_prev": attempts[-1]["vs_prev"],
+            "delta_s": round(last["time_s"] - first["time_s"], 2) if n > 1 else None,
+            "delta_pct": round((last["time_s"] / first["time_s"] - 1) * 100, 1) if n > 1 else None,
             "series": [{"date": r["date"], "s": r["time_s"]} for r in rs],
             "attempts": attempts[::-1],
         })
-    return sorted(out, key=lambda e: (-e["n"], e["distance_m"], e["style"]))
+    return sorted(out, key=lambda e: (e["distance_m"], STYLE_ORDER.index(e["style"])
+                                      if e["style"] in STYLE_ORDER else 99, e["pool_m"]))
+
+
+def ai_payload(evs: list[dict]) -> dict:
+    """Vista compatta per l'AI: per gara le prove in ordine con i tempi delle
+    singole vasche/tratti (stringhe corte, pochi token)."""
+    gare = []
+    for e in evs:
+        prove = []
+        for a in reversed(e["attempts"]):                  # dalla più vecchia
+            p = {"data": a["date"], "tempo": a["fmt"]}
+            if a["segments"]:
+                p["tratti"] = " | ".join(f"{g['at']} {g['split']}" for g in a["segments"])
+            if a.get("note"):
+                p["note"] = a["note"]
+            prove.append(p)
+        g = {"gara": e["label"], "record": f"{e['best']} ({e['best_date']})",
+             "ultima": f"{e['last']} ({e['last_date']})", "prove": prove}
+        if e["delta_s"] is not None:
+            g["delta_dalla_prima_s"] = e["delta_s"]
+        gare.append(g)
+    return {"nota": "prove cronometrate al corso di nuoto (vasca corta salvo indicato); "
+                    "tempi in m:ss.cc; 'tratti' = tempo di ogni tratto tra i passaggi",
+            "gare": gare}

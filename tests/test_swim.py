@@ -52,7 +52,9 @@ def test_events_best_and_progress():
     assert free["label"] == "50 stile libero" and free["n"] == 3
     assert free["best"] == fmt(39.5) == "39.50" and free["best_date"] == "2026-06-01"
     assert free["delta_s"] == -1.9
-    assert [a["pb"] for a in free["attempts"]] == [False, True, False]   # recenti prima; la prima non è un PB
+    assert [a["pb"] for a in free["attempts"]] == [False, True, False]   # un solo PB: il record
+    assert [a["vs_pb"] for a in free["attempts"]] == [0.6, 0.0, 2.5]
+    assert free["attempts"][0]["vs_prev"] == 0.6 and free["last_vs_prev"] == 0.6
     assert ev[1]["delta_s"] is None and fmt(101.0) == "1:41.00"
 
 
@@ -69,3 +71,18 @@ def test_lap_times_mode():
     _, err = laps_to_passages({25: "17.5", 75: "21.9"}, 79.0, 100)     # buco
     assert "Manca" in err
     assert laps_to_passages({}, 79.0, 100) == ([], None)
+
+
+def test_single_pb_even_with_ties_and_ai_payload():
+    from app.swim import ai_payload
+    rows = [{"id": 1, "date": "2026-05-18", "distance_m": 50, "style": "delfino", "time_s": 46.45,
+             "splits": [[25, 19.25]]},
+            {"id": 2, "date": "2026-07-08", "distance_m": 50, "style": "delfino", "time_s": 46.45},
+            {"id": 3, "date": "2026-10-20", "distance_m": 50, "style": "delfino", "time_s": 48.0}]
+    e = events(rows)[0]
+    assert sum(a["pb"] for a in e["attempts"]) == 1
+    assert e["attempts"][-1]["pb"] and e["best_date"] == "2026-05-18"   # a parità vince la prima
+    g = ai_payload([e])["gare"][0]
+    assert g["gara"] == "50 delfino" and g["record"] == "46.45 (2026-05-18)"
+    assert g["prove"][0] == {"data": "2026-05-18", "tempo": "46.45",
+                             "tratti": "25 m 19.25 | 50 m 27.20"}

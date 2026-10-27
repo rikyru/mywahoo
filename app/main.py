@@ -606,8 +606,13 @@ def _swim_rows() -> list[dict]:
 def swim_page(request: Request):
     """Tempi cronometrati a nuoto (prove al corso) e progressi per gara."""
     evs = swimmod.events(_swim_rows())
+    with Session(engine) as session:
+        report = session.get(PeriodSummary, "swim")
     return templates.TemplateResponse(request, "swim.html", {
         "events": evs, "styles": swimmod.STYLES, "today": date.today().isoformat(),
+        "n_attempts": sum(e["n"] for e in evs),
+        "report_html": md.markdown(report.content, extensions=["tables"]) if report else None,
+        "report_date": report.created_at if report else None,
         "series_json": json.dumps({e["key"]: e["series"] for e in evs}),
         "message": request.query_params.get("msg"),
         "error": request.query_params.get("error")})
@@ -650,6 +655,25 @@ async def swim_add(request: Request, date_: str = Form("", alias="date"),
         session.commit()
     return back(msg=f"{'Modificato' if sid else 'Aggiunto'} {distance_m} {style} in "
                     f"{swimmod.fmt(t)}" + (f" con {len(passages)} passaggi" if passages else ""))
+
+
+@app.post("/progress/swim/report", dependencies=[Depends(require_auth)])
+async def swim_report():
+    """Commento AI ai progressi delle prove cronometrate (salvato, si rigenera a mano)."""
+    evs = swimmod.events(_swim_rows())
+    if not evs:
+        return JSONResponse({"error": "Nessun tempo inserito."}, status_code=400)
+    try:
+        content = await anthropic_client.swim_report(swimmod.ai_payload(evs))
+    except anthropic_client.AnthropicError as e:
+        return JSONResponse({"error": str(e)}, status_code=502)
+    with Session(engine) as session:
+        row = session.get(PeriodSummary, "swim") or PeriodSummary(key="swim", content="")
+        row.content, row.created_at = content, datetime.utcnow()
+        row.model = anthropic_client.effective_model()
+        session.add(row)
+        session.commit()
+    return JSONResponse({"html": md.markdown(content, extensions=["tables"])})
 
 
 @app.post("/progress/swim/{sid}/delete", dependencies=[Depends(require_auth)])
@@ -804,7 +828,8 @@ async def _coach_turn(request: Request, title_prefix: str = "") -> JSONResponse:
     program = program_runner.chat_context(_program_ctx()) if has_program else None
     try:
         out = await anthropic_client.coach_chat(data, workouts, history, nutri,
-                                                form_summary, program=program)
+                                                form_summary, program=program,
+                                                swim=swimmod.ai_payload(swimmod.events(_swim_rows())))
     except anthropic_client.AnthropicError as e:
         return JSONResponse({"error": str(e)}, status_code=502)
 

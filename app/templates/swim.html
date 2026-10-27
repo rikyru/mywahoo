@@ -23,16 +23,34 @@
   .inline-del { display: inline; }
   .inline-edit { background: none; border: none; color: var(--muted); cursor: pointer; padding: 0 .2rem; }
   .nowrap { white-space: nowrap; }
+  .sum-table td, .sum-table th { white-space: nowrap; }
+  .sum-table a { color: inherit; text-decoration: none; border-bottom: 1px dotted var(--muted); }
+  details.ev > summary { cursor: pointer; list-style: none; display: flex; flex-wrap: wrap; align-items: baseline;
+                         gap: .3rem 1rem; }
+  details.ev > summary::-webkit-details-marker { display: none; }
+  details.ev > summary h3 { margin: 0; min-width: 9rem; }
+  details.ev > summary::before { content: "▸"; color: var(--muted); }
+  details.ev[open] > summary::before { content: "▾"; }
+  details.ev > summary .chip { font-size: .85rem; }
+  details.ev[open] > summary { margin-bottom: .6rem; }
+  details.add-form > summary { cursor: pointer; }
+  details.add-form > summary h3 { display: inline; }
+  .toolbar { display: flex; gap: .5rem; justify-content: flex-end; margin: -.3rem 0 .6rem; }
+  .toolbar button { font-size: .85rem; }
   .inline-del button { background: none; border: none; color: var(--muted); cursor: pointer; padding: 0 .2rem; }
 </style>
 {% endblock %}
 {% block content %}
+{% macro delta(v) -%}
+{%- if v is none -%}<span class="muted">—</span>
+{%- else -%}<span class="{{ 'better' if v < 0 else ('worse' if v > 0 else 'muted') }}">{{ '%+.2f'|format(v) }}</span>{%- endif -%}
+{%- endmacro %}
 <h2>Tempi nuoto <small class="muted">· prove cronometrate al corso</small></h2>
 {% if message %}<p class="alert ok">{{ message }}</p>{% endif %}
 {% if error %}<p class="alert error">{{ error }}</p>{% endif %}
 
-<section class="card">
-  <h3 id="formTitle">Aggiungi un tempo <small class="muted">· anche vecchio, con la sua data</small></h3>
+<details class="card add-form" id="addBox" {{ 'open' if not events }}>
+  <summary><h3 id="formTitle">➕ Aggiungi un tempo <small class="muted">· anche vecchio, con la sua data</small></h3></summary>
   <form method="post" action="/progress/swim" class="swim-form" id="swimForm">
     <input type="hidden" name="sid" value="0">
     <label>Data <input type="date" name="date" value="{{ today }}" max="{{ today }}" required></label>
@@ -63,38 +81,71 @@
     <div><button type="submit" id="fSubmit">Salva</button>
       <button type="button" id="fCancel" class="secondary" hidden>Annulla</button></div>
   </form>
-</section>
+</details>
 
 {% if not events %}
 <section class="card"><p class="muted">Nessun tempo ancora. Inserisci i tempi delle prove (anche quelle passate):
   per ogni gara — es. 50 stile libero, 100 misti — vedrai record, progressi e passaggi.</p></section>
 {% endif %}
 
-{% for e in events %}
+{% if events %}
 <section class="card">
-  <div class="ev-head">
-    <h3>{{ e.label }}</h3>
-    <span class="muted">{{ e.n }} prov{{ 'a' if e.n == 1 else 'e' }}</span>
+  <h3>Riepilogo <small class="muted">· {{ events | length }} gare, {{ n_attempts }} prove</small></h3>
+  <div class="nutri-table-wrap">
+    <table class="nutri-table sum-table">
+      <thead><tr><th>Gara</th><th>Record</th><th>Ultima</th><th>vs precedente</th><th>dalla prima</th><th>Prove</th></tr></thead>
+      <tbody>
+      {% for e in events %}
+        <tr>
+          <td><a href="#ev-{{ e.key }}" data-open="ev-{{ e.key }}">{{ e.label }}</a></td>
+          <td><strong>{{ e.best }}</strong> <span class="muted">{{ e.best_date[2:] }}</span></td>
+          <td>{{ e.last }} {% if e.last_is_pb %}<span class="tag-pr">PB</span>{% endif %}</td>
+          <td>{{ delta(e.last_vs_prev) }}</td>
+          <td>{{ delta(e.delta_s) }}</td>
+          <td>{{ e.n }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
   </div>
-  <section class="kpi-row">
-    <div class="kpi"><span class="kpi-value">{{ e.best }}</span><span class="kpi-label">record · {{ e.best_date }}</span></div>
-    <div class="kpi"><span class="kpi-value">{{ e.last }}</span><span class="kpi-label">ultima · {{ e.last_date }}</span></div>
-    {% if e.delta_s is not none %}
-    <div class="kpi"><span class="kpi-value {{ 'better' if e.delta_s < 0 else ('worse' if e.delta_s > 0 else '') }}">{{ '%+.2f'|format(e.delta_s) }} s</span>
-      <span class="kpi-label">dalla prima ({{ '%+.1f'|format(e.delta_pct) }}%)</span></div>
-    {% endif %}
-  </section>
-  {% if e.n > 1 %}<canvas class="swim-chart" data-key="{{ e.key }}" height="90"></canvas>{% endif %}
+  <p class="muted">Differenze in secondi: <span class="better">negativo = più veloce</span>,
+    <span class="worse">positivo = più lento</span>. Clicca una gara per grafico, prove e passaggi.</p>
+</section>
+
+<section class="card">
+  <h3>Commento AI <small class="muted">· progressi e passaggi{% if report_date %} · {{ report_date.strftime('%d/%m/%Y') }}{% endif %}</small></h3>
+  <div id="reportBox">{% if report_html %}{{ report_html | safe }}{% else %}<p class="muted">Un commento su come stai
+    andando, cosa dicono i passaggi e su cosa lavorare al corso. I tempi li vede anche il coach in chat.</p>{% endif %}</div>
+  <button type="button" id="genReport">{{ 'Rigenera' if report_html else 'Genera commento' }}</button>
+</section>
+
+<div class="toolbar"><button type="button" class="secondary" id="openAll">Espandi tutto</button>
+  <button type="button" class="secondary" id="closeAll">Compatta</button></div>
+{% endif %}
+
+{% for e in events %}
+<details class="card ev" id="ev-{{ e.key }}">
+  <summary>
+    <h3>{{ e.label }}</h3>
+    <span class="chip">record <strong>{{ e.best }}</strong></span>
+    <span class="chip muted">ultima {{ e.last }}</span>
+    {% if e.delta_s is not none %}<span class="chip">dalla prima {{ delta(e.delta_s) }}</span>{% endif %}
+    <span class="chip muted">{{ e.n }} prov{{ 'a' if e.n == 1 else 'e' }}</span>
+  </summary>
+  {% if e.n > 1 %}<canvas class="swim-chart" data-key="{{ e.key }}" height="80"></canvas>{% endif %}
   <div class="nutri-table-wrap">
     <table class="nutri-table swim-table">
-      <thead><tr><th>Data</th><th>Tempo</th><th>Passo /100</th><th>Passaggi <small class="muted">· al passaggio (tratto)</small></th><th></th></tr></thead>
+      <thead><tr><th>Data</th><th>Tempo</th><th>vs record</th><th>vs prec.</th><th>Passo /100</th>
+        <th>Tratti <small class="muted">· tempo di ogni tratto</small></th><th></th></tr></thead>
       <tbody>
       {% for a in e.attempts %}
         <tr>
           <td>{{ a.date }}</td>
           <td><strong>{{ a.fmt }}</strong> {% if a.pb %}<span class="tag-pr">PB</span>{% endif %}</td>
+          <td>{% if a.pb %}<span class="muted">—</span>{% else %}<span class="worse">+{{ '%.2f'|format(a.vs_pb) }}</span>{% endif %}</td>
+          <td>{{ delta(a.vs_prev) }}</td>
           <td>{{ a.pace_100 }}</td>
-          <td>{% if a.segments %}<div class="laps">{% for g in a.segments %}<span class="lap" title="tempo del tratto di {{ g.span }} m">{{ g.at }} <b>{{ g.cum }}</b> <span class="muted">({{ g.split }})</span></span>{% endfor %}</div>{% endif %}
+          <td>{% if a.segments %}<div class="laps">{% for g in a.segments %}<span class="lap" title="al passaggio: {{ g.cum }}">{{ g.at }} <b>{{ g.split }}</b></span>{% endfor %}</div>{% endif %}
             {% if a.note %}<div class="muted">{{ a.note }}</div>{% endif %}</td>
           <td class="nowrap"><button type="button" class="inline-edit" title="Modifica (es. aggiungi i passaggi)"
                 data-edit='{{ {"id": a.id, "date": a.date, "distance_m": e.distance_m, "style": e.style,
@@ -107,7 +158,7 @@
       </tbody>
     </table>
   </div>
-</section>
+</details>
 {% endfor %}
 
 <script>
@@ -156,6 +207,7 @@
     });
     title.innerHTML = `Modifica tempo <small class="muted">· ${r.distance_m} ${r.style} del ${r.date}</small>`;
     submit.textContent = "Salva modifiche"; cancel.hidden = false;
+    document.getElementById("addBox").open = true;
     form.scrollIntoView({ behavior: "smooth", block: "start" });
   }));
   cancel.addEventListener("click", () => { window.location = "/progress/swim"; });
@@ -176,19 +228,55 @@
 const SERIES = {{ series_json | safe }};
 const fmt = (s) => { const m = Math.floor(s / 60), r = (s - m * 60).toFixed(2);
                      return m ? `${m}:${r.padStart(5, "0")}` : r; };
-document.querySelectorAll(".swim-chart").forEach((cv) => {
+// grafico creato all'apertura della gara (dentro un <details> chiuso avrebbe larghezza 0)
+function drawChart(cv) {
+  if (cv.dataset.done) return;
+  cv.dataset.done = "1";
   const pts = SERIES[cv.dataset.key] || [];
+  const best = Math.min(...pts.map(p => p.s));
   new Chart(cv, {
     type: "line",
     data: { labels: pts.map(p => p.date),
             datasets: [{ label: "tempo", data: pts.map(p => p.s), borderColor: "#2a9d8f",
-                         backgroundColor: "#2a9d8f22", pointRadius: 3, tension: .2 }] },
+                         backgroundColor: "#2a9d8f22", tension: .2,
+                         pointRadius: pts.map(p => p.s === best ? 6 : 3),
+                         pointBackgroundColor: pts.map(p => p.s === best ? "#f0b400" : "#2a9d8f") }] },
     options: { plugins: { legend: { display: false },
-                          tooltip: { callbacks: { label: (c) => fmt(c.parsed.y) } } },
-               scales: { y: { reverse: true, title: { display: true, text: "tempo (più in alto = più veloce)" },
+                          tooltip: { callbacks: { label: (c) => fmt(c.parsed.y) + (c.parsed.y === best ? " · record" : "") } } },
+               scales: { y: { reverse: true, title: { display: true, text: "più in alto = più veloce" },
                               ticks: { callback: (v) => fmt(v) } } },
                animation: false, responsive: true },
   });
+}
+const evs = document.querySelectorAll("details.ev");
+evs.forEach(d => d.addEventListener("toggle", () => {
+  if (d.open) d.querySelectorAll(".swim-chart").forEach(drawChart);
+}));
+document.getElementById("openAll").addEventListener("click", () => evs.forEach(d => { d.open = true; }));
+document.getElementById("closeAll").addEventListener("click", () => evs.forEach(d => { d.open = false; }));
+document.querySelectorAll("[data-open]").forEach(a => a.addEventListener("click", () => {
+  document.getElementById(a.dataset.open).open = true;
+}));
+if (location.hash.startsWith("#ev-")) {
+  const d = document.getElementById(location.hash.slice(1));
+  if (d) d.open = true;
+}
+
+const genBtn = document.getElementById("genReport");
+genBtn.addEventListener("click", async () => {
+  const box = document.getElementById("reportBox");
+  genBtn.disabled = true;
+  box.innerHTML = '<p class="muted">Sto analizzando i tuoi tempi…</p>';
+  try {
+    const r = await fetch("/progress/swim/report", { method: "POST" });
+    const d = await r.json();
+    box.innerHTML = d.html ? d.html : '<p class="alert error">' + (d.error || "errore") + "</p>";
+    if (d.html) genBtn.textContent = "Rigenera";
+  } catch (err) {
+    box.innerHTML = '<p class="alert error">errore di rete</p>';
+  } finally {
+    genBtn.disabled = false;
+  }
 });
 </script>
 {% endif %}
