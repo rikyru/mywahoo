@@ -59,3 +59,18 @@ def test_scale_check_derives_real_expenditure(monkeypatch):
     assert w["saldo_reale"] == -385
     assert w["bruciate_reali"] == 1800 + 385
     assert w["scarto_google"] == 2350 - 2185          # Google sovrastima di 165
+
+
+def test_extras_reach_the_coach_payload():
+    from datetime import date
+    from app.nutrition import _shape
+    summary = {"averages": {"days_with_data": 1, "kcal": 2400},
+               "days": [{"date": "2026-10-27", "nutrition": {"kcal": 2400},
+                         "extras": [{"name": "Aperitivo", "kcal": 650,
+                                     "description": "aperitivo: birra media, pane e salumi"},
+                                    {"name": "Mela", "kcal": 78}]}]}
+    out = _shape(summary, None, date(2026, 10, 27), date(2026, 10, 27), 82)
+    row = out["alimentazione_tracciata"]["per_giorno"][0]
+    assert row["extra_fuori_pasto"] == [
+        {"cosa": "aperitivo: birra media, pane e salumi", "kcal": 650},
+        {"cosa": "Mela", "kcal": 78}]

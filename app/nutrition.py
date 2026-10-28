@@ -453,6 +453,13 @@ def _shape(summary, profile, start: date, end: date, weight_kg) -> dict | None:
                     row["saldo_vs_obiettivo"] = _r(nut["kcal"] - tgt)
             if d.get("training_note"):
                 row["allenamento"] = d["training_note"]
+            if d.get("extras"):
+                # cosa è stato mangiato fuori pasto (es. "aperitivo: birra media,
+                # pane e salumi"), così il coach può valutarlo e non solo sommarlo
+                row["extra_fuori_pasto"] = [
+                    {k: v for k, v in (("cosa", x.get("description") or x.get("name")),
+                                       ("kcal", x.get("kcal"))) if v is not None}
+                    for x in d["extras"]]
             if d.get("date") == today_iso:
                 row["in_corso"] = True     # pasti ancora da mangiare: saldo provvisorio
             return row
