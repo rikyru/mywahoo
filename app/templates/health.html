@@ -300,27 +300,26 @@
   {# ---- bilancio: assunte vs bruciate + macro, per giorno ---- #}
   {% if balance %}
   <section class="card">
-    <h3>Sono in deficit? <small class="muted">· assunte vs bruciate</small></h3>
+    {% set cal = balance.bilancia %}
+    <h3>Sono in deficit? <small class="muted">· assunte vs bruciate{% if cal %} · calibrato sulla bilancia{% endif %}</small></h3>
     {% if balance.sintesi %}{% set b = balance.sintesi %}
     <section class="kpi-row">
       <div class="kpi"><span class="kpi-value {{ 'bal-under' if b.saldo_medio < -150 else ('bal-over' if b.saldo_medio > 150 else '') }}">{{ '%+d'|format(b.saldo_medio) }}</span><span class="kpi-label">{{ 'deficit' if b.saldo_medio < 0 else 'surplus' }} medio kcal/g</span></div>
-      <div class="kpi"><span class="kpi-value">{{ '%+.2f'|format(b.kg_settimana) }}</span><span class="kpi-label">kg/settimana (stima)</span></div>
+      <div class="kpi"><span class="kpi-value">{{ '%+.2f'|format(b.kg_settimana) }}</span><span class="kpi-label">kg/settimana{{ '' if cal else ' (stima)' }}</span></div>
       <div class="kpi"><span class="kpi-value">{{ b.assunte_medie }}</span><span class="kpi-label">assunte medie</span></div>
-      <div class="kpi"><span class="kpi-value">{{ b.bruciate_medie }}</span><span class="kpi-label">bruciate medie</span></div>
+      <div class="kpi"><span class="kpi-value">{{ b.bruciate_medie }}</span><span class="kpi-label">bruciate medie{% if cal %} · Google {{ b.bruciate_google_medie }}{% endif %}</span></div>
       <div class="kpi"><span class="kpi-value">{{ b.giorni_deficit }}/{{ b.giorni }}</span><span class="kpi-label">giorni in deficit</span></div>
     </section>
     {% endif %}
-    {% if balance.bilancia %}{% set w = balance.bilancia %}
-    <h4>Verifica con la bilancia <small class="muted">· stessi giorni · {{ w.pesate }} pesate, {{ w.da_kg }} → {{ w.a_kg }} kg</small></h4>
-    <section class="kpi-row">
-      <div class="kpi"><span class="kpi-value">{{ '%+.2f'|format(w.kg_settimana) }}</span><span class="kpi-label">kg/settimana reali</span></div>
-      <div class="kpi"><span class="kpi-value">{{ '%+d'|format(w.saldo_reale) }}</span><span class="kpi-label">saldo reale kcal/g</span></div>
-      <div class="kpi"><span class="kpi-value">{{ w.bruciate_reali }}</span><span class="kpi-label">bruciate reali/g</span></div>
-      <div class="kpi"><span class="kpi-value">{{ '%+d'|format(w.scarto_google) }}</span><span class="kpi-label">Google vs reale</span></div>
-    </section>
-    <p class="muted">Il calo reale della bilancia (retta sulle pesate) dice quanto è il deficit <strong>vero</strong>:
-      bruciate reali = assunte medie − deficit reale. Se «Google vs reale» è molto positivo, l'orologio sovrastima
-      il dispendio (o mancano pasti registrati). Su poche settimane l'acqua sposta il peso: prendilo come indicativo.</p>
+    {% if cal %}{% set w = cal %}
+    <p class="muted">Bilancia, stessi giorni: {{ w.pesate }} giorni di pesata, {{ w.da_kg }} → {{ w.a_kg }} kg
+      (<strong>{{ '%+.2f'|format(w.kg_settimana) }} kg/settimana</strong>). Quindi bruci davvero circa
+      <strong>{{ w.bruciate_reali }} kcal/g</strong>: Google ne conta {{ '%+d'|format(w.scarto_google) }} in più
+      (orologio che sovrastima e/o pasti non segnati). Le bruciate di ogni giorno sono quelle di Google × {{ w.fattore }}:
+      Google dà la differenza tra i giorni, la bilancia il livello. Su poche settimane l'acqua sposta il peso: più pesate, più precisione.</p>
+    {% else %}
+    <p class="muted">Bruciate = stima Google, che tende a sovrastimare. Con almeno 4 giorni di pesata in 2 settimane
+      il saldo si calibra da solo sulla bilancia.</p>
     {% endif %}
     {% if balance.macro %}
     <section class="kpi-row">
@@ -339,7 +338,7 @@
             <td>{{ r.data[5:] }}</td>
             <td class="nutri-act">{{ r.allenamento or '—' }}</td>
             <td>{% if r.kcal is not none %}{{ r.kcal | int }}{% else %}–{% endif %}</td>
-            <td>{{ r.bruciate if r.bruciate else '–' }}</td>
+            <td{% if r.bruciate_google %} title="Google: {{ r.bruciate_google }}"{% endif %}>{{ r.bruciate if r.bruciate else '–' }}</td>
             {% if r.in_corso %}<td class="muted">in corso</td>
             {% elif r.saldo is defined %}
             <td class="{{ 'bal-under' if r.saldo < -150 else ('bal-over' if r.saldo > 150 else 'bal-ok') }}">{{ '%+d'|format(r.saldo) }}</td>
@@ -353,7 +352,8 @@
       </table>
     </div>
     <p class="muted"><strong>Saldo = assunte − bruciate</strong>: <span class="bal-under">negativo = deficit</span> (stai perdendo peso),
-      <span class="bal-over">positivo = surplus</span>. Bruciate = dispendio totale misurato da Google (metabolismo + attività);
+      <span class="bal-over">positivo = surplus</span>. Bruciate = dispendio totale (metabolismo + attività){% if cal %}, Google
+      riportato al livello della bilancia (passa sopra al numero per vedere quello di Google){% else %} misurato da Google{% endif %};
       assunte = pasti segnati come mangiati su planmydinner. Oggi è escluso dalle medie (giornata in corso).
       Macro in grammi (P/C/G); obiettivi da planmydinner{% if balance.obiettivi.kcal %}, kcal obiettivo base {{ balance.obiettivi.kcal | int }} (più alto nei giorni di allenamento){% endif %}.
       Se un pasto non è registrato il deficit risulta più grande del vero.</p>

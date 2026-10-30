@@ -59,6 +59,12 @@ def test_scale_check_derives_real_expenditure(monkeypatch):
     assert w["saldo_reale"] == -385
     assert w["bruciate_reali"] == 1800 + 385
     assert w["scarto_google"] == 2350 - 2185          # Google sovrastima di 165
+    # le bruciate per giorno vengono riportate al livello della bilancia
+    s = b["sintesi"]
+    assert s["fonte"] == "bilancia" and s["bruciate_google_medie"] == 2350
+    assert abs(s["saldo_medio"] - (-385)) <= 1
+    day = next(r for r in b["giorni"] if r["data"] == "2026-10-24")
+    assert day["bruciate_google"] == 2400 and abs(day["bruciate"] - 2400 * 2185 / 2350) <= 1
 
 
 def test_extras_reach_the_coach_payload():

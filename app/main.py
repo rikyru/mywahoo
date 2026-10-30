@@ -365,6 +365,19 @@ def _energy_series(data: dict | None, nutri: dict | None) -> list[dict]:
 KCAL_PER_KG = 7700      # energia di ~1 kg di grasso corporeo
 
 
+def _balance_summary(both: list) -> dict:
+    avg = round(sum(r["saldo"] for r in both) / len(both))
+    return {
+        "giorni": len(both),
+        "assunte_medie": round(sum(r["kcal"] for r in both) / len(both)),
+        "bruciate_medie": round(sum(r["bruciate"] for r in both) / len(both)),
+        "saldo_medio": avg,
+        "kg_settimana": round(avg * 7 / KCAL_PER_KG, 2),
+        "giorni_deficit": sum(1 for r in both if r["saldo"] < -150),
+        "giorni_surplus": sum(1 for r in both if r["saldo"] > 150),
+    }
+
+
 def _energy_balance(data: dict | None, nutri: dict | None) -> dict | None:
     """Assunte (pasti mangiati su planmydinner) vs bruciate (dispendio totale Google)
     per giorno, deficit medio sui giorni CHIUSI e macro vs obiettivi. Lo aggancia
@@ -388,16 +401,7 @@ def _energy_balance(data: dict | None, nutri: dict | None) -> dict | None:
     both = [r for r in closed if r.get("saldo") is not None]
     out = {"giorni": rows[-14:][::-1], "obiettivi": tg}
     if both:
-        avg = round(sum(r["saldo"] for r in both) / len(both))
-        out["sintesi"] = {
-            "giorni": len(both),
-            "assunte_medie": round(sum(r["kcal"] for r in both) / len(both)),
-            "bruciate_medie": round(sum(r["bruciate"] for r in both) / len(both)),
-            "saldo_medio": avg,
-            "kg_settimana": round(avg * 7 / KCAL_PER_KG, 2),
-            "giorni_deficit": sum(1 for r in both if r["saldo"] < -150),
-            "giorni_surplus": sum(1 for r in both if r["saldo"] > 150),
-        }
+        out["sintesi"] = {**_balance_summary(both), "fonte": "google"}
         # verifica con la bilancia sugli stessi giorni: il calo reale dice quanto
         # è il deficit VERO, e quindi quanto bruci davvero (vs la stima Google)
         first = date.fromisoformat(both[0]["data"])
@@ -408,11 +412,24 @@ def _energy_balance(data: dict | None, nutri: dict | None) -> dict | None:
             s = out["sintesi"]
             real_deficit = round(tr["rate"] * KCAL_PER_KG / 7)          # kcal/g (neg = deficit)
             tdee_real = s["assunte_medie"] - real_deficit
+            # bruciate calibrate: Google dà la forma giorno per giorno (allenamento =
+            # più dispendio), la bilancia il livello. Fattore limitato contro i trend
+            # assurdi di poche pesate.
+            k = max(0.5, min(1.2, tdee_real / s["bruciate_medie"]))
+            for r in rows:
+                if r.get("bruciate"):
+                    r["bruciate_google"] = r["bruciate"]
+                    r["bruciate"] = round(r["bruciate"] * k)
+                    if r.get("kcal") is not None:
+                        r["saldo"] = round(r["kcal"] - r["bruciate"])
+            out["sintesi"] = {**_balance_summary(both), "fonte": "bilancia",
+                              "bruciate_google_medie": s["bruciate_medie"]}
             out["bilancia"] = {
                 "kg_settimana": round(tr["rate"], 2), "pesate": tr["n"], "giorni": tr["span_days"],
                 "da_kg": round(tr["first_kg"], 1), "a_kg": round(tr["last_kg"], 1),
                 "saldo_reale": real_deficit, "bruciate_reali": round(tdee_real),
                 "scarto_google": s["bruciate_medie"] - round(tdee_real),
+                "fattore": round(k, 2),
             }
     macro = []
     for key, label in (("proteine_g", "Proteine"), ("carboidrati_g", "Carboidrati"),
@@ -428,8 +445,12 @@ def _energy_balance(data: dict | None, nutri: dict | None) -> dict | None:
     if nutri is not None:
         nutri["bilancio_energetico"] = {
             "nota": "assunte = pasti segnati come mangiati; bruciate = dispendio totale "
-                    "misurato da Google (metabolismo + attività); saldo = assunte − "
-                    "bruciate, negativo = deficit. Medie sui soli giorni chiusi (non oggi).",
+                    "Google (metabolismo + attività)"
+                    + (" CALIBRATO sulla bilancia (× fattore: Google dà l'andamento tra i "
+                       "giorni, il trend del peso il livello reale)"
+                       if "bilancia" in out else "")
+                    + "; saldo = assunte − bruciate, negativo = deficit. Medie sui soli "
+                      "giorni chiusi (non oggi).",
             **({"sintesi": out["sintesi"]} if "sintesi" in out else {}),
             **({"verifica_bilancia": {**out["bilancia"], "nota":
                 "calo di peso reale (fit lineare delle pesate) sugli stessi giorni; "
