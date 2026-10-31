@@ -37,11 +37,29 @@
 </section>
 
 <section class="card">
-  <h3>Andamento</h3>
-  <canvas id="formChart" height="120"></canvas>
+  <div class="card-head">
+    <h3>Andamento</h3>
+    <div class="window-sizes" id="formRange">
+      <button class="chip" type="button" data-days="30">30 gg</button>
+      <button class="chip" type="button" data-days="90">90 gg</button>
+      <button class="chip chip-on" type="button" data-days="0">tutto</button>
+    </div>
+  </div>
+  <div style="position:relative;height:clamp(380px,62vh,560px);"><canvas id="formChart"></canvas></div>
+  <p class="muted" style="margin-top:.4rem;font-size:.82rem;">
+    Tocca o clicca un giorno per i dettagli · trascina col mouse per zoomare
+    (pizzica sul telefono, Maiusc+trascina per spostarti) ·
+    clic sulla legenda per mostrare/nascondere una linea.</p>
+  <div id="formDay" class="form-day" hidden></div>
+  {% if proj_end %}
+  <p class="muted">Tratteggio = <strong>proiezione</strong> con le sedute in programma fino al
+    {{ proj_end.date[8:10] }}/{{ proj_end.date[5:7] }}: fitness {{ proj_end.ctl }},
+    affaticamento {{ proj_end.atl }}, forma {{ "%+g"|format(proj_end.tsb) }}.</p>
+  {% endif %}
   <p class="muted"><strong>CTL</strong> = fitness (sale se ti alleni con costanza) ·
     <strong>ATL</strong> = affaticamento recente · <strong>TSB</strong> = freschezza
-    (positivo = scarico/fresco, molto negativo = affaticato). Carico stimato dalla FC.</p>
+    (positivo = scarico/fresco, molto negativo = affaticato). Carico stimato dalla FC
+    (o dall'intensità per le sedute senza FC).</p>
 </section>
 
 {% if ftp_series_json != '[]' %}
@@ -51,10 +69,11 @@
     {% if ftp_now %}<span class="seg-pr">~{{ ftp_now }} W{% if ftp_now_wkg %} · {{ "%.1f"|format(ftp_now_wkg) }} W/kg{% endif %}</span>{% endif %}
   </div>
   <canvas id="ftpChart" height="120"></canvas>
-  <p class="muted">La linea è l'<strong>eFTP</strong> (miglior 20′ stimato dal GPS ×0.95 sulle
-    ultime 6 settimane): sale solo quando batti il tuo massimo recente, così vedi se
-    migliori. I puntini sono la stima della <strong>singola uscita</strong> — bassi se quel
-    giorno non hai spinto forte. Senza misuratore di potenza è una stima, non una misura.</p>
+  <p class="muted">La linea è l'<strong>eFTP</strong> (miglior 20′ ×0.95 sulle ultime 6
+    settimane): sale solo quando batti il tuo massimo recente. I puntini sono le singole
+    uscite: <strong style="color:#f5b942">gialli</strong> = potenza misurata (rulli),
+    grigi = stimata dal GPS (bassi se quel giorno non hai spinto). Clicca un puntino per
+    aprire l'uscita.</p>
 </section>
 {% endif %}
 
@@ -83,45 +102,205 @@
 {% block scripts %}
 <script>function busy(btn){setTimeout(()=>{btn.disabled=true;btn.textContent="Analisi…";},0);}</script>
 {% if summary %}
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8/hammer.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
+<style>
+.form-day { margin-top:.6rem; padding:.7rem .9rem; border:1px solid var(--border); border-radius:10px; background:var(--card-hover); }
+.form-day h4 { margin:0 0 .35rem; font-size:.95rem; }
+.form-day ul { margin:.35rem 0 0; padding-left:1.1rem; }
+.form-day li { margin:.15rem 0; }
+.form-day .vals { display:flex; gap:1rem; flex-wrap:wrap; font-size:.9rem; }
+</style>
 <script>
+if (window.ChartZoom) Chart.register(window.ChartZoom);
 Chart.defaults.color = "#8a97a9";
 Chart.defaults.borderColor = "rgba(255,255,255,.06)";
 Chart.defaults.font.family = "Inter, system-ui, sans-serif";
-if (window.innerWidth < 640) Chart.defaults.font.size = 13;
+if (window.innerWidth < 640) Chart.defaults.font.size = 12;
+
 const S = {{ series_json | safe }};
-new Chart(document.getElementById("formChart"), {
-  type: "line",
-  data: { labels: S.map(p => p.date.slice(0, 7)),
+const P = {{ proj_json | safe }};
+const ACTS = {{ acts_json | safe }};
+const ALL = S.concat(P);
+const NS = S.length;
+const TODAY = NS - 1;
+const FINE = window.matchMedia("(pointer:fine)").matches;
+const ZONES = [   // stesse soglie dello stato in alto
+  { min: 5, max: 1e9, label: "fresco", color: "rgba(76,141,255,.07)" },
+  { min: -10, max: 5, label: "equilibrio", color: "rgba(138,151,169,.05)" },
+  { min: -20, max: -10, label: "in carico", color: "rgba(52,211,153,.08)" },
+  { min: -1e9, max: -20, label: "affaticato", color: "rgba(239,68,68,.09)" },
+];
+const zoneOf = v => (ZONES.find(z => v > z.min && v <= z.max) || ZONES[3]).label;
+const fmtDay = iso => new Date(iso + "T12:00:00").toLocaleDateString("it-IT",
+  { weekday: "short", day: "numeric", month: "short", year: "numeric" });
+// serie reale + proiezione agganciata all'ultimo giorno reale
+const real = k => ALL.map((p, i) => i < NS ? p[k] : null);
+const proj = k => ALL.map((p, i) => i >= TODAY && P.length ? p[k] : null);
+
+// fasce della freschezza + linea "oggi"
+const bands = {
+  id: "bands",
+  beforeDatasetsDraw(c) {
+    const y = c.scales.yTsb, x = c.scales.x, ctx = c.ctx;
+    if (!y) return;
+    ctx.save();
+    ctx.font = "10px Inter, system-ui, sans-serif";
+    for (const z of ZONES) {
+      const top = y.getPixelForValue(Math.min(z.max, y.max)), bot = y.getPixelForValue(Math.max(z.min, y.min));
+      if (bot <= top) continue;
+      ctx.fillStyle = z.color;
+      ctx.fillRect(x.left, top, x.right - x.left, bot - top);
+      ctx.fillStyle = "rgba(138,151,169,.75)";
+      ctx.textAlign = "right";
+      if (bot - top > 11) ctx.fillText(z.label, x.right - 4, top + 10);
+    }
+    if (P.length && TODAY >= x.min && TODAY <= x.max) {
+      const px = x.getPixelForValue(TODAY);
+      ctx.strokeStyle = "rgba(231,236,243,.35)";
+      ctx.setLineDash([3, 3]);
+      ctx.beginPath(); ctx.moveTo(px, c.chartArea.top); ctx.lineTo(px, c.chartArea.bottom); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = "rgba(231,236,243,.6)";
+      ctx.textAlign = "left";
+      ctx.fillText("oggi", px + 3, c.chartArea.top + 10);
+    }
+    ctx.restore();
+  },
+};
+
+const dash = { borderDash: [5, 4], pointRadius: 0, borderWidth: 1.6, tension: .2, spanGaps: false };
+const LABEL_KEY = { "Fitness (CTL)": "ctl", "Affaticamento (ATL)": "atl", "Forma (TSB)": "tsb", "Carico del giorno": "load" };
+const chart = new Chart(document.getElementById("formChart"), {
+  data: {
+    labels: ALL.map(p => p.date),
     datasets: [
-      { label: "Fitness (CTL)", data: S.map(p => p.ctl), borderColor: "#4c8dff",
-        backgroundColor: "rgba(76,141,255,.15)", fill: true, pointRadius: 0, borderWidth: 2, tension: .2 },
-      { label: "Affaticamento (ATL)", data: S.map(p => p.atl), borderColor: "#e08a1e",
+      { type: "line", label: "Fitness (CTL)", data: real("ctl"), yAxisID: "y", borderColor: "#4c8dff",
+        backgroundColor: "rgba(76,141,255,.13)", fill: true, pointRadius: 0, borderWidth: 2, tension: .2 },
+      { type: "line", label: "Affaticamento (ATL)", data: real("atl"), yAxisID: "y", borderColor: "#e08a1e",
         pointRadius: 0, borderWidth: 1.4, tension: .2 },
-      { label: "Forma (TSB)", data: S.map(p => p.tsb), borderColor: "#34d399",
-        pointRadius: 0, borderWidth: 1.4, tension: .2 },
-    ] },
-  options: { plugins: { legend: { position: "bottom" } },
-    scales: { x: { ticks: { maxTicksLimit: 10, callback: function(v,i){ const d=S[i]?S[i].date:''; return d.slice(0,7);} } } },
-    animation: false, responsive: true },
+      { type: "line", label: "Forma (TSB)", data: real("tsb"), yAxisID: "yTsb", borderColor: "#34d399",
+        pointRadius: 0, borderWidth: 1.6, tension: .2,
+        fill: { target: "origin", above: "rgba(52,211,153,.10)", below: "rgba(224,138,30,.12)" } },
+      { type: "bar", label: "Carico del giorno", data: real("load"), yAxisID: "yLoad",
+        backgroundColor: "rgba(138,151,169,.55)", borderRadius: 2, barPercentage: 1, categoryPercentage: .9 },
+      ...(P.length ? [
+        { type: "line", label: "proiezione", data: proj("ctl"), yAxisID: "y", borderColor: "#4c8dff", ...dash },
+        { type: "line", label: "_atl", data: proj("atl"), yAxisID: "y", borderColor: "#e08a1e", ...dash },
+        { type: "line", label: "_tsb", data: proj("tsb"), yAxisID: "yTsb", borderColor: "#34d399", ...dash },
+        { type: "bar", label: "_load", data: ALL.map((p, i) => i > TODAY ? p.load : null), yAxisID: "yLoad",
+          backgroundColor: "rgba(138,151,169,.18)", borderColor: "rgba(138,151,169,.6)", borderWidth: 1,
+          borderRadius: 2, barPercentage: 1, categoryPercentage: .9 },
+      ] : []),
+    ],
+  },
+  options: {
+    responsive: true, maintainAspectRatio: false, animation: false,
+    interaction: { mode: "index", intersect: false },
+    scales: {
+      x: { grid: { display: false },
+           ticks: { maxTicksLimit: window.innerWidth < 640 ? 5 : 9, maxRotation: 0,
+             callback(v) { const d = ALL[v] && ALL[v].date; return d ? d.slice(8, 10) + "/" + d.slice(5, 7) + "/" + d.slice(2, 4) : ""; } } },
+      y: { stack: "form", stackWeight: 3, title: { display: true, text: "fitness · fatica" } },
+      yTsb: { stack: "form", stackWeight: 1.6, offset: true, title: { display: true, text: "forma" },
+              grid: { color: c => c.tick.value === 0 ? "rgba(231,236,243,.25)" : "rgba(255,255,255,.04)" } },
+      yLoad: { stack: "form", stackWeight: 1, offset: true, beginAtZero: true,
+               title: { display: true, text: "carico" }, grid: { display: false } },
+    },
+    plugins: {
+      legend: { position: "bottom", labels: { boxWidth: 14, filter: i => !i.text.startsWith("_") } },
+      tooltip: {
+        filter: i => i.raw !== null && LABEL_KEY[i.dataset.label] !== undefined,
+        callbacks: {
+          title: it => { const i = it[0].dataIndex; return fmtDay(ALL[i].date) + (i > TODAY ? " · previsto" : ""); },
+          label: it => {
+            const p = ALL[it.dataIndex], k = LABEL_KEY[it.dataset.label];
+            return it.dataset.label + ": " + p[k] + (k === "tsb" ? " (" + zoneOf(p.tsb) + ")" : "");
+          },
+          afterBody: it => {
+            const i = it[0].dataIndex, p = ALL[i], a = ACTS[p.date] || [];
+            const lines = a.map(x => (x.planned ? "◦ " : "• ") + x.sport + " · " + (x.name || "") +
+              (x.min ? " · " + x.min + "′" : "") + " · carico " + x.load);
+            if (i > TODAY)   // nel futuro: valori previsti con le sedute in programma
+              lines.unshift("Previsto: fitness " + p.ctl + " · fatica " + p.atl + " · forma " + p.tsb + " (" + zoneOf(p.tsb) + ")");
+            return lines.length ? [""].concat(lines) : [];
+          },
+        },
+      },
+      zoom: {
+        limits: { x: { minRange: 7 } },
+        pan: { enabled: true, mode: "x", modifierKey: FINE ? "shift" : null },
+        zoom: { mode: "x", wheel: { enabled: true, modifierKey: "ctrl" }, pinch: { enabled: true },
+                drag: { enabled: FINE, backgroundColor: "rgba(76,141,255,.15)" },
+                onZoomComplete: () => markRange(null) },
+      },
+    },
+    onClick: (e, els, c) => {
+      const pts = c.getElementsAtEventForMode(e, "index", { intersect: false }, false);
+      if (pts.length) showDay(pts[0].index);
+    },
+  },
+  plugins: [bands],
 });
+
+function showDay(i) {
+  const p = ALL[i], a = ACTS[p.date] || [], box = document.getElementById("formDay");
+  const esc = t => String(t == null ? "" : t).replace(/[&<>"]/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[ch]));
+  const prev = ALL[i - 1];
+  const delta = k => prev ? " <span class='muted'>(" + (p[k] - prev[k] >= 0 ? "+" : "") + (p[k] - prev[k]).toFixed(1) + ")</span>" : "";
+  box.innerHTML = "<h4>" + esc(fmtDay(p.date)) + (i > TODAY ? " · previsto" : "") + "</h4>" +
+    "<div class='vals'><span>Fitness <strong>" + p.ctl + "</strong>" + delta("ctl") + "</span>" +
+    "<span>Fatica <strong>" + p.atl + "</strong>" + delta("atl") + "</span>" +
+    "<span>Forma <strong>" + p.tsb + "</strong> · " + zoneOf(p.tsb) + "</span>" +
+    "<span>Carico <strong>" + p.load + "</strong></span></div>" +
+    (a.length ? "<ul>" + a.map(x => "<li>" + (x.planned ? "<span class='tag'>in programma</span> " : "") +
+      (x.id ? "<a href='/workout/" + x.id + "'>" + esc(x.name || x.sport) + "</a>" : esc(x.name || x.sport)) +
+      " <span class='muted'>· " + esc(x.sport) + (x.min ? " · " + x.min + "′" : "") + " · carico " + x.load + "</span></li>").join("") + "</ul>"
+      : "<p class='muted' style='margin:.3rem 0 0;'>Riposo: nessuna attività.</p>");
+  box.hidden = false;
+}
+
+// intervalli rapidi: gli ultimi N giorni + la proiezione
+function markRange(btn) {
+  document.querySelectorAll("#formRange .chip").forEach(b => b.classList.toggle("chip-on", b === btn));
+}
+document.querySelectorAll("#formRange .chip").forEach(btn => btn.addEventListener("click", () => {
+  const n = +btn.dataset.days;
+  if (!n) chart.resetZoom();
+  else chart.zoomScale("x", { min: Math.max(0, TODAY - n + 1), max: ALL.length - 1 }, "none");
+  markRange(btn);
+}));
+showDay(TODAY);
 
 const FTP = {{ ftp_series_json | safe }};
 const ftpCanvas = document.getElementById("ftpChart");
 if (ftpCanvas && FTP.length) {
   new Chart(ftpCanvas, {
-    data: { labels: FTP.map(p => p.date.slice(0, 7)),
+    data: { labels: FTP.map(p => p.date),
       datasets: [
         { type: "line", label: "eFTP (6 settimane)", data: FTP.map(p => p.ftp),
           borderColor: "#4c8dff", backgroundColor: "rgba(76,141,255,.15)", fill: true,
           pointRadius: 0, borderWidth: 2.4, tension: .2 },
-        { type: "scatter", label: "stima per uscita", data: FTP.map(p => p.ride),
-          borderColor: "#8a97a9", backgroundColor: "#8a97a9", pointRadius: 2.5 },
+        { type: "scatter", label: "singola uscita", data: FTP.map(p => p.ride),
+          backgroundColor: FTP.map(p => p.real ? "#f5b942" : "#8a97a9"),
+          borderColor: FTP.map(p => p.real ? "#f5b942" : "#8a97a9"),
+          pointRadius: FTP.map(p => p.real ? 5 : 3), pointHoverRadius: 7 },
       ] },
-    options: { plugins: { legend: { position: "bottom" } },
-      scales: { x: { ticks: { maxTicksLimit: 10 } },
+    options: { animation: false, responsive: true,
+      interaction: { mode: "index", intersect: false },
+      plugins: { legend: { position: "bottom" },
+        tooltip: { callbacks: {
+          title: it => fmtDay(FTP[it[0].dataIndex].date),
+          afterBody: it => { const p = FTP[it[0].dataIndex];
+            return [(p.name || "") + " · " + (p.real ? "potenza misurata" : "stimata dal GPS"), "clicca per aprire"]; } } } },
+      scales: { x: { ticks: { maxTicksLimit: 8, maxRotation: 0,
+                       callback(v) { const d = FTP[v] && FTP[v].date; return d ? d.slice(8, 10) + "/" + d.slice(5, 7) : ""; } } },
                 y: { title: { display: true, text: "watt" } } },
-      animation: false, responsive: true },
+      onClick: (e, els, c) => {
+        const pts = c.getElementsAtEventForMode(e, "index", { intersect: false }, false);
+        if (pts.length && FTP[pts[0].index].id) location.href = "/workout/" + FTP[pts[0].index].id;
+      } },
   });
 }
 </script>

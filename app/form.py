@@ -97,6 +97,24 @@ def fitness_series(items: list[tuple], rest_hr: float = 55, max_hr: float = 190,
     return out
 
 
+def project(last: dict, loads: dict, until: date) -> list[dict]:
+    """Prosegue CTL/ATL/TSB dal giorno `last` della serie fino a `until` con i
+    carichi previsti ({date: load}, es. le sedute in programma): dove sarai."""
+    if not last or until <= date.fromisoformat(last["date"]):
+        return []
+    ctl, atl = last["ctl"], last["atl"]
+    out = []
+    d = date.fromisoformat(last["date"]) + timedelta(days=1)
+    while d <= until:
+        load = loads.get(d, 0.0)
+        ctl += (load - ctl) / CTL_DAYS
+        atl += (load - atl) / ATL_DAYS
+        out.append({"date": d.isoformat(), "ctl": round(ctl, 1), "atl": round(atl, 1),
+                    "tsb": round(ctl - atl, 1), "load": round(load, 1)})
+        d += timedelta(days=1)
+    return out
+
+
 def summarize(series: list[dict]) -> dict:
     """Current state + trend for the summary cards."""
     if not series:

@@ -1134,14 +1134,15 @@ def _ftp_series(window_days: int = 42) -> list[dict]:
                              .order_by(Workout.start_date)).all()
     ceiling = (profilemod.load().get("weight_kg") or cyclingmod.DEFAULT_RIDER_KG) \
         * cyclingmod.FTP_WKG_CEILING
-    pts = [(w.start_date.date(), w.best20_w) for w in rides
+    pts = [(w.start_date.date(), w.best20_w, w) for w in rides
            if w.best20_w and w.best20_w <= ceiling]
     out = []
-    for d, b in pts:
+    for d, b, w in pts:
         lo = d - timedelta(days=window_days)
-        best = cyclingmod.robust_best([b2 for d2, b2 in pts if lo <= d2 <= d])
+        best = cyclingmod.robust_best([b2 for d2, b2, _ in pts if lo <= d2 <= d])
         out.append({"date": d.isoformat(), "ride": round(b * 0.95),
-                    "ftp": round(best * 0.95)})
+                    "ftp": round(best * 0.95), "id": w.id, "name": w.name,
+                    "real": bool(w.avg_power)})   # potenza misurata (rulli/misuratore)
     return out
 
 
@@ -1186,6 +1187,40 @@ def _fitness_series() -> tuple[list, dict]:
     return series, formmod.summarize(series)
 
 
+def _form_details(series: list) -> tuple[dict, list]:
+    """Per il grafico esplorabile: le attività di ogni giorno col loro carico
+    ({iso: [{id, name, sport, load}]}) e la proiezione delle sedute in programma
+    (prossimi giorni, ognuna col carico atteso da durata e RPE target)."""
+    with Session(engine) as session:
+        ws = list(session.exec(select(Workout).order_by(Workout.start_date)))
+        today = date.today()
+        planned = session.exec(select(PlanSession).where(
+            PlanSession.date > datetime.combine(today, time.max),
+            PlanSession.date <= datetime.combine(today + timedelta(days=14), time.max),
+            PlanSession.done == False, PlanSession.skipped == False)).all()  # noqa: E712
+    measured_max = max([w.max_hr for w in ws if w.max_hr] + [0]) or None
+    rest_hr, max_hr, sex = profilemod.hr_anchors(measured_max=measured_max)
+    acts: dict = {}
+    for w in ws:
+        load = formmod.activity_load(w.avg_hr, (w.moving_s or 0) / 60, w.sport, w.rpe,
+                                     rest_hr, max_hr, sex)
+        acts.setdefault(w.start_date.date().isoformat(), []).append(
+            {"id": w.id, "name": w.name, "sport": sport_label(w.sport),
+             "min": round((w.moving_s or 0) / 60), "load": round(load)})
+    loads: dict = {}
+    for ps in planned:
+        d = ps.date.date()
+        loads[d] = loads.get(d, 0.0) + formmod.activity_load(
+            None, ps.duration_min or 0, ps.sport, ps.rpe_target, rest_hr, max_hr, sex)
+        acts.setdefault(d.isoformat(), []).append(
+            {"name": ps.title, "sport": sport_label(ps.sport), "min": ps.duration_min,
+             "load": round(formmod.activity_load(None, ps.duration_min or 0, ps.sport,
+                                                 ps.rpe_target, rest_hr, max_hr, sex)),
+             "planned": True})
+    proj = formmod.project(series[-1], loads, max(loads)) if series and loads else []
+    return acts, proj
+
+
 @app.get("/form", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
 def form_page(request: Request, months: str = "6"):
     if months not in FORM_MONTHS:
@@ -1198,11 +1233,16 @@ def form_page(request: Request, months: str = "6"):
         cutoff = (date.today() - timedelta(days=FORM_MONTHS[months] * 30)).isoformat()
         shown = [p for p in series if p["date"] >= cutoff]
         ftp_series = [p for p in ftp_series if p["date"] >= cutoff]
+    acts, proj = _form_details(series)
+    first = shown[0]["date"] if shown else ""
+    acts = {d: a for d, a in acts.items() if d >= first}
     with Session(engine) as session:
         insight = session.get(PeriodSummary, f"form:{date.today().isoformat()}")
     return templates.TemplateResponse(request, "form.html", {
         "months": months, "windows": FORM_MONTHS, "summary": summary,
         "series_json": json.dumps(shown),
+        "acts_json": json.dumps(acts), "proj_json": json.dumps(proj),
+        "proj_end": proj[-1] if proj else None,
         "ftp_series_json": json.dumps(ftp_series),
         "ftp_now": ftp_series[-1]["ftp"] if ftp_series else None,
         "ftp_now_wkg": (round(ftp_series[-1]["ftp"]
