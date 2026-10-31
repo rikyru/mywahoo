@@ -251,9 +251,23 @@ def _sport_family(label: str) -> str | None:
     return None
 
 
+# Bici al chiuso (rulli, MyWhoosh/Zwift, spinning): stessa famiglia "bike" per
+# carico, FTP e programma, ma etichetta a parte nelle liste e nei filtri.
+INDOOR_BIKE_LABEL = "Ciclismo indoor"
+_INDOOR_KEYS = ("indoor", "spin", "virtual", "trainer", "stationary", "rulli")
+
+
+def is_indoor_bike(label: str) -> bool:
+    s = (label or "").lower()
+    return _sport_family(s) == "bike" and any(k in s for k in _INDOOR_KEYS)
+
+
 def canonical_sport(label: str) -> str:
     """The one label the app stores and shows per sport family ("Bici",
-    "Cycling", "Biking", "Ciclismo" -> "Ciclismo"); unknown labels pass through."""
+    "Cycling", "Biking", "Ciclismo" -> "Ciclismo"; rulli/spinning -> "Ciclismo
+    indoor"); unknown labels pass through."""
+    if is_indoor_bike(label):
+        return INDOOR_BIKE_LABEL
     return FAMILY_LABEL.get(_sport_family(label)) or (label or "").strip()
 
 
@@ -267,7 +281,9 @@ def _same_sport(a: str, b: str) -> bool:
 
 
 def _sport_label(ex_type: str) -> str:
-    """Human label for a Google exercise type, via its family."""
+    """Human label for a Google exercise type, via its family (SPINNING -> Ciclismo indoor)."""
+    if is_indoor_bike(ex_type):
+        return INDOOR_BIKE_LABEL
     return FAMILY_LABEL.get(_sport_family(ex_type)) or ex_type.replace("_", " ").title() or "Altro"
 
 

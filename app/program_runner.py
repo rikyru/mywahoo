@@ -489,8 +489,8 @@ async def _recalc(ctx: dict, why: str) -> dict | None:
             sl, d = i["slot"], i["date"]
             k = _key(sl["id"], d)
             ex = by_key.get(k)
-            if ex and (ex.done or ex.skipped):
-                continue
+            if ex and (ex.done or ex.skipped or ex.kind == "fixed"):
+                continue                       # "fixed": seduta fissata a mano (es. test FTP), mai riscritta
             wi = weeks[P.monday(d)]
             dur = int(sl.get("duration") or 45)
             if sl.get("kind") == "external":

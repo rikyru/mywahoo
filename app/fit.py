@@ -17,6 +17,7 @@ import fitdecode
 import httpx
 from sqlmodel import Session
 
+from . import google_health
 from .db import Workout, WorkoutStream, engine, pack_streams, unpack_streams
 
 logger = logging.getLogger(__name__)
@@ -237,6 +238,9 @@ def parse_and_store(workout_id: int, path: str) -> None:
             workout.sport = session_data["sport"].replace("_", " ").title()
         if session_data.get("sub_sport"):
             workout.sub_sport = session_data["sub_sport"].replace("_", " ").title()
+            # rulli/app virtuali: "Ciclismo indoor" (stessa famiglia bici)
+            if google_health.is_indoor_bike(f"{workout.sport} {session_data['sub_sport']}"):
+                workout.sport = google_health.INDOOR_BIKE_LABEL
         start = session_data.get("start_time")
         if isinstance(start, datetime):
             workout.start_date = start.astimezone(timezone.utc).replace(tzinfo=None) \

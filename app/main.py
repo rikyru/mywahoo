@@ -1096,7 +1096,8 @@ def _index_climbs(session, w: Workout) -> None:
     streams = fitmod.load_streams(w.id)
     # rulli con app (MyWhoosh, Zwift): il GPS è quello del mondo virtuale, niente
     # salite né segmenti; resta il 20' per l'FTP
-    virtual = "virtual" in (w.sub_sport or "").lower()
+    virtual = ("virtual" in (w.sub_sport or "").lower()
+               or google_health.is_indoor_bike(w.sport))
     if streams and not virtual:
         for c in cyclingmod.detect_segments(streams):
             if not c.get("start_ll") or not c.get("top_ll"):

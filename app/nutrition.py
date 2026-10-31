@@ -194,7 +194,7 @@ async def build_targets_auto() -> dict | None:
 # Stima kcal bruciate per minuto, per sport, usata per la periodizzazione:
 # nei giorni con allenamento pianificato il target del giorno sale di conseguenza.
 _KCAL_PER_MIN = {
-    "bici": 9.0, "ciclismo": 9.0, "mtb": 9.0, "corsa": 10.0, "running": 10.0,
+    "bici": 9.0, "ciclismo": 9.0, "ciclismo indoor": 8.0, "mtb": 9.0, "corsa": 10.0, "running": 10.0,
     "nuoto": 9.0, "camminata": 5.0, "trekking": 6.0, "escursione": 6.0,
     "forza": 6.0, "palestra": 6.0, "corpo libero": 6.0, "yoga": 3.0,
 }

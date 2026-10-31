@@ -153,6 +153,7 @@
       <span class="muted">{{ s.sport | sport_label }} · {{ s.duration_min }} min
         {%- if s.rpe_target %} · RPE {{ '%g'|format(s.rpe_target) }}{% endif %}
         {%- if s.kind == 'external' %} · <span class="tag">esterna</span>{% endif %}
+        {%- if s.kind == 'fixed' %} · <span class="tag">fissata</span>{% endif %}
         {%- if v.indoor %} · <span class="tag">rulli</span>{% endif %}
         {%- if s.skipped %} · saltata{% elif s.done %} · fatta ✓{% elif v.past %} · non fatta{% endif %}
         {%- if v.proposal %} · <span class="tag">proposta in attesa</span>{% endif %}
