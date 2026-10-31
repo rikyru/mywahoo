@@ -17,6 +17,8 @@
 <body>
   <header class="topbar">
     <a href="/" class="brand">🏃 {{ app_name }}</a>
+    <button type="button" class="nav-toggle" id="navToggle" aria-controls="topnav"
+            aria-expanded="false" aria-label="Menu">☰</button>
     <nav id="topnav">
       <a href="/">Dashboard</a>
 
@@ -61,11 +63,14 @@
     // highlight the current section (link + its parent group) and wire dropdowns
     (function () {
       const path = location.pathname;
-      document.querySelectorAll("#topnav a").forEach(a => {
+      // solo la voce più specifica: /progress/swim è "Tempi nuoto", non anche "Progressi"
+      const hits = Array.from(document.querySelectorAll("#topnav a")).filter(a => {
         const href = a.getAttribute("href");
-        const match = (href === "/" && path === "/")
+        return (href === "/" && path === "/")
           || (href !== "/" && href !== "/logout" && path.startsWith(href));
-        if (!match) return;
+      });
+      const best = Math.max(0, ...hits.map(a => a.getAttribute("href").length));
+      hits.filter(a => a.getAttribute("href").length === best).forEach(a => {
         a.classList.add("active");
         const grp = a.closest(".nav-group");
         if (grp) grp.querySelector(".nav-top").classList.add("active");
@@ -87,6 +92,19 @@
       });
       document.addEventListener("click", closeAll);
       document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeAll(); });
+
+      // telefono: menu a tendina dal pulsante ☰ (su PC il pulsante non si vede)
+      const bar = document.querySelector(".topbar"), tog = document.getElementById("navToggle");
+      tog.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const open = bar.classList.toggle("nav-open");
+        tog.setAttribute("aria-expanded", String(open));
+        tog.textContent = open ? "✕" : "☰";
+      });
+      // nome della sezione corrente accanto al logo, così si sa dove si è
+      const cur = Array.from(document.querySelectorAll("#topnav a.active"))
+        .sort((x, y) => y.getAttribute("href").length - x.getAttribute("href").length)[0];
+      if (cur) bar.querySelector(".brand").dataset.section = cur.textContent.trim();
     })();
   </script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>

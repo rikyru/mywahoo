@@ -126,6 +126,7 @@ const ALL = S.concat(P);
 const NS = S.length;
 const TODAY = NS - 1;
 const FINE = window.matchMedia("(pointer:fine)").matches;
+const NARROW = window.innerWidth < 640;   // telefono: niente titoli degli assi, più spazio ai dati
 const ZONES = [   // stesse soglie dello stato in alto
   { min: 5, max: 1e9, label: "fresco", color: "rgba(76,141,255,.07)" },
   { min: -10, max: 5, label: "equilibrio", color: "rgba(138,151,169,.05)" },
@@ -202,11 +203,11 @@ const chart = new Chart(document.getElementById("formChart"), {
       x: { grid: { display: false },
            ticks: { maxTicksLimit: window.innerWidth < 640 ? 5 : 9, maxRotation: 0,
              callback(v) { const d = ALL[v] && ALL[v].date; return d ? d.slice(8, 10) + "/" + d.slice(5, 7) + "/" + d.slice(2, 4) : ""; } } },
-      y: { stack: "form", stackWeight: 3, title: { display: true, text: "fitness · fatica" } },
-      yTsb: { stack: "form", stackWeight: 1.6, offset: true, title: { display: true, text: "forma" },
+      y: { stack: "form", stackWeight: 3, title: { display: !NARROW, text: "fitness · fatica" } },
+      yTsb: { stack: "form", stackWeight: 1.6, offset: true, title: { display: !NARROW, text: "forma" },
               grid: { color: c => c.tick.value === 0 ? "rgba(231,236,243,.25)" : "rgba(255,255,255,.04)" } },
       yLoad: { stack: "form", stackWeight: 1, offset: true, beginAtZero: true,
-               title: { display: true, text: "carico" }, grid: { display: false } },
+               title: { display: !NARROW, text: "carico" }, grid: { display: false } },
     },
     plugins: {
       legend: { position: "bottom", labels: { boxWidth: 14, filter: i => !i.text.startsWith("_") } },

@@ -82,6 +82,8 @@ small { font-size: .8em; }
 @media (hover: hover) and (min-width: 641px) {
   .topbar nav .nav-group:hover .nav-menu { display: flex; }
 }
+/* pulsante ☰ del menu: solo su telefono (vedi media query in fondo) */
+.nav-toggle { display: none; }
 
 .container { max-width: 1140px; margin: 0 auto; padding: 1.6rem 1.4rem 3rem; }
 
@@ -517,4 +519,68 @@ a.chip:hover { background: var(--card-hover); text-decoration: none; }
   .chat-msg { max-width: 92%; font-size: 1rem; }
   .chat-input input, .login-form input, .edit-form input, .filters select { font-size: 1rem; }
   .filters { flex-wrap: wrap; }
+
+  /* --- menu: una riga (logo + sezione + ☰), le voci si aprono a tendina --- */
+  .topbar { flex-wrap: wrap; gap: 0; padding: .55rem .9rem; }
+  .topbar .brand { flex: 1; }
+  .topbar .brand[data-section]::after { content: " · " attr(data-section); color: var(--muted);
+    font-weight: 500; font-size: .95rem; }
+  .nav-toggle { display: inline-flex; align-items: center; justify-content: center;
+    width: 2.6rem; height: 2.4rem; font-size: 1.3rem; line-height: 1; color: var(--text);
+    background: var(--card); border: 1px solid var(--border); border-radius: var(--radius-sm);
+    cursor: pointer; }
+  .topbar nav { display: none; width: 100%; flex-direction: column; flex-wrap: nowrap; gap: 0;
+    margin-top: .5rem; padding-top: .3rem; border-top: 1px solid var(--border-soft);
+    max-height: calc(100vh - 4rem); overflow-y: auto; }
+  .topbar.nav-open nav { display: flex; }
+  .topbar nav a, .topbar nav .nav-top { padding: .7rem .6rem; font-size: 1.02rem; }
+  /* gruppi già aperti: il titolo fa da intestazione, le voci sotto */
+  .topbar nav .nav-top { pointer-events: none; padding: .8rem .6rem .25rem; font-size: .74rem;
+    text-transform: uppercase; letter-spacing: .06em; background: none !important; }
+  .topbar nav .nav-top .caret { display: none; }
+  .topbar nav .nav-group-end .nav-top { font-size: 0; }
+  .topbar nav .nav-group-end .nav-top::before { content: "Altro"; font-size: .74rem; }
+  .topbar nav .nav-menu { display: flex; position: static; min-width: 0; padding: 0 0 0 .5rem;
+    background: none; border: 0; box-shadow: none; }
+
+  /* --- riquadri numerici più compatti: meno scorrimento --- */
+  .kpi-row { gap: .55rem; margin: .9rem 0; }
+  .kpi { padding: .75rem .8rem; }
+  .kpi-value { font-size: 1.35rem; overflow-wrap: anywhere; }
+  .kpi-label { font-size: .8rem; }
+  .card { padding: .95rem .9rem; margin: .7rem 0; }
+
+  /* --- elenco attività della dashboard: una scheda per riga invece della tabella --- */
+  .table-scroll table.act-list { min-width: 0; }
+  table.act-list, table.act-list tbody { display: block; }
+  table.act-list thead { display: none; }
+  table.act-list tr { display: grid; grid-template-columns: auto auto auto 1fr;
+    grid-template-areas: "name name name tipo" "date dist dur hr";
+    gap: .15rem .8rem; padding: .65rem .2rem; border-top: 1px solid var(--border-soft); }
+  table.act-list td { padding: 0; border: 0; font-size: .86rem; color: var(--muted); white-space: nowrap; }
+  table.act-list td:nth-child(1) { grid-area: date; }
+  table.act-list td:nth-child(2) { grid-area: name; font-size: 1rem; color: var(--text); white-space: normal; }
+  table.act-list td:nth-child(3) { grid-area: tipo; justify-self: end; }
+  table.act-list td:nth-child(4) { grid-area: dist; }
+  table.act-list td:nth-child(5) { grid-area: dur; }
+  table.act-list td:nth-child(8) { grid-area: hr; justify-self: end; }
+  table.act-list td:nth-child(8)::after { content: " bpm"; }
+  table.act-list td:nth-child(6), table.act-list td:nth-child(7),
+  table.act-list td:nth-child(9), table.act-list td:nth-child(10) { display: none; }
+  table.act-list td[colspan] { grid-column: 1 / -1; grid-area: auto; display: block; }
+
+  /* --- campi dei form: scuri, larghi, e a 16px (sotto, iOS zooma al tocco) --- */
+  input, select, textarea { font-size: 16px !important; max-width: 100%; }
+  select, textarea, input[type=text], input[type=number], input[type=date], input[type=time],
+  input[type=password], input[type=search], input:not([type]) {
+    background: var(--bg-elev); color: var(--text); border: 1px solid var(--border);
+    border-radius: var(--radius-sm); padding: .5rem .6rem; font-family: inherit; }
+  label:has(> input[type=text]), label:has(> textarea) { display: flex; flex-direction: column;
+    gap: .3rem; margin: .4rem 0; }
+  label > textarea, label > input[type=text] { width: 100%; }
+  .kpi-value.prog-block { font-size: 1.05rem; }
+  .card canvas#formChart { max-height: none; }
+  button:not([class]), button.secondary { background: var(--card); color: var(--text); border: 1px solid var(--border);
+    border-radius: var(--radius-sm); padding: .55rem 1rem; font: 600 .95rem inherit; font-family: inherit; }
+  input[type=checkbox], input[type=radio] { width: 1.15rem; height: 1.15rem; }
 }
