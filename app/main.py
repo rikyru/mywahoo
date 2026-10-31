@@ -1094,7 +1094,10 @@ def _index_climbs(session, w: Workout) -> None:
             ClimbEffort.workout_id == w.id)).all():
         session.delete(old)
     streams = fitmod.load_streams(w.id)
-    if streams:
+    # rulli con app (MyWhoosh, Zwift): il GPS è quello del mondo virtuale, niente
+    # salite né segmenti; resta il 20' per l'FTP
+    virtual = "virtual" in (w.sub_sport or "").lower()
+    if streams and not virtual:
         for c in cyclingmod.detect_segments(streams):
             if not c.get("start_ll") or not c.get("top_ll"):
                 continue  # no GPS -> can't match it across rides
@@ -1107,7 +1110,7 @@ def _index_climbs(session, w: Workout) -> None:
                 start_lat=c["start_ll"][0], start_lng=c["start_ll"][1],
                 top_lat=c["top_ll"][0], top_lng=c["top_ll"][1]))
     # also time this ride on every user-defined segment
-    for seg in session.exec(select(CustomSegment)).all():
+    for seg in ([] if virtual else session.exec(select(CustomSegment)).all()):
         _match_custom(session, seg, w, streams)
     # best 20-min power (real if a power meter, else estimated) for the FTP trend
     if streams and streams.get("t"):
