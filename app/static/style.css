@@ -398,6 +398,14 @@ a.chip:hover { background: var(--card-hover); text-decoration: none; }
 .seg-rename > summary { cursor: pointer; font-size: .85rem; }
 .seg-rename .seg-create { margin-top: .5rem; }
 /* ---------- HR zones ---------- */
+.laps-bike { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+.laps-bike th { color: var(--muted); font-size: .72rem; text-transform: uppercase; letter-spacing: .05em;
+  font-weight: 600; text-align: left; padding: .5rem .65rem; white-space: nowrap; }
+.laps-bike td { padding: .45rem .65rem; border-top: 1px solid var(--border-soft); white-space: nowrap; }
+.laps-bike td.lap-w { position: relative; min-width: 5.5rem; }
+.laps-bike .lap-bar { position: absolute; left: 0; top: 22%; bottom: 22%; z-index: 0;
+  background: rgba(245, 158, 11, .18); border-radius: 4px; }
+.laps-bike .lap-w strong { position: relative; z-index: 1; padding-left: .3rem; }
 .hrz-bar { display: flex; height: 16px; border-radius: 8px; overflow: hidden;
   background: var(--bg-elev); margin: .2rem 0 .8rem; }
 .hrz-seg { height: 100%; }

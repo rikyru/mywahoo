@@ -3308,7 +3308,10 @@ def workout_detail(request: Request, workout_id: int):
             laps = json.loads(w.laps_json)
         except (ValueError, TypeError):
             laps = None
-    elif w.has_fit and w.fit_path:
+    is_bike = google_health._sport_family(w.sport) == "bike"
+    if laps and is_bike and "avg_power" not in laps[0]:
+        laps = None                      # salvati prima dei campi bici: rileggi dal FIT
+    if not laps and w.has_fit and w.fit_path:
         try:
             laps = fitmod.parse_laps(w.fit_path)
         except Exception:
@@ -3321,8 +3324,26 @@ def workout_detail(request: Request, workout_id: int):
                     s2.add(wk)
                     s2.commit()
 
+    # Zone di potenza: solo con watt MISURATI (rulli/misuratore), sull'FTP attuale
+    power_zones, zones_ftp = [], None
+    if streams and w.avg_power and any(p for p in (streams.get("power") or [])):
+        zones_ftp = (_estimated_ftp() or {}).get("ftp")
+        if zones_ftp:
+            power_zones = fitmod.power_zone_distribution(streams, zones_ftp)
+
     laps_summary = None
-    if laps:
+    if laps and is_bike:
+        t_tot = sum(l["time_s"] for l in laps)
+        def wavg(k):                     # media pesata sul tempo del giro
+            v = [(l[k], l["time_s"]) for l in laps if l.get(k)]
+            return round(sum(a * b for a, b in v) / sum(b for _, b in v)) if v else None
+        laps_summary = {"distance_m": round(sum(l["distance_m"] for l in laps)), "time_s": round(t_tot, 1),
+                        "avg_power": wavg("avg_power"), "avg_cadence": wavg("avg_cadence"),
+                        "avg_hr": wavg("avg_hr"),
+                        "max_power": max((l["max_power"] for l in laps if l.get("max_power")), default=None),
+                        "max_hr": max((l["max_hr"] for l in laps if l.get("max_hr")), default=None),
+                        "speed_kmh": round(sum(l["distance_m"] for l in laps) / t_tot * 3.6, 1) if t_tot else None}
+    elif laps:
         tot_d = sum(l["distance_m"] for l in laps)
         tot_t = sum(l["time_s"] for l in laps)
         hrs = [l["avg_hr"] for l in laps if l["avg_hr"]]
@@ -3342,6 +3363,7 @@ def workout_detail(request: Request, workout_id: int):
         "streams_json": streams_json,
         "merge": merge, "can_segment": can_segment, "edit_seg": edit_seg,
         "est_power": est_power, "climbs": climbs, "ftp": ftp, "hr_zones": hr_zones,
+        "power_zones": power_zones, "zones_ftp": zones_ftp, "is_bike": is_bike,
         "ride_vo2max": ride_vo2max, "ride_vo2max_cat": _vo2max_category(ride_vo2max),
         "laps": laps, "laps_summary": laps_summary,
         "analysis_html": md.markdown(analysis.content, extensions=["tables"]) if analysis else None,

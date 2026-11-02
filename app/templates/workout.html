@@ -71,7 +71,53 @@
   {% endif %}
 </section>
 
-{% if laps %}
+{% if laps and is_bike %}
+{% if laps|length > 1 %}
+<section class="card">
+  <h3>Parziali <small class="muted">· {{ laps|length }} giri</small></h3>
+  {% set lmax = laps | map(attribute='avg_power') | select | max if laps | map(attribute='avg_power') | select | list else 0 %}
+  <div class="table-scroll">
+    <table class="laps-bike">
+      <thead><tr>
+        <th>#</th><th>Tempo</th><th>Dist.</th><th>km/h</th><th>W medi</th>
+        {% if zones_ftp %}<th>% FTP</th>{% endif %}<th>W max</th><th>Cad.</th><th>FC</th>
+      </tr></thead>
+      <tbody>
+      {% for lp in laps %}
+        <tr>
+          <td>{{ lp.i }}</td>
+          <td>{{ (lp.time_s // 60)|int }}:{{ '%02d'|format((lp.time_s % 60)|int) }}</td>
+          <td>{{ '%.1f'|format(lp.distance_m / 1000) }} km</td>
+          <td>{{ lp.speed_kmh if lp.speed_kmh else '—' }}</td>
+          <td class="lap-w">{% if lp.avg_power %}<span class="lap-bar" style="width: {{ (lp.avg_power / lmax * 100) | round | int if lmax else 0 }}%"></span><strong>{{ lp.avg_power }}</strong>{% else %}—{% endif %}</td>
+          {% if zones_ftp %}<td>{{ ((lp.avg_power / zones_ftp * 100) | round | int ~ '%') if lp.avg_power else '—' }}</td>{% endif %}
+          <td>{{ lp.max_power or '—' }}</td>
+          <td>{{ lp.avg_cadence or '—' }}</td>
+          <td>{{ lp.avg_hr or '—' }}{% if lp.max_hr %} <span class="muted">/ {{ lp.max_hr }}</span>{% endif %}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+      {% if laps_summary %}
+      <tfoot>
+        <tr style="font-weight:600;border-top:2px solid var(--border)">
+          <td>Tot</td>
+          <td>{{ (laps_summary.time_s // 3600)|int }}h {{ '%02d'|format(((laps_summary.time_s % 3600) // 60)|int) }}m</td>
+          <td>{{ '%.1f'|format(laps_summary.distance_m / 1000) }} km</td>
+          <td>{{ laps_summary.speed_kmh or '—' }}</td>
+          <td>{{ laps_summary.avg_power or '—' }}</td>
+          {% if zones_ftp %}<td>{{ ((laps_summary.avg_power / zones_ftp * 100) | round | int ~ '%') if laps_summary.avg_power else '—' }}</td>{% endif %}
+          <td>{{ laps_summary.max_power or '—' }}</td>
+          <td>{{ laps_summary.avg_cadence or '—' }}</td>
+          <td>{{ laps_summary.avg_hr or '—' }}{% if laps_summary.max_hr %} <span class="muted">/ {{ laps_summary.max_hr }}</span>{% endif %}</td>
+        </tr>
+      </tfoot>
+      {% endif %}
+    </table>
+  </div>
+  {% if zones_ftp %}<p class="muted">% FTP sui watt medi del giro, con l'FTP attuale ({{ zones_ftp }} W). FC: media / max.</p>{% endif %}
+</section>
+{% endif %}
+{% elif laps %}
 <section class="card">
   <h3>Parziali <small class="muted">· {{ laps|length }} tratti</small></h3>
   <div class="table-scroll">
@@ -181,6 +227,30 @@
   </table>
   <p class="muted">Zone sul tuo <strong>HRR</strong> (riposo→max dal profilo). Regola le
     ancore in <a href="/settings">Impostazioni</a> se le soglie non ti tornano.</p>
+</section>
+{% endif %}
+
+{% if power_zones %}
+<section class="card">
+  <h3>Zone di potenza <small class="muted">· FTP {{ zones_ftp }} W</small></h3>
+  <div class="hrz-bar">
+    {% for z in power_zones %}
+    {% if z.pct %}<span class="hrz-seg" style="width: {{ z.pct }}%; background: {{ z.color }}"
+         title="{{ z.label }}: {{ z.pct }}%"></span>{% endif %}
+    {% endfor %}
+  </div>
+  <table class="metrics hrz-table">
+    {% for z in power_zones %}
+    <tr>
+      <td><span class="hrz-dot" style="background: {{ z.color }}"></span>{{ z.label }}</td>
+      <td class="muted">{% if z.hi_w %}{{ z.lo_w }}–{{ z.hi_w }} W{% else %}&gt; {{ z.lo_w }} W{% endif %}</td>
+      <td>{{ z.seconds | duration }}</td>
+      <td><strong>{{ z.pct }}%</strong></td>
+    </tr>
+    {% endfor %}
+  </table>
+  <p class="muted">Zone classiche in % dell'<strong>FTP attuale</strong> (Coggan): sweet spot ≈ alta Z3 / bassa Z4.
+    Lo zero (ruota libera) conta come Z1. Cambiano quando l'FTP si aggiorna, ad esempio dopo un test.</p>
 </section>
 {% endif %}
 

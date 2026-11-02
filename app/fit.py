@@ -161,6 +161,13 @@ def parse_laps(path: str) -> list:
                         "strokes": _get(fr, "total_strokes"),
                         "stroke": str(_get(fr, "swim_stroke") or "") or None,
                         "avg_hr": _get(fr, "avg_heart_rate"),
+                        # bici (rulli/misuratore): watt, cadenza, velocità del giro
+                        "max_hr": _get(fr, "max_heart_rate"),
+                        "avg_power": _get(fr, "avg_power"),
+                        "max_power": _get(fr, "max_power"),
+                        "np": _get(fr, "normalized_power"),
+                        "avg_cadence": _get(fr, "avg_cadence"),
+                        "avg_speed": _get(fr, "enhanced_avg_speed", "avg_speed"),
                     })
                 elif fr.name == "length":
                     lengths_raw.append({
@@ -178,7 +185,7 @@ def parse_laps(path: str) -> list:
     for lp in laps_raw:
         dist = lp["distance_m"] or 0
         tt = lp["time_s"] or 0
-        if not dist:                     # lap di riposo/pausa (0 m): salta
+        if not dist and not lp["avg_power"]:   # lap di riposo/pausa (0 m, 0 W): salta
             continue
         swolf = None
         lap_lengths = []
@@ -209,6 +216,12 @@ def parse_laps(path: str) -> list:
             "avg_hr": round(lp["avg_hr"]) if lp["avg_hr"] else None,
             "swolf": swolf,
             "lengths": lap_lengths,
+            "max_hr": round(lp["max_hr"]) if lp["max_hr"] else None,
+            "avg_power": round(lp["avg_power"]) if lp["avg_power"] else None,
+            "max_power": round(lp["max_power"]) if lp["max_power"] else None,
+            "np": round(lp["np"]) if lp["np"] else None,
+            "avg_cadence": round(lp["avg_cadence"]) if lp["avg_cadence"] else None,
+            "speed_kmh": round(lp["avg_speed"] * 3.6, 1) if lp["avg_speed"] else None,
         })
     return out
 
@@ -442,6 +455,47 @@ def ai_stats(streams: dict) -> dict:
         if r1 and r2:
             out["drift_cardiaco_pct"] = round((r2 - r1) / r1 * 100, 1)
 
+    return out
+
+
+# 7 zone di potenza (Coggan) in % dell'FTP: limite inferiore, nome, colore
+POWER_ZONES = [
+    (0.00, "Z1 · Recupero attivo", "#8a97a9"),
+    (0.56, "Z2 · Fondo", "#4c8dff"),
+    (0.76, "Z3 · Medio", "#2a9d8f"),
+    (0.91, "Z4 · Soglia", "#f59e0b"),
+    (1.06, "Z5 · VO₂max", "#fb7185"),
+    (1.21, "Z6 · Anaerobico", "#d62828"),
+    (1.51, "Z7 · Neuromuscolare", "#9b2c8f"),
+]
+
+
+def power_zone_distribution(streams: dict, ftp: float) -> list[dict]:
+    """Tempo in ciascuna zona di potenza (% FTP), come hr_zone_distribution.
+    Lo zero (ruota libera) conta in Z1. Vuoto senza potenza misurata o FTP."""
+    t = streams.get("t") or []
+    pw = streams.get("power") or []
+    if len(t) < 3 or len(pw) < len(t) or not ftp or not any(p for p in pw):
+        return []
+    lowers = [z[0] for z in POWER_ZONES]
+    secs = [0.0] * len(POWER_ZONES)
+    gaps = [t[i + 1] - t[i] for i in range(len(t) - 1)]
+    median_gap = sorted(gaps)[len(gaps) // 2] if gaps else 1.0
+    for i, p in enumerate(pw):
+        frac = (p or 0) / ftp
+        z = max(j for j, lo in enumerate(lowers) if frac >= lo)
+        dur = gaps[i] if i < len(gaps) else median_gap
+        if 0 < dur <= median_gap * 10:
+            secs[z] += dur
+    total = sum(secs)
+    if total <= 0:
+        return []
+    out = []
+    for j, (lo, label, color) in enumerate(POWER_ZONES):
+        hi = lowers[j + 1] if j + 1 < len(lowers) else None
+        out.append({"label": label, "color": color,
+                    "lo_w": round(lo * ftp), "hi_w": round(hi * ftp) - 1 if hi else None,
+                    "seconds": int(secs[j]), "pct": round(secs[j] / total * 100)})
     return out
 
 
