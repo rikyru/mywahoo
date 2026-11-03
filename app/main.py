@@ -3876,6 +3876,12 @@ async def upload_fit(file: UploadFile = File(...)):
                     wid = surv.id
     except Exception as e:
         logger.warning("Reconcile after FIT upload failed: %s", e)
+    # nuoto col Pixel Watch: la FC nel FIT è quasi ferma, quella di Google no
+    if google_health.is_authenticated():
+        try:
+            await google_health.improve_fit_hr(wid)
+        except Exception as e:
+            logger.warning("FC da Google dopo upload FIT %s non riuscita: %s", wid, e)
     _kick_program("FIT caricato")
     logger.info("Ingested uploaded FIT -> workout %s (%s)", wid,
                 "merge-manual" if merged_manual else "match" if match else "new")

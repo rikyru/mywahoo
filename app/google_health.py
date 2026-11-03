@@ -412,13 +412,8 @@ def _is_imported(w) -> bool:
     return '"source": "google_health"' in (w.raw_summary or "")
 
 
-async def fetch_hr_stream(start_utc, end_utc, max_pages: int = 6) -> dict | None:
-    """Intraday heart-rate samples over [start,end] as a FIT-shaped streams dict.
-
-    This is the data the bike FITs already give us; here we pull it for
-    swims/walks/runs that reach the system as a bare summary, so their detail
-    page gets the same HR-over-time chart. Returns None when too few samples.
-    """
+async def hr_samples(start_utc, end_utc, max_pages: int = 6) -> list[tuple]:
+    """Campioni di FC intraday [(datetime UTC naive, bpm)] ordinati, in [start,end)."""
     from datetime import datetime as dt
 
     flt = ('heart_rate.sample_time.physical_time >= '
@@ -446,15 +441,102 @@ async def fetch_hr_stream(start_utc, end_utc, max_pages: int = 6) -> dict | None
         page_token = data.get("nextPageToken")
         if not page_token:
             break
+    samples.sort(key=lambda x: x[0])
+    return samples
+
+
+async def fetch_hr_stream(start_utc, end_utc, max_pages: int = 6) -> dict | None:
+    """Intraday heart-rate samples over [start,end] as a FIT-shaped streams dict.
+
+    This is the data the bike FITs already give us; here we pull it for
+    swims/walks/runs that reach the system as a bare summary, so their detail
+    page gets the same HR-over-time chart. Returns None when too few samples.
+    """
+    samples = await hr_samples(start_utc, end_utc, max_pages)
     if len(samples) < 10:
         return None
-    samples.sort(key=lambda x: x[0])
     t0 = samples[0][0]
     t = [int((ts - t0).total_seconds()) for ts, _ in samples]
     hr = [v for _, v in samples]
     n = len(t)
     return {"t": t, "hr": hr, "power": [None] * n, "cadence": [None] * n,
             "speed": [None] * n, "alt": [None] * n, "latlng": None}
+
+
+# FC del FIT "ferma": il Pixel Watch in acqua (nuoto) registra nel FIT un valore
+# che cambia poche volte l'ora (fermo anche 10+ minuti), mentre Google ha la FC
+# ogni ~2 s. Sotto questa soglia di cambi/ora il canale FC si prende da Google.
+STALE_HR_CHANGES_PER_HOUR = 120
+MATCH_HR_S = 10   # un campione Google vale per un punto del FIT entro ±10 s
+
+
+def hr_changes_per_hour(t: list, hr: list) -> float | None:
+    pts = [(t[i], h) for i, h in enumerate(hr or []) if h]
+    if len(pts) < 2 or pts[-1][0] <= pts[0][0]:
+        return None
+    changes = sum(1 for i in range(1, len(pts)) if pts[i][1] != pts[i - 1][1])
+    return changes / ((pts[-1][0] - pts[0][0]) / 3600.0)
+
+
+def merge_hr(t: list, start, samples: list[tuple]) -> tuple[list, int]:
+    """FC di Google sui tempi del FIT (start + t), campione più vicino entro
+    MATCH_HR_S; dove Google non ha nulla resta None. -> (hr, punti coperti)."""
+    from datetime import timedelta
+    out, j, hit = [], 0, 0
+    for ti in t:
+        at = start + timedelta(seconds=ti)
+        while j + 1 < len(samples) and samples[j + 1][0] <= at:
+            j += 1
+        best = None
+        for k in (j, j + 1):
+            if 0 <= k < len(samples):
+                d = abs((samples[k][0] - at).total_seconds())
+                if d <= MATCH_HR_S and (best is None or d < best[0]):
+                    best = (d, samples[k][1])
+        out.append(best[1] if best else None)
+        hit += best is not None
+    return out, hit
+
+
+async def improve_fit_hr(workout_id: int) -> bool:
+    """Se la FC del FIT è "ferma" (vedi STALE_HR_CHANGES_PER_HOUR) e Google copre
+    la stessa finestra, sostituisce il canale FC con quello di Google e ricalcola
+    FC media/max. Idempotente: dopo la sostituzione la FC non è più ferma."""
+    from datetime import timedelta
+    from .db import Workout, WorkoutStream, pack_streams, unpack_streams
+
+    with Session(engine) as session:
+        w = session.get(Workout, workout_id)
+        row = session.get(WorkoutStream, workout_id)
+        if not w or not w.has_fit or not row or not w.start_date:
+            return False
+        streams = unpack_streams(row.data)
+        start, dur = w.start_date, max(w.duration_s or 0, w.moving_s or 0)
+    t = streams.get("t") or []
+    rate = hr_changes_per_hour(t, streams.get("hr"))
+    if rate is None or rate >= STALE_HR_CHANGES_PER_HOUR or not t:
+        return False
+    samples = await hr_samples(start - timedelta(seconds=MATCH_HR_S),
+                               start + timedelta(seconds=max(dur, t[-1]) + MATCH_HR_S))
+    if len(samples) < 10:
+        return False
+    hr, hit = merge_hr(t, start, samples)
+    if hit < 0.6 * len(t):            # Google copre poco: meglio il FIT com'è
+        return False
+    streams["hr"] = hr
+    vals = [v for v in hr if v]
+    with Session(engine) as session:
+        row = session.get(WorkoutStream, workout_id)
+        row.data = pack_streams(streams)
+        session.add(row)
+        w = session.get(Workout, workout_id)
+        w.avg_hr = round(sum(vals) / len(vals), 1)
+        w.max_hr = float(max(vals))
+        session.add(w)
+        session.commit()
+    logger.info("FC del FIT %s sostituita con Google (%.0f cambi/h -> %s campioni)",
+                workout_id, rate, len(vals))
+    return True
 
 
 async def _attach_hr_stream(workout_id: int, start_utc, end_utc) -> bool:
@@ -715,6 +797,18 @@ async def enrich_workouts(max_pages: int = 8) -> int:
         logger.info("Imported workout %s (%s, %s) from Google Health",
                     new.id, new.sport, new.start_date)
         await _attach_hr_stream(new.id, e["start"], e["end"])
+
+    # 4. FIT con FC "ferma" (nuoto col Pixel Watch): canale FC preso da Google
+    with Session(engine) as session:
+        recent = [w.id for w in session.exec(select(Workout).where(
+            Workout.has_fit == True,  # noqa: E712
+            Workout.start_date >= dt.utcnow() - timedelta(days=7))).all()]
+    for wid in recent:
+        try:
+            if await improve_fit_hr(wid):
+                changed_total += 1
+        except GoogleHealthError as e:
+            logger.warning("FC da Google per %s non riuscita: %s", wid, e)
     return changed_total
 
 
