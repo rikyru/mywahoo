@@ -168,6 +168,7 @@ def parse_laps(path: str) -> list:
                         "np": _get(fr, "normalized_power"),
                         "avg_cadence": _get(fr, "avg_cadence"),
                         "avg_speed": _get(fr, "enhanced_avg_speed", "avg_speed"),
+                        "start": _get(fr, "start_time"),
                     })
                 elif fr.name == "length":
                     lengths_raw.append({
@@ -222,7 +223,54 @@ def parse_laps(path: str) -> list:
             "np": round(lp["np"]) if lp["np"] else None,
             "avg_cadence": round(lp["avg_cadence"]) if lp["avg_cadence"] else None,
             "speed_kmh": round(lp["avg_speed"] * 3.6, 1) if lp["avg_speed"] else None,
+            # inizio del giro (UTC): serve a ricavare la FC del giro dal flusso
+            "start": _utc_iso(lp["start"]),
         })
+    return out
+
+
+def _utc_iso(ts) -> Optional[str]:
+    if not isinstance(ts, datetime):
+        return None
+    if ts.tzinfo:
+        ts = ts.astimezone(timezone.utc).replace(tzinfo=None)
+    return ts.isoformat()
+
+
+# Il sensore ottico in acqua arriva in ritardo: lo sforzo di una ripetuta breve
+# si vede nei secondi DOPO la fine. Il "picco" guarda anche questa coda.
+LAP_HR_TAIL_S = 20
+
+
+def lap_hr(laps: list, streams: dict, start: datetime) -> list:
+    """FC di ogni giro dal flusso (già "buono", es. Google per il nuoto):
+    media nella finestra esatta del giro, picco nel giro + LAP_HR_TAIL_S, e per
+    la pausa che segue la durata e la FC alla sua fine (quanto hai recuperato).
+    `start` = inizio attività (UTC naive), a cui è riferito streams["t"]."""
+    t, hr = streams.get("t") or [], streams.get("hr") or []
+    if not t or not any(hr) or not laps or not all(l.get("start") for l in laps):
+        return laps
+
+    def window(a: float, b: float) -> list:
+        return [h for ti, h in zip(t, hr) if h and a <= ti < b]
+
+    out = []
+    offs = [(datetime.fromisoformat(l["start"]) - start).total_seconds() for l in laps]
+    for i, lp in enumerate(laps):
+        a = offs[i]
+        b = a + (lp.get("time_s") or 0)
+        lp = dict(lp)
+        inside = window(a, b)
+        if inside:
+            lp["avg_hr"] = round(sum(inside) / len(inside))
+        tail = window(a, b + LAP_HR_TAIL_S)
+        lp["peak_hr"] = max(tail) if tail else None
+        nxt = offs[i + 1] if i + 1 < len(offs) else None
+        if nxt is not None and nxt - b >= 5:
+            lp["rest_s"] = round(nxt - b)
+            end = window(nxt - 5, nxt)
+            lp["rest_end_hr"] = round(sum(end) / len(end)) if end else None
+        out.append(lp)
     return out
 
 

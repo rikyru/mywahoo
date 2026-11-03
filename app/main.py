@@ -3309,8 +3309,8 @@ def workout_detail(request: Request, workout_id: int):
         except (ValueError, TypeError):
             laps = None
     is_bike = google_health._sport_family(w.sport) == "bike"
-    if laps and is_bike and "avg_power" not in laps[0]:
-        laps = None                      # salvati prima dei campi bici: rileggi dal FIT
+    if laps and "start" not in laps[0] and w.has_fit and w.fit_path:
+        laps = None                      # salvati prima di inizio giro / campi bici: rileggi dal FIT
     if not laps and w.has_fit and w.fit_path:
         try:
             laps = fitmod.parse_laps(w.fit_path)
@@ -3323,6 +3323,10 @@ def workout_detail(request: Request, workout_id: int):
                     wk.laps_json = json.dumps(laps)
                     s2.add(wk)
                     s2.commit()
+
+    # FC di ogni giro dal flusso (nuoto: quello di Google), non quella "ferma" del FIT
+    if laps and not is_bike and streams and w.start_date:
+        laps = fitmod.lap_hr(laps, streams, w.start_date)
 
     # Zone di potenza: solo con watt MISURATI (rulli/misuratore), sull'FTP attuale
     power_zones, zones_ftp = [], None
@@ -3364,6 +3368,7 @@ def workout_detail(request: Request, workout_id: int):
         "merge": merge, "can_segment": can_segment, "edit_seg": edit_seg,
         "est_power": est_power, "climbs": climbs, "ftp": ftp, "hr_zones": hr_zones,
         "power_zones": power_zones, "zones_ftp": zones_ftp, "is_bike": is_bike,
+        "lap_tail_s": fitmod.LAP_HR_TAIL_S,
         "ride_vo2max": ride_vo2max, "ride_vo2max_cat": _vo2max_category(ride_vo2max),
         "laps": laps, "laps_summary": laps_summary,
         "analysis_html": md.markdown(analysis.content, extensions=["tables"]) if analysis else None,

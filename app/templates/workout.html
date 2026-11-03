@@ -121,10 +121,11 @@
 <section class="card">
   <h3>Parziali <small class="muted">· {{ laps|length }} tratti</small></h3>
   <div class="table-scroll">
-    <table>
+    <table class="laps-bike laps-swim">
       <thead><tr>
         <th>#</th><th>Dist.</th><th>Tempo</th><th>Passo /100m</th>
         <th>Bracciate</th><th>SWOLF</th><th>Stile</th><th>FC</th>
+        {% if laps[0].peak_hr is defined %}<th>Picco</th><th>Pausa</th>{% endif %}
       </tr></thead>
       <tbody>
       {% for lp in laps %}
@@ -150,6 +151,10 @@
           <td>{{ lp.swolf if lp.swolf is not none else '—' }}</td>
           <td>{{ lp.stroke or '—' }}</td>
           <td>{{ lp.avg_hr if lp.avg_hr is not none else '—' }}</td>
+          {% if laps[0].peak_hr is defined %}
+          <td><strong>{{ lp.peak_hr or '—' }}</strong></td>
+          <td class="muted">{% if lp.rest_s %}{{ (lp.rest_s // 60)|int }}:{{ '%02d'|format(lp.rest_s % 60) }}{% if lp.rest_end_hr %} → {{ lp.rest_end_hr }}{% endif %}{% else %}—{% endif %}</td>
+          {% endif %}
         </tr>
       {% endfor %}
       </tbody>
@@ -164,11 +169,18 @@
           <td>{{ laps_summary.avg_swolf if laps_summary.avg_swolf is not none else '—' }}</td>
           <td>—</td>
           <td>{{ laps_summary.avg_hr if laps_summary.avg_hr is not none else '—' }}</td>
+          {% if laps[0].peak_hr is defined %}<td>{{ laps | map(attribute='peak_hr') | select | max if laps | map(attribute='peak_hr') | select | list else '—' }}</td><td></td>{% endif %}
         </tr>
       </tfoot>
       {% endif %}
     </table>
   </div>
+  {% if laps[0].peak_hr is defined %}
+  <p class="muted">FC dal flusso al secondo (per il nuoto quello di Google). <strong>Picco</strong> = massimo
+    nel tratto e nei {{ lap_tail_s }} s dopo: il sensore ottico in acqua arriva in ritardo, quindi nelle
+    ripetute brevi lo sforzo si vede appena ti fermi. <strong>Pausa</strong> = durata → FC a fine pausa
+    (quanto hai recuperato).</p>
+  {% endif %}
 </section>
 {% endif %}
 
