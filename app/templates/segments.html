@@ -17,6 +17,43 @@
   <strong>crearti i tuoi</strong> (anche pianeggianti) da un giro: aprilo e usa
   «Crea un segmento».</p>
 
+{% if pred %}
+<section class="card">
+  <div class="card-head">
+    <h3>🔮 Previsioni sulle tue salite</h3>
+    <form method="get" action="/segments" class="pred-goal">
+      <label>FTP obiettivo <input type="number" name="ftp" value="{{ pred.ftp_goal }}" min="80" max="500" step="5"></label>
+      <label>peso <input type="number" name="kg" value="{{ pred.kg_goal }}" min="40" max="200" step="0.5"></label>
+      <button class="btn btn-secondary" type="submit">Ricalcola</button>
+    </form>
+  </div>
+  <p class="muted" style="margin-top:0">A tutta, senza vento: <strong>oggi</strong> = FTP {{ pred.ftp_now }} W · {{ pred.kg_now }} kg
+    ({{ pred.wkg_now }} W/kg) · <strong>obiettivo</strong> = {{ pred.ftp_goal }} W · {{ pred.kg_goal }} kg ({{ pred.wkg_goal }} W/kg).</p>
+  <div class="table-scroll">
+    <table class="laps-bike pred-table">
+      <thead><tr><th>Salita</th><th>Record</th><th>W del record</th><th>Oggi a tutta</th><th>Obiettivo</th><th>vs record</th></tr></thead>
+      <tbody>
+      {% for r in pred.rows %}
+        <tr>
+          <td>⛰️ {{ r.gain_m }} m · {{ r.grade }}% <span class="muted">· {{ r.length_km }} km · {{ r.count }}×</span></td>
+          <td>{% if r.workout_id %}<a href="/workout/{{ r.workout_id }}">{{ r.record_s | duration }}</a>{% else %}{{ r.record_s | duration }}{% endif %}
+            <span class="muted">· {{ r.record_date.strftime('%d/%m/%y') }}</span></td>
+          <td>~{{ r.record_w }} W <span class="muted">({{ r.record_wkg }} W/kg)</span></td>
+          <td>{{ r.now_s | duration }}</td>
+          <td><strong>{{ r.goal_s | duration }}</strong></td>
+          <td class="{{ 'bal-ok' if r.goal_delta_s < 0 else 'bal-over' }}">{{ '−' if r.goal_delta_s < 0 else '+' }}{{ (r.goal_delta_s | abs) | duration }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <p class="muted">Stima fisica (gravità, rotolamento, aria) con la pendenza media della salita e la
+    potenza tenibile per quella durata (~108% dell'FTP sui 20′, ~113% sui 10′). <strong>W del record</strong> =
+    watt che servono per il tuo miglior tempo, con il peso di oggi. Affidabile per confrontare oggi e
+    obiettivo; sul valore assoluto ±5–8% (vento, tornanti, quanto spingi davvero).</p>
+</section>
+{% endif %}
+
 {% if custom_segments %}
 <h2 class="seg-h2">I tuoi segmenti</h2>
 {% for s in custom_segments %}

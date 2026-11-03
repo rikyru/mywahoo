@@ -1343,10 +1343,61 @@ def segments_page(request: Request):
             "latest_is_pr": bool(effs) and effs[-1].time_s == best,
         })
     custom_segments.sort(key=lambda s: (-s["count"]))
+    pred = _climb_predictions(segments, request.query_params)
     return templates.TemplateResponse(request, "segments.html", {
         "segments": segments, "custom_segments": custom_segments, "n_efforts": len(items),
+        "pred": pred,
         "message": request.query_params.get("msg"),
         "error": request.query_params.get("error")})
+
+
+# Obiettivo di default per le previsioni (modificabile dalla pagina)
+PRED_GOAL_FTP = 180
+PRED_GOAL_KG_LOSS = 4.0
+PRED_MAX_CLIMBS = 8
+
+
+def _climb_predictions(segments: list, params) -> dict | None:
+    """Tempi previsti sulle salite che ripeti: a tutta con FTP e peso di oggi, e con
+    un obiettivo (FTP/peso dalla query, default PRED_GOAL_*). Accanto, i watt
+    stimati del tuo record su quella salita (stessa fisica, peso di oggi)."""
+    ftp_now = (_estimated_ftp() or {}).get("ftp")
+    kg_now = profilemod.load().get("weight_kg")
+    if not ftp_now or not kg_now:
+        return None
+
+    def num(key, default, lo, hi):
+        try:
+            v = float(params.get(key) or default)
+        except (TypeError, ValueError):
+            v = default
+        return min(max(v, lo), hi)
+    ftp_goal = num("ftp", PRED_GOAL_FTP, 80, 500)
+    kg_goal = num("kg", round((kg_now - PRED_GOAL_KG_LOSS) * 2) / 2, 40, 200)
+    m_now, m_goal = cyclingmod.rider_mass(kg_now), cyclingmod.rider_mass(kg_goal)
+    rows = []
+    for s in segments:
+        # salite vere: sotto ~3% / 500 m conta più l'aria (e il vento) che le gambe
+        if s["kind"] != "climb" or s["grade"] < 3 or s["length_km"] < 0.5:
+            continue
+        L = s["length_km"] * 1000
+        best = next(x for x in s["efforts"] if x["is_pr"])
+        p_rec = cyclingmod.climb_power_for_time(L, s["grade"], m_now, s["best_time_s"])
+        t_now = cyclingmod.predict_climb_time(L, s["grade"], m_now, ftp_now)
+        t_goal = cyclingmod.predict_climb_time(L, s["grade"], m_goal, ftp_goal)
+        rows.append({"gain_m": s["gain_m"], "length_km": s["length_km"], "grade": s["grade"],
+                     "count": s["count"], "record_s": s["best_time_s"], "record_date": best["date"],
+                     "record_w": round(p_rec), "record_wkg": round(p_rec / kg_now, 2),
+                     "now_s": round(t_now), "goal_s": round(t_goal),
+                     "goal_delta_s": round(t_goal - s["best_time_s"]),
+                     "workout_id": best.get("workout_id")})
+        if len(rows) >= PRED_MAX_CLIMBS:
+            break
+    if not rows:
+        return None
+    return {"rows": rows, "ftp_now": ftp_now, "kg_now": round(kg_now, 1),
+            "ftp_goal": round(ftp_goal), "kg_goal": kg_goal,
+            "wkg_now": round(ftp_now / kg_now, 2), "wkg_goal": round(ftp_goal / kg_goal, 2)}
 
 
 def _bike_progress(today) -> dict:

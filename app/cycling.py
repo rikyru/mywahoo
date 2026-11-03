@@ -144,6 +144,49 @@ def ride_power_stats(streams: dict, mass_kg: float) -> dict | None:
     return stats
 
 
+def power_at_speed(v: float, grade_pct: float, mass_kg: float,
+                   crr: float = CRR, cda: float = CDA, rho: float = RHO) -> float:
+    """Watt per andare a `v` m/s su pendenza costante (stessa fisica di
+    estimate_power_series, senza vento)."""
+    theta = math.atan(grade_pct / 100.0)
+    return (mass_kg * G * (math.sin(theta) + crr * math.cos(theta)) * v
+            + 0.5 * rho * cda * v ** 3)
+
+
+def speed_at_power(p: float, grade_pct: float, mass_kg: float) -> float:
+    """Inverso di power_at_speed (bisezione: la potenza cresce con la velocità)."""
+    lo, hi = 0.3, 30.0
+    for _ in range(60):
+        mid = (lo + hi) / 2
+        if power_at_speed(mid, grade_pct, mass_kg) < p:
+            lo = mid
+        else:
+            hi = mid
+    return (lo + hi) / 2
+
+
+def sustainable_power(ftp: float, duration_s: float) -> float:
+    """Potenza tenibile "a tutta" per una durata: FTP × (T/60′)^-0.07 — ~108% sui
+    20′, ~113% sui 10′, 100% sull'ora (curva potenza-durata tipica, limitata 2′–3h)."""
+    t = min(max(duration_s, 120.0), 3 * 3600.0)
+    return ftp * (t / 3600.0) ** -0.07
+
+
+def predict_climb_time(length_m: float, grade_pct: float, mass_kg: float, ftp: float) -> float:
+    """Tempo previsto su una salita (lunghezza, pendenza media) andando a tutta con
+    quell'FTP e quella massa (corridore + bici). Iterativo: la potenza tenibile
+    dipende dalla durata, la durata dalla potenza."""
+    t = length_m / speed_at_power(ftp, grade_pct, mass_kg)
+    for _ in range(8):
+        t = length_m / speed_at_power(sustainable_power(ftp, t), grade_pct, mass_kg)
+    return t
+
+
+def climb_power_for_time(length_m: float, grade_pct: float, mass_kg: float, time_s: float) -> float:
+    """Watt medi (stimati) che servono per fare quella salita in quel tempo."""
+    return power_at_speed(length_m / time_s, grade_pct, mass_kg)
+
+
 def rider_mass(weight_kg: float | None) -> float:
     return (weight_kg or DEFAULT_RIDER_KG) + BIKE_KG
 
