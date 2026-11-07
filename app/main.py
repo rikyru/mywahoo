@@ -4044,10 +4044,12 @@ async def analyze(workout_id: int, regenerate: str = Form(default="")):
             laps = None
     if laps and is_bike:
         if len(laps) > 1:
+            # picco SENZA i primi 10 s: lì c'è la coda del blocco prima, non un rilancio
+            peaks = fitmod.lap_peak_power(laps, streams, w.start_date) if streams and w.start_date else {}
             row["giri"] = [{"i": lp.get("i"), "min": round((lp.get("time_s") or 0) / 60, 1),
                             "watt_medi": lp.get("avg_power"),
                             "pct_ftp": round(lp["avg_power"] / ftp_now * 100) if ftp_now and lp.get("avg_power") else None,
-                            "watt_max": lp.get("max_power"), "cadenza": lp.get("avg_cadence"),
+                            "watt_max_dopo_10s": peaks.get(lp.get("i")), "cadenza": lp.get("avg_cadence"),
                             "fc_media": lp.get("avg_hr"), "fc_max": lp.get("max_hr")} for lp in laps]
         laps = None                      # niente parziali "da nuoto" per la bici
     if laps and streams and w.start_date:
@@ -4067,6 +4069,12 @@ async def analyze(workout_id: int, regenerate: str = Form(default="")):
             "n_ripetute": len(laps),
         }
     stats = fitmod.ai_stats(streams) if streams else {}
+    if is_bike and google_health.is_indoor_bike(f"{w.sport} {w.sub_sport}"):
+        # rulli/app: la velocità è quella del mondo virtuale (discese a 60+ km/h)
+        for k in ("avg_speed_ms", "max_speed_ms", "distance_m"):
+            row.pop(k, None)
+        row["nota_indoor"] = "seduta sui rulli: velocità e distanza sono virtuali, non valutarle"
+        stats.pop("velocita_ms", None)
 
     try:
         content = await anthropic_client.analyze_workout(row, stats)

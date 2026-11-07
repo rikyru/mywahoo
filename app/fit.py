@@ -500,9 +500,40 @@ def ai_stats(streams: dict) -> dict:
             return (sum(hrs) / len(hrs)) / (sum(pws) / len(pws))
 
         r1, r2 = ratio(hr_data, pw_data, True), ratio(hr_data, pw_data, False)
-        if r1 and r2:
+        # la deriva ha senso solo a sforzo costante: in una seduta a intervalli la
+        # prima metà contiene il riscaldamento e la seconda i blocchi (VI = NP/media)
+        pws = [v for _, v in pw_data]
+        np_ = compute_normalized_power(pws, [t for t, _ in pw_data])
+        avg = sum(pws) / len(pws) if pws else 0
+        vi = round(np_ / avg, 2) if np_ and avg else None
+        if vi:
+            out["indice_variabilita"] = vi
+        if r1 and r2 and (vi is None or vi <= STEADY_VI):
             out["drift_cardiaco_pct"] = round((r2 - r1) / r1 * 100, 1)
+        elif r1 and r2:
+            out["drift_cardiaco"] = (f"non applicabile: seduta a intervalli (VI {vi} > {STEADY_VI}), "
+                                     "il confronto prima/seconda metà non misura la deriva")
 
+    return out
+
+
+STEADY_VI = 1.05      # oltre, la potenza è "a blocchi" e la deriva cardiaca non si legge
+
+
+def lap_peak_power(laps: list, streams: dict, start: datetime, skip_s: float = 10) -> dict:
+    """Picco di potenza di ogni giro ignorando i primi `skip_s` secondi: lì c'è
+    ancora la coda del blocco precedente (cambio giro / ERG che scende), non un
+    rilancio. -> {i: watt}."""
+    t, pw = streams.get("t") or [], streams.get("power") or []
+    out = {}
+    for lp in laps:
+        if not lp.get("start"):
+            continue
+        a = (datetime.fromisoformat(lp["start"]) - start).total_seconds() + skip_s
+        b = a - skip_s + (lp.get("time_s") or 0)
+        vals = [p for ti, p in zip(t, pw) if p and a <= ti < b]
+        if vals:
+            out[lp.get("i")] = round(max(vals))
     return out
 
 

@@ -69,7 +69,10 @@ Per la BICI, se ci sono i "giri" (watt medi, % FTP, cadenza, FC per giro) usa
 quelli per riconoscere blocchi e recuperi. Se c'è "seduta_prevista" (titolo,
 descrizione e scaletta con watt) CONFRONTA il fatto col previsto: i blocchi
 erano ai watt giusti? durata e recuperi rispettati? "zone_potenza" e "zone_fc"
-sono le percentuali di tempo per zona."""
+sono le percentuali di tempo per zona. Nei giri "watt_max_dopo_10s" esclude i
+primi 10 s (coda del blocco precedente): un recupero con media bassa non è
+"sporco" per un picco al cambio giro. Se "drift_cardiaco" dice "non applicabile"
+(seduta a intervalli) non trarre conclusioni sulla deriva."""
 
 PERIOD_SYSTEM_PROMPT = """\
 Sei un allenatore esperto di endurance. Ti viene fornito l'elenco delle sessioni
