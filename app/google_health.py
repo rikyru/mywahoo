@@ -625,6 +625,11 @@ async def enrich_workouts(max_pages: int = 8) -> int:
     for w in candidates:
         if w.has_fit or w.distance_m or w.avg_hr:
             continue
+        # una seduta del programma segnata fatta ha un orario segnaposto (12:00):
+        # l'attività che ci si sovrappone (es. una camminata a mezzogiorno) NON è
+        # lei. Quelle si riempiono nella fase 2, solo con lo stesso sport.
+        if w.manual or w.id in plan_wids:
+            continue
         w_dur = max(w.duration_s or 0, w.moving_s or 0)
         best, best_ov = None, 0.0
         for e in exercises:

@@ -3804,6 +3804,57 @@ def _merge_workouts(session, keep: Workout, absorb: Workout) -> None:
     session.commit()
 
 
+_FILL_FROM_TWIN = ("distance_m", "ascent_m", "avg_hr", "max_hr", "calories", "avg_speed_ms")
+
+
+def reconcile_fit_duplicates() -> int:
+    """Un'attività con FIT e un riepilogo della stessa attività (riepilogo Wahoo da
+    Strava, import Google) alla stessa ora e con sport compatibile: il riepilogo
+    viene assorbito dal FIT. Al FIT si aggiungono solo i campi che gli mancano
+    (il FIT è la fonte più ricca); l'id assorbito finisce tra gli ignorati, così
+    né Wahoo né Google lo ricreano. Le sedute del programma e le attività a mano
+    non si toccano (le gestisce reconcile_plan_duplicates)."""
+    # 1) coppie (FIT, riepilogo) — letture sole, prima di modificare
+    with Session(engine) as session:
+        plan_wids = {ps.workout_id for ps in session.exec(
+            select(PlanSession).where(PlanSession.workout_id != None)).all()}  # noqa: E711
+        fits = session.exec(select(Workout).where(Workout.has_fit == True)).all()  # noqa: E712
+        others = [x for x in session.exec(select(Workout).where(Workout.has_fit == False)).all()  # noqa: E712
+                  if not x.manual and x.id not in plan_wids]
+        pairs, taken = [], set()
+        for keep in fits:
+            k_end = google_health._wk_end(keep)
+            for x in others:
+                if x.id not in taken and google_health._same_activity(
+                        keep.start_date, k_end, keep.sport,
+                        x.start_date, google_health._wk_end(x), x.sport):
+                    pairs.append((keep.id, x.id))
+                    taken.add(x.id)
+    pairs = [(k, x) for k, x in pairs if not get_setting(_nomerge_key(k, x))]   # separate a mano
+    # 2) unione
+    merged = 0
+    with Session(engine) as session:
+        for kid, xid in pairs:
+            keep, x = session.get(Workout, kid), session.get(Workout, xid)
+            if not keep or not x:
+                continue
+            for f in _FILL_FROM_TWIN:
+                if not getattr(keep, f) and getattr(x, f):
+                    setattr(keep, f, getattr(x, f))
+            if (st := session.get(WorkoutStream, x.id)):
+                session.delete(st)
+            if (a := session.get(AiAnalysis, x.id)):
+                session.delete(a)
+            if not session.get(IgnoredImport, x.id):
+                session.add(IgnoredImport(id=x.id))
+            session.delete(x)
+            session.add(keep)
+            merged += 1
+            logger.info("FIT dedupe: assorbito %s (%s) in %s (%s)", x.id, x.sport, keep.id, keep.sport)
+        session.commit()
+    return merged
+
+
 def reconcile_plan_duplicates() -> int:
     """Collapse duplicate rows of a completed plan session into its placeholder.
 
@@ -3849,7 +3900,8 @@ def reconcile_plan_duplicates() -> int:
                 merged += 1
                 logger.info("Plan dedupe: folded %s into plan workout %s (%s)",
                             x.id, keep.id, keep.sport)
-    return merged
+    # poi i riepiloghi doppi di un FIT che non è una seduta del programma
+    return merged + reconcile_fit_duplicates()
 
 
 @app.post("/workout/{keep_id}/merge", dependencies=[Depends(require_auth)])
@@ -3959,30 +4011,62 @@ async def analyze(workout_id: int, regenerate: str = Form(default="")):
         return RedirectResponse(f"/workout/{workout_id}", status_code=303)
 
     row = w.model_dump(exclude={"raw_summary", "fit_path", "updated_at", "laps_json"})
-    # Parziali del nuoto: passali all'AI strutturati (ripetute + riepilogo), non
-    # la stringa JSON grezza, così può leggere ritmo/SWOLF/stile/struttura.
+    is_bike = google_health._sport_family(w.sport) == "bike"
+    # "manual" = inserita a mano senza dati; un FIT unito alla seduta del programma
+    # non lo è (altrimenti l'AI lo segnala come anomalia)
+    row["manual"] = bool(w.manual and not w.has_fit)
+    streams = fitmod.load_streams(workout_id)
+    with Session(engine) as session:
+        ps = session.exec(select(PlanSession).where(PlanSession.workout_id == workout_id)).first()
+    ftp_now = (_estimated_ftp() or {}).get("ftp") if is_bike else None
+    if ps:
+        # cosa era previsto: l'AI confronta il fatto col piano invece di indovinare
+        prev = {"titolo": ps.title, "durata_min": ps.duration_min, "rpe_target": ps.rpe_target,
+                "descrizione": (ps.description or "")[:1200]}
+        steps = json.loads(ps.structure_json or "[]")
+        if steps:
+            prev["scaletta"] = [{"min": st.get("min"), "pct_ftp": st.get("pct_ftp"),
+                                 "watt": round(ftp_now * st["pct_ftp"] / 100) if ftp_now and st.get("pct_ftp") else None,
+                                 "nota": st.get("note")} for st in steps]
+        row["seduta_prevista"] = prev
+    if streams and any(streams.get("hr") or []):
+        rest_hr, max_hr, _ = _hr_anchors()
+        row["zone_fc"] = {z["label"]: f"{z['pct']}%" for z in fitmod.hr_zone_distribution(streams, rest_hr, max_hr)}
+    if is_bike and ftp_now and w.avg_power and streams:
+        row["ftp_attuale_w"] = ftp_now
+        row["zone_potenza"] = {z["label"]: f"{z['pct']}%" for z in fitmod.power_zone_distribution(streams, ftp_now)}
+    # Parziali: per la bici watt/cadenza per giro, per il nuoto ritmo/SWOLF/stile
+    laps = None
     if w.laps_json:
         try:
             laps = json.loads(w.laps_json)
         except (ValueError, TypeError):
             laps = None
-        if laps:
-            row["parziali"] = [{k: lp.get(k) for k in
-                                ("i", "distance_m", "time_s", "pace_100_s",
-                                 "strokes", "stroke", "swolf", "avg_hr")} for lp in laps]
-            tot_d = sum(l["distance_m"] for l in laps)
-            tot_t = sum(l["time_s"] for l in laps)
-            sw = [l["swolf"] for l in laps if l.get("swolf") is not None]
-            row["parziali_riepilogo"] = {
-                "distanza_m": round(tot_d), "tempo_s": round(tot_t),
-                "passo_100_s": round(tot_t / tot_d * 100) if tot_d else None,
-                "swolf_medio": round(sum(sw) / len(sw)) if sw else None,
-                "n_ripetute": len(laps),
-            }
-    stats = {}
-    streams = fitmod.load_streams(workout_id)
-    if streams:
-        stats = fitmod.ai_stats(streams)
+    if laps and is_bike:
+        if len(laps) > 1:
+            row["giri"] = [{"i": lp.get("i"), "min": round((lp.get("time_s") or 0) / 60, 1),
+                            "watt_medi": lp.get("avg_power"),
+                            "pct_ftp": round(lp["avg_power"] / ftp_now * 100) if ftp_now and lp.get("avg_power") else None,
+                            "watt_max": lp.get("max_power"), "cadenza": lp.get("avg_cadence"),
+                            "fc_media": lp.get("avg_hr"), "fc_max": lp.get("max_hr")} for lp in laps]
+        laps = None                      # niente parziali "da nuoto" per la bici
+    if laps and streams and w.start_date:
+        laps = fitmod.lap_hr(laps, streams, w.start_date)
+    if laps:
+        row["parziali"] = [{k: lp.get(k) for k in
+                            ("i", "distance_m", "time_s", "pace_100_s",
+                             "strokes", "stroke", "swolf", "avg_hr", "peak_hr",
+                             "rest_s", "rest_end_hr")} for lp in laps]
+        tot_d = sum(l["distance_m"] for l in laps)
+        tot_t = sum(l["time_s"] for l in laps)
+        sw = [l["swolf"] for l in laps if l.get("swolf") is not None]
+        row["parziali_riepilogo"] = {
+            "distanza_m": round(tot_d), "tempo_s": round(tot_t),
+            "passo_100_s": round(tot_t / tot_d * 100) if tot_d else None,
+            "swolf_medio": round(sum(sw) / len(sw)) if sw else None,
+            "n_ripetute": len(laps),
+        }
+    stats = fitmod.ai_stats(streams) if streams else {}
 
     try:
         content = await anthropic_client.analyze_workout(row, stats)

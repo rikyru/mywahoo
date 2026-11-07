@@ -60,7 +60,16 @@ Per il NUOTO, se sono presenti i "parziali" (ripetute con distanza, passo per
 della seduta (es. 8×100 misti, piramide, nuoto continuo), commenta il RITMO e la
 sua tenuta tra le ripetute, la TECNICA/efficienza via SWOLF (più basso = meglio;
 segnala se peggiora con la fatica), l'uso degli stili, e dai suggerimenti
-specifici di nuoto. Il passo è in secondi/100 m (es. 105 = 1:45/100m)."""
+specifici di nuoto. Il passo è in secondi/100 m (es. 105 = 1:45/100m).
+Nei parziali del nuoto "peak_hr" è il massimo nel tratto e nei 20 s dopo (il
+sensore ottico in acqua è in ritardo), "rest_s"/"rest_end_hr" la pausa che segue
+e la FC alla sua fine (recupero).
+
+Per la BICI, se ci sono i "giri" (watt medi, % FTP, cadenza, FC per giro) usa
+quelli per riconoscere blocchi e recuperi. Se c'è "seduta_prevista" (titolo,
+descrizione e scaletta con watt) CONFRONTA il fatto col previsto: i blocchi
+erano ai watt giusti? durata e recuperi rispettati? "zone_potenza" e "zone_fc"
+sono le percentuali di tempo per zona."""
 
 PERIOD_SYSTEM_PROMPT = """\
 Sei un allenatore esperto di endurance. Ti viene fornito l'elenco delle sessioni
