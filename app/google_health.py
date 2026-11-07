@@ -661,7 +661,9 @@ async def enrich_workouts(max_pages: int = 8) -> int:
                     w.id, new_sport, int(best_ov))
 
     # 1. Dedupe: imported row + a real Wahoo row for the same activity
-    imported = [w for w in all_workouts if _is_imported(w)]
+    # un import su cui è stato caricato un FIT è la riga "buona": mai cancellarla
+    # (semmai è il riepilogo gemello a sparire, vedi reconcile_fit_duplicates)
+    imported = [w for w in all_workouts if _is_imported(w) and not w.has_fit]
     for imp in imported:
         twin = next((w for w in all_workouts
                      if w.id != imp.id and not _is_imported(w)
