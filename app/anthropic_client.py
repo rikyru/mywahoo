@@ -748,6 +748,12 @@ Regole:
 - Forza/corpo libero: tema coerente con la fase e con la bici del weekend (niente
   gambe pesanti il giorno prima della seduta di qualità).
 - Considera dimagrimento e recupero (deficit calorico, nuoto pesante 2 volte).
+- ASSENZE: in ogni settimana "assenze" (con gli sport ancora possibili) e
+  "slot_che_restano" dicono quali sedute esistono davvero: dai un tema SOLO a
+  quegli slot (gli altri non ci sono: niente rulli o palestra in vacanza se non
+  previsti). Se nelle assenze è possibile solo attività libera, scrivilo nella
+  "nota" della settimana (es. camminate, mantenimento, attenzione all'alimentazione),
+  e riparti con gradualità al rientro.
 - "tappe": verifiche intermedie misurabili (test FTP con valore atteso, peso).
 Rispondi SOLO con JSON valido, senza testo attorno:
 {"obiettivo": {"descrizione": "...", "ftp_w": numero o null, "peso_kg": numero o null},
@@ -756,8 +762,8 @@ Rispondi SOLO con JSON valido, senza testo attorno:
    "nota": "facoltativa, breve"}],
  "tappe": [{"data": "YYYY-MM-DD", "cosa": "...", "atteso": "..."}],
  "spiegazione": "3-5 frasi: la logica del piano"}
-Includi TUTTE le settimane ricevute e, in ognuna, un tema per ogni slot non
-external."""
+Includi TUTTE le settimane ricevute e, in ognuna, un tema per ogni slot di
+"slot_che_restano" che non sia external."""
 
 
 PROGRAM_ACTIONS_DOC = """\

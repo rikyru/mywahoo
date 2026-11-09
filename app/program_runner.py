@@ -282,15 +282,24 @@ def _season_context(s, prog: Program, ctx: dict, today: date, extra: dict | None
     end = P.monday(prog.end_date.date()) if prog.end_date else wk0 + timedelta(weeks=12)
     fixed = s.exec(select(PlanSession).where(PlanSession.plan_id == prog.plan_id,
                                              PlanSession.kind == "fixed")).all() if prog.plan_id else []
+    absences = jl(prog.absences_json, [])
     weeks, wk = [], wk0
     while wk <= end:
         pos = P.block_position(prog.start_date.date(), wk, prog.block_weeks, mults)
+        sun = wk + timedelta(days=6)
+        # quali sedute della settimana tipo restano davvero (le assenze le tolgono)
+        live = P.expand_slots(tpl, absences, wk, sun, wk, family=family)
         weeks.append({"lunedi": wk.isoformat(), "blocco": pos["block"],
                       "settimana": f"{pos['week_in_block']}/{pos['block_weeks']}",
                       "moltiplicatore": pos["multiplier"], "scarico": pos["deload"],
                       "sedute_fissate": [{"data": f.date.date().isoformat(), "titolo": f.title,
                                           "slot": f.slot_id} for f in fixed
-                                         if f.date and wk <= f.date.date() <= wk + timedelta(days=6)]})
+                                         if f.date and wk <= f.date.date() <= sun],
+                      "assenze": [{"dal": a.get("start"), "al": a.get("end"), "nota": a.get("note"),
+                                   "sport_possibili": a.get("allowed") or []} for a in absences
+                                  if a.get("start") and a.get("end")
+                                  and a["start"] <= sun.isoformat() and a["end"] >= wk.isoformat()],
+                      "slot_che_restano": sorted({i["slot"].get("id") for i in live})})
         wk += timedelta(days=7)
     ftp = (ctx.get("ftp") or {}).get("ftp")
     past = [w for w in season_overview(ctx["anchors"], today) if w["past"]][-6:]
