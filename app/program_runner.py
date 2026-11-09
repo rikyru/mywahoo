@@ -18,6 +18,7 @@ from datetime import date, datetime, time, timedelta
 from sqlmodel import Session, select
 
 from . import anthropic_client, google_health, program as P
+from . import fit as fitmod
 from . import form as formmod
 from . import profile as profilemod
 from .db import (BodyGirth, BodyMeasure, PeriodSummary, PlanSession, Program, TrainingPlan,
@@ -187,6 +188,9 @@ def season_overview(anchors, today: date | None = None) -> list[dict]:
             if ps.date:
                 by_week.setdefault(P.monday(ps.date.date()), []).append(ps)
         horizon = today + timedelta(days=P.WINDOW_DAYS - 1)
+        plan = jl(prog.season_json, {})
+        plan_weeks = {w.get("lunedi"): w for w in plan.get("settimane") or [] if isinstance(w, dict)}
+        phases = {f.get("blocco"): f for f in plan.get("fasi") or [] if isinstance(f, dict)}
         out = []
         wk = start
         while wk <= end:
@@ -203,7 +207,8 @@ def season_overview(anchors, today: date | None = None) -> list[dict]:
                          "non fatta" if d < today else "prevista")
                 items.append({"date": d, "sport": ps.sport, "title": ps.title,
                               "min": ps.duration_min, "state": state, "fixed": ps.kind == "fixed",
-                              "workout_id": ps.workout_id})
+                              "workout_id": ps.workout_id, "slot_id": ps.slot_id})
+            temi = (plan_weeks.get(wk.isoformat()) or {}).get("temi") or {}
             if wk + timedelta(days=6) > horizon:
                 # oltre le sedute già generate: la settimana tipo proiettata
                 have = {(it["date"], family(it["sport"])) for it in items}
@@ -214,20 +219,171 @@ def season_overview(anchors, today: date | None = None) -> list[dict]:
                     if sl.get("id") in fixed_slots or (inst["date"], family(sl.get("sport", ""))) in have:
                         continue
                     items.append({"date": inst["date"], "sport": google_health.canonical_sport(sl.get("sport", "")),
-                                  "title": sl.get("focus") or sl.get("sport"), "min": sl.get("duration"),
+                                  "title": temi.get(sl.get("id")) or sl.get("focus") or sl.get("sport"),
+                                  "min": sl.get("duration"), "slot_id": sl.get("id"),
                                   "state": "da programma", "fixed": False, "workout_id": None,
                                   "indoor": bool(sl.get("indoor"))})
                 items.sort(key=lambda it: it["date"])
             away = [a for a in absences
                     if a.get("start") and a.get("end")
                     and a["start"] <= (wk + timedelta(days=6)).isoformat() and a["end"] >= wk.isoformat()]
+            ph = phases.get(pos["block"]) or {}
             out.append({"monday": wk, "pos": pos, "label": P.block_label(pos),
+                        "fase": ph.get("nome"), "fase_obiettivo": ph.get("obiettivo"),
+                        "temi": temi, "nota_coach": (plan_weeks.get(wk.isoformat()) or {}).get("nota"),
                         "target": round(target), "done": round(done) if wk <= wk0 else None,
                         "sedute": items, "extras": sorted(extras, key=lambda x: x["date"]),
                         "past": wk < wk0, "current": wk == wk0,
                         "absences": [a.get("note") or "assenza" for a in away]})
             wk += timedelta(days=7)
     return out
+
+
+# ------------------------------------------------------------ piano di stagione
+# Il coach AI decide la periodizzazione fino alla fine del programma (fasi dei
+# blocchi, tema di ogni seduta pianificata settimana per settimana, tappe),
+# dentro la settimana tipo (giorni/sport/durate restano quelli). Si rivede a
+# inizio di ogni blocco e dopo una seduta fissata (es. test FTP).
+
+def _last_execution(s, slot_id: str, ftp: float | None) -> dict | None:
+    """Com'è andata davvero l'ultima seduta fatta di uno slot: per la bici con FIT
+    i blocchi di lavoro (watt, % FTP, deriva FC), altrimenti i dati di sintesi."""
+    ps = s.exec(select(PlanSession).where(
+        PlanSession.slot_id == slot_id, PlanSession.done == True,  # noqa: E712
+        PlanSession.workout_id != None).order_by(PlanSession.date.desc())).first()  # noqa: E711
+    w = s.get(Workout, ps.workout_id) if ps else None
+    if not w:
+        return None
+    out = {"data": w.start_date.date().isoformat(), "titolo_previsto": ps.title,
+           "durata_min": round((w.moving_s or 0) / 60), "fc_media": w.avg_hr,
+           "rpe": w.rpe, "watt_medi": w.avg_power, "np": w.np_power}
+    if w.has_fit and w.fit_path and w.avg_power:
+        try:
+            laps = json.loads(w.laps_json) if w.laps_json else fitmod.parse_laps(w.fit_path)
+            streams = fitmod.load_streams(w.id)
+        except Exception:
+            laps, streams = [], None
+        if laps and streams and laps[0].get("start"):
+            drift = fitmod.block_drift(laps, streams, w.start_date,
+                                       min_power=0.75 * ftp if ftp else 0)
+            out["blocchi_di_lavoro"] = [
+                {"min": round(lp["time_s"] / 60), "watt": lp.get("avg_power"),
+                 "pct_ftp": round(lp["avg_power"] / ftp * 100) if ftp and lp.get("avg_power") else None,
+                 "fc": lp.get("avg_hr"), "deriva_fc_pct": (drift.get(lp["i"]) or {}).get("deriva_pct")}
+                for lp in laps if (lp.get("time_s") or 0) >= 240
+                and (not ftp or (lp.get("avg_power") or 0) >= 0.75 * ftp)]
+    return {k: v for k, v in out.items() if v not in (None, [], "")}
+
+
+def _season_context(s, prog: Program, ctx: dict, today: date, extra: dict | None) -> dict:
+    tpl = jl(prog.template_json, [])
+    mults = jl(prog.block_multipliers_json, [1.0])
+    wk0 = P.monday(today)
+    end = P.monday(prog.end_date.date()) if prog.end_date else wk0 + timedelta(weeks=12)
+    fixed = s.exec(select(PlanSession).where(PlanSession.plan_id == prog.plan_id,
+                                             PlanSession.kind == "fixed")).all() if prog.plan_id else []
+    weeks, wk = [], wk0
+    while wk <= end:
+        pos = P.block_position(prog.start_date.date(), wk, prog.block_weeks, mults)
+        weeks.append({"lunedi": wk.isoformat(), "blocco": pos["block"],
+                      "settimana": f"{pos['week_in_block']}/{pos['block_weeks']}",
+                      "moltiplicatore": pos["multiplier"], "scarico": pos["deload"],
+                      "sedute_fissate": [{"data": f.date.date().isoformat(), "titolo": f.title,
+                                          "slot": f.slot_id} for f in fixed
+                                         if f.date and wk <= f.date.date() <= wk + timedelta(days=6)]})
+        wk += timedelta(days=7)
+    ftp = (ctx.get("ftp") or {}).get("ftp")
+    past = [w for w in season_overview(ctx["anchors"], today) if w["past"]][-6:]
+    return {
+        "oggi": today.isoformat(),
+        "programma": {"obiettivo": prog.goal, "note": prog.notes,
+                      "inizio": prog.start_date.date().isoformat(),
+                      "fine": prog.end_date.date().isoformat() if prog.end_date else None},
+        "atleta": profilemod.ai_context(),
+        "stato": {"ftp_w": ftp, "ftp_fonte": (ctx.get("ftp") or {}).get("source"),
+                  "forma": ctx.get("form"), **(extra or {})},
+        "attrezzatura": jl(prog.equipment_json, []),
+        "settimana_tipo": [{"slot": sl.get("id"), "sport": sl.get("sport"), "giorni": sl.get("days"),
+                            "uno_solo_dei_giorni": sl.get("pick") == "one", "tipo": sl.get("kind"),
+                            "durata_min": sl.get("duration"), "intensita": sl.get("intensity"),
+                            "focus": sl.get("focus"), "indoor": bool(sl.get("indoor"))}
+                           for sl in tpl if sl.get("enabled", True)],
+        "settimane_passate": [{"lunedi": w["monday"].isoformat(), "carico_fatto": w["done"],
+                               "carico_target": w["target"],
+                               "sedute": [f"{it['sport']}: {it['state']}" for it in w["sedute"]]}
+                              for w in past],
+        "ultime_esecuzioni": {sl["id"]: e for sl in tpl
+                              if sl.get("kind") != "external"
+                              and (e := _last_execution(s, sl["id"], ftp))},
+        "settimane_da_pianificare": weeks,
+        "piano_precedente": {k: v for k, v in jl(prog.season_json, {}).items()
+                             if k in ("obiettivo", "fasi", "tappe", "generato")} or None,
+    }
+
+
+def season_needs_plan(prog: Program, today: date) -> str | None:
+    """Motivo per (ri)pianificare la stagione, o None."""
+    plan = jl(prog.season_json, {})
+    if not plan.get("settimane"):
+        return "primo piano di stagione"
+    gen = plan.get("generato") or ""
+    pos = P.block_position(prog.start_date.date(), today, prog.block_weeks,
+                           jl(prog.block_multipliers_json, [1.0]))
+    if pos["week_in_block"] == 1 and gen < P.monday(today).isoformat():
+        return f"inizio del blocco {pos['block']}"
+    with Session(engine) as s:
+        done_fixed = s.exec(select(PlanSession).where(
+            PlanSession.plan_id == prog.plan_id, PlanSession.kind == "fixed",
+            PlanSession.done == True)).all()  # noqa: E712
+    if any(f.date and f.date.date().isoformat() > gen for f in done_fixed):
+        return "seduta fissata fatta (es. test FTP)"
+    return None
+
+
+async def plan_season(ctx: dict, why: str, extra: dict | None = None) -> dict | None:
+    """Il coach AI (ri)pianifica la stagione da questa settimana alla fine. Le
+    settimane già passate del piano precedente restano com'erano."""
+    today = date.today()
+    with Session(engine) as s:
+        prog = active_program(s)
+        if not prog:
+            return None
+        payload = _season_context(s, prog, ctx, today, extra)
+        prog_id, old = prog.id, jl(prog.season_json, {})
+    plan = await anthropic_client.plan_season(payload, why)
+    if not plan or not isinstance(plan.get("settimane"), list):
+        return None
+    wk0 = P.monday(today).isoformat()
+    kept = [w for w in old.get("settimane") or [] if isinstance(w, dict) and (w.get("lunedi") or "") < wk0]
+    plan["settimane"] = kept + [w for w in plan["settimane"]
+                                if isinstance(w, dict) and (w.get("lunedi") or "") >= wk0]
+    plan["generato"] = today.isoformat()
+    plan["motivo"] = why
+    with Session(engine) as s:
+        prog = s.get(Program, prog_id)
+        prog.season_json = json.dumps(plan, ensure_ascii=False)
+        s.add(prog)
+        s.commit()
+    logger.info("Piano di stagione (%s): %s fasi, %s settimane", why,
+                len(plan.get("fasi") or []), len(plan["settimane"]))
+    return plan
+
+
+async def ensure_season_plan(ctx: dict, extra: dict | None = None) -> dict | None:
+    with Session(engine) as s:
+        prog = active_program(s)
+        why = season_needs_plan(prog, date.today()) if prog else None
+    return await plan_season(ctx, why, extra) if why else None
+
+
+def _week_theme(prog: Program, slot_id: str, d: date) -> tuple[str | None, dict]:
+    """(tema della seduta, fase del blocco) decisi dal coach per quello slot/giorno."""
+    plan = jl(prog.season_json, {})
+    wk = P.monday(d).isoformat()
+    week = next((w for w in plan.get("settimane") or [] if isinstance(w, dict) and w.get("lunedi") == wk), {})
+    pos = P.block_position(prog.start_date.date(), d, prog.block_weeks, jl(prog.block_multipliers_json, [1.0]))
+    phase = next((f for f in plan.get("fasi") or [] if isinstance(f, dict) and f.get("blocco") == pos["block"]), {})
+    return (week.get("temi") or {}).get(slot_id), phase
 
 
 # ------------------------------------------------------------ pagella settimanale
@@ -700,12 +856,20 @@ def _fill_context(s, prog: Program, plan: TrainingPlan, routines: dict, to_fill:
                               for r in sl.get("routines") or [] if r in routines],
             "blocco": pos["block"], "settimana_del_blocco": f"{pos['week_in_block']}/{pos['block_weeks']}",
             "scarico": pos["deload"]})
+        tema, fase = _week_theme(prog, sl.get("id", ""), d)
+        if tema:
+            slots[-1]["tema_del_coach"] = tema
+        if fase:
+            slots[-1]["fase_del_blocco"] = {k: fase.get(k) for k in ("nome", "obiettivo")}
+        if (ex := _last_execution(s, sl.get("id", ""), (ctx.get("ftp") or {}).get("ftp"))):
+            slots[-1]["ultima_esecuzione_reale"] = ex
     return {
         "oggi": today.isoformat(),
         "programma": {"obiettivo": prog.goal, "note": prog.notes},
         "attrezzatura": jl(prog.equipment_json, []),
         "atleta": profilemod.ai_context(),
         "ftp_stimato_w": (ctx.get("ftp") or {}).get("ftp"),
+        "obiettivo_di_stagione": jl(prog.season_json, {}).get("obiettivo"),
         "ultime_sedute_svolte": [{"data": r.date.date().isoformat(), "sport": r.sport,
                                   "titolo": r.title, "contenuto": (r.description or "")[:300]}
                                  for r in recent[-8:]],

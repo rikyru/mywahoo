@@ -1778,6 +1778,17 @@ def _program_ctx() -> dict:
             "ftp": _estimated_ftp(), "form": summary}
 
 
+def _season_extra() -> dict:
+    """Stato per il piano di stagione oltre a quello del motore: peso e trend dalla
+    bilancia e gli obiettivi di riferimento (gli stessi delle previsioni salite)."""
+    kg = profilemod.load().get("weight_kg")
+    tr = nutrition.weight_trend_kg_per_week() or {}
+    return {"peso_kg": round(kg, 1) if kg else None,
+            "trend_peso_kg_settimana": tr.get("rate"),
+            "riferimenti_obiettivo": {"ftp_w": PRED_GOAL_FTP,
+                                      "peso_kg": round((kg - PRED_GOAL_KG_LOSS) * 2) / 2 if kg else None}}
+
+
 def _kick_program(why: str) -> None:
     """Ricalcolo del programma in background dopo un evento (nuova attività,
     seduta fatta/annullata), poi riallinea i target nutrizionali se è cambiato
@@ -1849,6 +1860,12 @@ async def _nightly_recompute_loop() -> None:
         # prima le attività del giorno (Pixel Watch via Google) e il programma (il
         # nuovo giorno entra nella finestra), poi i target nutrizionali, così la
         # periodizzazione vede le sedute appena create
+        # a inizio blocco (o dopo un test fissato) il coach ripianifica la stagione,
+        # prima del ricalcolo: le sedute nuove nascono già col tema giusto
+        try:
+            await program_runner.ensure_season_plan(_program_ctx(), _season_extra())
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Season plan failed: %s", e)
         try:
             await _import_activities_and_recalc("notturno", push_nutrition=False)
         except Exception as e:  # noqa: BLE001
@@ -2133,8 +2150,22 @@ def program_page(request: Request):
         "absences": jl(prog.absences_json, []), "equipment": jl(prog.equipment_json, []),
         "ftp": ftp_w, "template": tpl,
         "season": program_runner.season_overview(_hr_anchors(), today),
+        "season_plan": jl(prog.season_json, {}),
         "weekdays": programmod.WEEKDAYS_IT,
         "message": request.query_params.get("msg"), "error": request.query_params.get("error")})
+
+
+@app.post("/program/season", dependencies=[Depends(require_auth)])
+async def program_season():
+    """Il coach AI ripianifica la stagione da questa settimana alla fine."""
+    try:
+        plan = await program_runner.plan_season(_program_ctx(), "richiesta dall'atleta", _season_extra())
+    except anthropic_client.AnthropicError as e:
+        return _program_redirect(error=str(e))
+    if not plan:
+        return _program_redirect(error="Il coach non ha restituito un piano valido: riprova")
+    _kick_program("piano di stagione")
+    return _program_redirect(msg="Stagione ripianificata dal coach: le prossime sedute seguono il nuovo piano")
 
 
 @app.post("/program/create", dependencies=[Depends(require_auth)])

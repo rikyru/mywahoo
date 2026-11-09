@@ -715,11 +715,49 @@ la settimana rispetto a quanto l'atleta ha già fatto).
   comunque la seduta strutturata. Bici outdoor: descrivi l'uscita con zone e
   intensità, "structure": null. Per gli altri sport "structure": null.
 - Descrizioni concrete: esercizi con serie × ripetizioni (o tempi) e recuperi.
+- Se lo slot ha "tema_del_coach", la seduta DEVE realizzare quel tema: è la
+  periodizzazione decisa per arrivare all'obiettivo di stagione. "fase_del_blocco"
+  dice a cosa serve il blocco.
+- Se c'è "ultima_esecuzione_reale" usala per calibrare: watt/% FTP dei blocchi e
+  "deriva_fc_pct" (sotto ~3% = margine, alza un po'; oltre 5% = al limite, tieni
+  o scendi), RPE e FC. Progressione sui fatti, non solo sul titolo precedente.
 Rispondi SOLO con JSON valido, senza testo attorno né code fence:
 {"sessioni": [{"key": "chiave ricevuta", "title": "titolo breve",
   "description": "contenuto della seduta", "duration_min": intero, "rpe": numero,
   "structure": [...] oppure null}]}
 Includi TUTTE le key ricevute."""
+
+
+SEASON_PROMPT = """\
+Sei l'allenatore di questo atleta e PIANIFICHI LA STAGIONE da questa settimana
+fino alla fine del programma, perché arrivi all'obiettivo (vedi "programma.obiettivo",
+"stato" e "atleta"). La SETTIMANA TIPO è fissa (giorni, sport, durate, routine):
+tu decidi COSA fare in ogni seduta pianificata settimana per settimana, cioè la
+periodizzazione. Gli slot con tipo "external" (es. corso di nuoto) non li
+pianifichi tu: tienine conto come carico.
+Regole:
+- Dividi i blocchi in FASI con uno scopo chiaro (es. base/adattamento, sweet
+  spot, soglia, VO2max, specifico/consolidamento) in una progressione sensata
+  verso l'obiettivo; rispetta le settimane di scarico (scarico=true: volume e
+  intensità giù) e le "sedute_fissate" (es. test FTP: quel giorno lo slot è il
+  test, mettici "Test FTP" come tema e la settimana prima non affaticare le gambe).
+- Bici: varia lo stimolo (sweet spot, over-under, soglia, VO2max, fondo Z2,
+  cadenza/tecnica) con intensità in % FTP e struttura breve nel tema (es.
+  "Sweet spot 2×15′ 88–93%"). Usa FTP misurato e stimato in "stato"; se
+  l'ultima esecuzione mostra deriva FC bassa sui blocchi, c'è margine.
+- Forza/corpo libero: tema coerente con la fase e con la bici del weekend (niente
+  gambe pesanti il giorno prima della seduta di qualità).
+- Considera dimagrimento e recupero (deficit calorico, nuoto pesante 2 volte).
+- "tappe": verifiche intermedie misurabili (test FTP con valore atteso, peso).
+Rispondi SOLO con JSON valido, senza testo attorno:
+{"obiettivo": {"descrizione": "...", "ftp_w": numero o null, "peso_kg": numero o null},
+ "fasi": [{"blocco": n, "nome": "breve", "obiettivo": "una frase"}],
+ "settimane": [{"lunedi": "YYYY-MM-DD", "temi": {"<slot id>": "tema breve (max 70 car.)"},
+   "nota": "facoltativa, breve"}],
+ "tappe": [{"data": "YYYY-MM-DD", "cosa": "...", "atteso": "..."}],
+ "spiegazione": "3-5 frasi: la logica del piano"}
+Includi TUTTE le settimane ricevute e, in ognuna, un tema per ogni slot non
+external."""
 
 
 PROGRAM_ACTIONS_DOC = """\
@@ -780,6 +818,13 @@ async def program_prefill(notes: str, athlete: dict | None = None) -> dict | Non
     if athlete:
         payload["atleta"] = athlete
     return _json_object(await _call_claude(PROGRAM_PREFILL_PROMPT, _dumps(payload)))
+
+
+async def plan_season(ctx: dict, why: str = "") -> dict | None:
+    """Piano di stagione del coach (fasi, temi per settimana, tappe)."""
+    raw = await _call_claude(SEASON_PROMPT, f"Motivo della pianificazione: {why}\n\n" + _dumps(ctx))
+    d = _json_object(raw)
+    return d if isinstance(d, dict) else None
 
 
 async def fill_program_sessions(ctx: dict) -> list[dict]:

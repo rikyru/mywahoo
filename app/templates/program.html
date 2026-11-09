@@ -118,15 +118,34 @@
 <section class="card season" id="season">
   <div class="card-head">
     <h3>🗓️ Stagione <small class="muted">· {{ season[0].monday.strftime('%d/%m/%y') }} → {{ season[-1].monday.strftime('%d/%m/%y') }}</small></h3>
-    <button class="chip" type="button" id="seasonAll">mostra tutta</button>
+    <div style="display:flex;gap:.4rem;flex-wrap:wrap;">
+      <button class="chip" type="button" id="seasonAll">mostra tutta</button>
+      <form method="post" action="/program/season" style="margin:0"
+            onsubmit="const b=this.querySelector('button');b.disabled=true;b.textContent='Il coach pianifica…';">
+        <button class="chip" type="submit">{{ 'Ripianifica' if season_plan.settimane else 'Pianifica' }} col coach</button></form>
+    </div>
   </div>
+  {% if season_plan.settimane %}
+  <div class="season-plan">
+    {% if season_plan.obiettivo %}<p><strong>Obiettivo:</strong> {{ season_plan.obiettivo.descrizione }}
+      {%- if season_plan.obiettivo.ftp_w %} · FTP {{ season_plan.obiettivo.ftp_w }} W{% endif %}
+      {%- if season_plan.obiettivo.peso_kg %} · {{ season_plan.obiettivo.peso_kg }} kg{% endif %}</p>{% endif %}
+    {% if season_plan.spiegazione %}<p class="muted">{{ season_plan.spiegazione }}</p>{% endif %}
+    {% if season_plan.tappe %}<p><strong>Tappe:</strong>
+      {% for t in season_plan.tappe %}<span class="tag" title="{{ t.atteso }}">{{ t.data[8:10] }}/{{ t.data[5:7] }} · {{ t.cosa }}{% if t.atteso %} → {{ t.atteso }}{% endif %}</span> {% endfor %}</p>{% endif %}
+    <p class="muted" style="font-size:.8rem;">Piano del coach del {{ season_plan.generato }} ({{ season_plan.motivo }}). Si rivede da solo a inizio di ogni blocco e dopo il test FTP.</p>
+  </div>
+  {% else %}
+  <p class="muted">Il coach non ha ancora pianificato la stagione: premi «Pianifica col coach» (o lo fa da solo a inizio blocco).</p>
+  {% endif %}
   <div class="season-list">
   {% for w in season %}
     {% set far = loop.index0 < cur_i.v - 3 or loop.index0 > cur_i.v + 8 %}
     <details class="season-week{{ ' is-past' if w.past }}{{ ' is-current' if w.current }}{{ ' is-deload' if w.pos.deload }}{{ ' season-far' if far }}"{% if w.current %} open{% endif %}>
       <summary>
         <span class="sw-date">{{ w.monday.strftime('%d/%m') }}{% if w.current %} <span class="tag">ora</span>{% endif %}</span>
-        <span class="sw-block">B{{ w.pos.block }} · {{ w.pos.week_in_block }}/{{ w.pos.block_weeks }}
+        <span class="sw-block"{% if w.fase %} title="{{ w.fase }}: {{ w.fase_obiettivo }}"{% endif %}>B{{ w.pos.block }} · {{ w.pos.week_in_block }}/{{ w.pos.block_weeks }}
+          {%- if w.fase and w.pos.week_in_block == 1 %}<br><small class="sw-phase">{{ w.fase }}</small>{% endif %}
           {%- if w.pos.deload %} <em>scarico</em>{% elif w.pos.multiplier != 1 %} <span class="muted">{{ '%+d'|format(((w.pos.multiplier - 1) * 100)|round|int) }}%</span>{% endif %}</span>
         <span class="sw-load" title="carico (TRIMP){{ ' fatto / target' if w.done is not none else ' previsto' }}">
           {% if w.done is not none %}{% set pct = (w.done / w.target * 100) if w.target else 0 %}
@@ -141,6 +160,7 @@
         </span>
       </summary>
       <ul class="sw-items">
+        {% if w.fase %}<li class="muted"><strong>{{ w.fase }}</strong> — {{ w.fase_obiettivo }}{% if w.nota_coach %} · {{ w.nota_coach }}{% endif %}</li>{% endif %}
         {% for it in w.sedute %}
         <li><span class="muted">{{ weekdays[it.date.weekday()][:3] }} {{ it.date.strftime('%d/%m') }}</span>
           {{ sport_icon(it.sport) }}

@@ -412,6 +412,10 @@ a.chip:hover { background: var(--card-hover); text-decoration: none; }
 .season-week.is-current > summary { background: var(--accent-soft); border-radius: var(--radius-sm); }
 .season-week.is-deload .sw-block em { color: #e0a93c; font-style: normal; }
 .season-far { display: none; }
+.season-plan { font-size: .9rem; margin-bottom: .4rem; }
+.season-plan p { margin: .3rem 0; }
+.season-plan .tag { display: inline-block; margin: .1rem 0; }
+.sw-phase { color: #a9c7ff; font-size: .74rem; }
 .season-show-all .season-far { display: block; }
 .sw-date { font-family: var(--mono); }
 .sw-load { display: flex; align-items: center; gap: .4rem; }
