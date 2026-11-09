@@ -2132,6 +2132,7 @@ def program_page(request: Request):
         "days": days, "proposals": proposals, "today": today.isoformat(),
         "absences": jl(prog.absences_json, []), "equipment": jl(prog.equipment_json, []),
         "ftp": ftp_w, "template": tpl,
+        "season": program_runner.season_overview(_hr_anchors(), today),
         "weekdays": programmod.WEEKDAYS_IT,
         "message": request.query_params.get("msg"), "error": request.query_params.get("error")})
 

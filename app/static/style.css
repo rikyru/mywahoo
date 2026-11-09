@@ -402,6 +402,45 @@ a.chip:hover { background: var(--card-hover); text-decoration: none; }
   text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
 .pred-goal input { width: 5.5rem; padding: .4rem .5rem; background: var(--bg-elev); color: var(--text);
   border: 1px solid var(--border); border-radius: var(--radius-sm); }
+/* ---------- program: stagione ---------- */
+.season-list { display: flex; flex-direction: column; }
+.season-week { border-top: 1px solid var(--border-soft); }
+.season-week > summary { display: grid; grid-template-columns: 4.6rem 8.5rem 9.5rem 1fr; gap: .6rem;
+  align-items: center; padding: .45rem .3rem; cursor: pointer; list-style: none; font-size: .9rem; }
+.season-week > summary::-webkit-details-marker { display: none; }
+.season-week.is-past > summary { opacity: .8; }
+.season-week.is-current > summary { background: var(--accent-soft); border-radius: var(--radius-sm); }
+.season-week.is-deload .sw-block em { color: #e0a93c; font-style: normal; }
+.season-far { display: none; }
+.season-show-all .season-far { display: block; }
+.sw-date { font-family: var(--mono); }
+.sw-load { display: flex; align-items: center; gap: .4rem; }
+.sw-bar { flex: 0 0 4.5rem; height: 7px; background: var(--bg-elev); border-radius: 99px; overflow: hidden; }
+.sw-bar span { display: block; height: 100%; border-radius: 99px; }
+.sw-bar .ok { background: var(--good); }
+.sw-bar .mid { background: #e0a93c; }
+.sw-bar .low { background: var(--bad); }
+.sw-num { font-family: var(--mono); font-size: .82rem; white-space: nowrap; }
+.sw-icons { display: flex; flex-wrap: wrap; gap: .15rem; align-items: center; }
+.sw-ic { font-size: 1.05rem; line-height: 1; position: relative; }
+.sw-prevista, .sw-da-programma { opacity: .4; filter: grayscale(.4); }
+.sw-saltata, .sw-non-fatta { opacity: .35; text-decoration: line-through; }
+.sw-fatta::after { content: "✓"; position: absolute; right: -.25rem; bottom: -.2rem; font-size: .6rem; color: var(--good); }
+.sw-fixed { outline: 1px dashed #e0a93c; border-radius: 4px; opacity: .9; }
+.sw-extra { opacity: .75; }
+.sw-items { margin: .2rem 0 .6rem 4.9rem; padding: 0; list-style: none; font-size: .9rem; }
+.sw-items li { padding: .15rem 0; }
+.sw-tag-fatta { background: var(--good-soft); color: #9ee6c4; }
+.sw-tag-saltata, .sw-tag-non-fatta { background: var(--bad-soft); color: #f8c6c6; }
+@media (max-width: 640px) {
+  .season-week > summary { grid-template-columns: 3.4rem 1fr auto; grid-template-areas: "d b l" "i i i"; gap: .25rem .5rem; }
+  .sw-date { grid-area: d; }
+  .sw-block { grid-area: b; }
+  .sw-load { grid-area: l; }
+  .sw-icons { grid-area: i; }
+  .sw-bar { flex-basis: 3rem; }
+  .sw-items { margin-left: .4rem; }
+}
 /* ---------- HR zones ---------- */
 .laps-bike { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
 .laps-bike th { color: var(--muted); font-size: .72rem; text-transform: uppercase; letter-spacing: .05em;

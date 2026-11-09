@@ -113,6 +113,56 @@
 </section>
 {% endif %}
 
+{% if season %}
+{% set cur_i = namespace(v=0) %}{% for w in season %}{% if w.current %}{% set cur_i.v = loop.index0 %}{% endif %}{% endfor %}
+<section class="card season" id="season">
+  <div class="card-head">
+    <h3>🗓️ Stagione <small class="muted">· {{ season[0].monday.strftime('%d/%m/%y') }} → {{ season[-1].monday.strftime('%d/%m/%y') }}</small></h3>
+    <button class="chip" type="button" id="seasonAll">mostra tutta</button>
+  </div>
+  <div class="season-list">
+  {% for w in season %}
+    {% set far = loop.index0 < cur_i.v - 3 or loop.index0 > cur_i.v + 8 %}
+    <details class="season-week{{ ' is-past' if w.past }}{{ ' is-current' if w.current }}{{ ' is-deload' if w.pos.deload }}{{ ' season-far' if far }}"{% if w.current %} open{% endif %}>
+      <summary>
+        <span class="sw-date">{{ w.monday.strftime('%d/%m') }}{% if w.current %} <span class="tag">ora</span>{% endif %}</span>
+        <span class="sw-block">B{{ w.pos.block }} · {{ w.pos.week_in_block }}/{{ w.pos.block_weeks }}
+          {%- if w.pos.deload %} <em>scarico</em>{% elif w.pos.multiplier != 1 %} <span class="muted">{{ '%+d'|format(((w.pos.multiplier - 1) * 100)|round|int) }}%</span>{% endif %}</span>
+        <span class="sw-load" title="carico (TRIMP){{ ' fatto / target' if w.done is not none else ' previsto' }}">
+          {% if w.done is not none %}{% set pct = (w.done / w.target * 100) if w.target else 0 %}
+          <span class="sw-bar"><span style="width: {{ [pct, 100]|min|round|int }}%" class="{{ 'ok' if pct >= 85 else ('mid' if pct >= 60 else 'low') }}"></span></span>
+          <span class="sw-num">{{ w.done }}<span class="muted">/{{ w.target }}</span></span>
+          {% else %}<span class="sw-num muted">~{{ w.target }}</span>{% endif %}
+        </span>
+        <span class="sw-icons">
+          {% for it in w.sedute %}<span class="sw-ic sw-{{ it.state | replace(' ', '-') }}{{ ' sw-fixed' if it.fixed }}" title="{{ it.date.strftime('%d/%m') }} · {{ it.title }} · {{ it.state }}">{{ sport_icon(it.sport) }}</span>{% endfor %}
+          {% for x in w.extras %}<span class="sw-ic sw-extra" title="{{ x.date.strftime('%d/%m') }} · {{ x.name }} (fuori programma)">{{ sport_icon(x.sport) }}</span>{% endfor %}
+          {% if w.absences %}<span class="tag" title="{{ w.absences | join(', ') }}">assenza</span>{% endif %}
+        </span>
+      </summary>
+      <ul class="sw-items">
+        {% for it in w.sedute %}
+        <li><span class="muted">{{ weekdays[it.date.weekday()][:3] }} {{ it.date.strftime('%d/%m') }}</span>
+          {{ sport_icon(it.sport) }}
+          {% if it.workout_id %}<a href="/workout/{{ it.workout_id }}">{{ it.title }}</a>{% else %}{{ it.title }}{% endif %}
+          <span class="muted">· {{ it.min }}′</span>
+          <span class="tag sw-tag-{{ it.state | replace(' ', '-') }}">{{ 'fissata' if it.fixed and it.state == 'prevista' else it.state }}</span></li>
+        {% endfor %}
+        {% for x in w.extras %}
+        <li><span class="muted">{{ weekdays[x.date.weekday()][:3] }} {{ x.date.strftime('%d/%m') }}</span>
+          {{ sport_icon(x.sport) }} <a href="/workout/{{ x.id }}">{{ x.name }}</a>
+          <span class="muted">· {{ x.min }}′ · fuori programma{{ '' if x.counted else ' (non conta)' }}</span></li>
+        {% endfor %}
+        {% if not w.sedute and not w.extras %}<li class="muted">Nessuna seduta.</li>{% endif %}
+      </ul>
+    </details>
+  {% endfor %}
+  </div>
+  <p class="muted" style="font-size:.82rem;">Barra = carico fatto sul target della settimana (TRIMP). Nelle settimane future: target previsto e settimana tipo.
+    Icone sbiadite = previste, ✓ = fatte, barrate = saltate, bordo tratteggiato = seduta fissata (es. test FTP). Apri una settimana per il dettaglio.</p>
+</section>
+{% endif %}
+
 {% if proposals %}
 <section class="card prog-proposals">
   <h3>Proposte da confermare</h3>
@@ -335,4 +385,15 @@
 })();
 </script>
 {% endif %}
+<script>
+(function () {
+  const b = document.getElementById("seasonAll"), box = document.getElementById("season");
+  if (!b || !box) return;
+  b.addEventListener("click", () => {
+    const all = box.classList.toggle("season-show-all");
+    b.textContent = all ? "solo vicine" : "mostra tutta";
+    b.classList.toggle("chip-on", all);
+  });
+})();
+</script>
 {% endblock %}

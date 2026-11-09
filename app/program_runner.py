@@ -158,6 +158,78 @@ def week_summary(anchors) -> dict | None:
             "extras": sorted(extras, key=lambda x: x["date"]), "readiness": rd or None}
 
 
+def season_overview(anchors, today: date | None = None) -> list[dict]:
+    """Tutta la stagione, una riga per settimana (dall'inizio alla fine del
+    programma): posizione nel blocco, carico fatto/target e sedute.
+    Passato: le sedute del programma (fatte/saltate/non fatte) + le attività
+    extra. Futuro: le sedute già generate e, oltre la finestra, la settimana tipo
+    proiettata (assenze escluse); le sedute fissate (es. test FTP) prendono il
+    posto dello slot di quella settimana."""
+    today = today or date.today()
+    wk0 = P.monday(today)
+    with Session(engine) as s:
+        prog = active_program(s)
+        if not prog:
+            return []
+        start = P.monday(prog.start_date.date())
+        end = P.monday(prog.end_date.date()) if prog.end_date else wk0 + timedelta(weeks=12)
+        tpl, absences = jl(prog.template_json, []), jl(prog.absences_json, [])
+        mults = jl(prog.block_multipliers_json, [1.0])
+        sessions = s.exec(select(PlanSession).where(PlanSession.plan_id == prog.plan_id)).all() \
+            if prog.plan_id else []
+        ws = s.exec(select(Workout).where(
+            Workout.start_date >= datetime.combine(start, time.min),
+            Workout.start_date <= datetime.combine(today, time.max))).all()
+        linked = {ps.workout_id for ps in sessions if ps.workout_id}
+        rates = _rates(s, anchors)
+        by_week: dict = {}
+        for ps in sessions:
+            if ps.date:
+                by_week.setdefault(P.monday(ps.date.date()), []).append(ps)
+        horizon = today + timedelta(days=P.WINDOW_DAYS - 1)
+        out = []
+        wk = start
+        while wk <= end:
+            pos = P.block_position(prog.start_date.date(), wk, prog.block_weeks, mults)
+            week_ws = [w for w in ws if wk <= w.start_date.date() <= wk + timedelta(days=6)]
+            extras: list = []
+            target, done = _week_target_done(s, tpl, absences, wk, pos["multiplier"],
+                                             week_ws, linked, anchors, rates,
+                                             extras if wk <= wk0 else None)
+            items = []
+            for ps in sorted(by_week.get(wk, []), key=lambda p: (p.date, p.order)):
+                d = ps.date.date()
+                state = ("fatta" if ps.done else "saltata" if ps.skipped else
+                         "non fatta" if d < today else "prevista")
+                items.append({"date": d, "sport": ps.sport, "title": ps.title,
+                              "min": ps.duration_min, "state": state, "fixed": ps.kind == "fixed",
+                              "workout_id": ps.workout_id})
+            if wk + timedelta(days=6) > horizon:
+                # oltre le sedute già generate: la settimana tipo proiettata
+                have = {(it["date"], family(it["sport"])) for it in items}
+                fixed_slots = {ps.slot_id for ps in by_week.get(wk, []) if ps.kind == "fixed"}
+                lo = max(wk, horizon + timedelta(days=1))
+                for inst in P.expand_slots(tpl, absences, lo, wk + timedelta(days=6), lo, family=family):
+                    sl = inst["slot"]
+                    if sl.get("id") in fixed_slots or (inst["date"], family(sl.get("sport", ""))) in have:
+                        continue
+                    items.append({"date": inst["date"], "sport": google_health.canonical_sport(sl.get("sport", "")),
+                                  "title": sl.get("focus") or sl.get("sport"), "min": sl.get("duration"),
+                                  "state": "da programma", "fixed": False, "workout_id": None,
+                                  "indoor": bool(sl.get("indoor"))})
+                items.sort(key=lambda it: it["date"])
+            away = [a for a in absences
+                    if a.get("start") and a.get("end")
+                    and a["start"] <= (wk + timedelta(days=6)).isoformat() and a["end"] >= wk.isoformat()]
+            out.append({"monday": wk, "pos": pos, "label": P.block_label(pos),
+                        "target": round(target), "done": round(done) if wk <= wk0 else None,
+                        "sedute": items, "extras": sorted(extras, key=lambda x: x["date"]),
+                        "past": wk < wk0, "current": wk == wk0,
+                        "absences": [a.get("note") or "assenza" for a in away]})
+            wk += timedelta(days=7)
+    return out
+
+
 # ------------------------------------------------------------ pagella settimanale
 
 def _report_key(monday: date) -> str:
