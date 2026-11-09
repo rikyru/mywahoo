@@ -81,6 +81,7 @@
       <thead><tr>
         <th>#</th><th>Tempo</th><th>Dist.</th><th>km/h</th><th>W medi</th>
         {% if zones_ftp %}<th>% FTP</th>{% endif %}<th>W max</th><th>Cad.</th><th>FC</th>
+        {% if has_drift %}<th title="FC/W prima metà vs seconda metà del blocco, esclusi i primi 2′">Deriva FC</th>{% endif %}
       </tr></thead>
       <tbody>
       {% for lp in laps %}
@@ -94,6 +95,8 @@
           <td>{{ lp.max_power or '—' }}</td>
           <td>{{ lp.avg_cadence or '—' }}</td>
           <td>{{ lp.avg_hr or '—' }}{% if lp.max_hr %} <span class="muted">/ {{ lp.max_hr }}</span>{% endif %}</td>
+          {% if has_drift %}<td>{% if lp.drift %}<strong class="{{ 'bal-ok' if lp.drift.deriva_pct < 3 else ('bal-over' if lp.drift.deriva_pct < 5 else 'bal-under') }}">{{ '%+.1f'|format(lp.drift.deriva_pct) }}%</strong>
+            <span class="muted">{{ lp.drift.fc_inizio }}→{{ lp.drift.fc_fine }}</span>{% else %}<span class="muted">—</span>{% endif %}</td>{% endif %}
         </tr>
       {% endfor %}
       </tbody>
@@ -109,12 +112,16 @@
           <td>{{ laps_summary.max_power or '—' }}</td>
           <td>{{ laps_summary.avg_cadence or '—' }}</td>
           <td>{{ laps_summary.avg_hr or '—' }}{% if laps_summary.max_hr %} <span class="muted">/ {{ laps_summary.max_hr }}</span>{% endif %}</td>
+          {% if has_drift %}<td></td>{% endif %}
         </tr>
       </tfoot>
       {% endif %}
     </table>
   </div>
-  {% if zones_ftp %}<p class="muted">% FTP sui watt medi del giro, con l'FTP attuale ({{ zones_ftp }} W). FC: media / max.</p>{% endif %}
+  {% if zones_ftp %}<p class="muted">% FTP sui watt medi del giro, con l'FTP attuale ({{ zones_ftp }} W). FC: media / max.
+    {% if has_drift %}<strong>Deriva FC</strong> nei blocchi di lavoro (≥ 5′): quanto sale la FC a parità di watt
+    tra prima e seconda metà, esclusi i primi 2′ — <span class="bal-ok">&lt; 3% in controllo</span>,
+    <span class="bal-over">3–5% fatica</span>, <span class="bal-under">&gt; 5% al limite</span>.{% endif %}</p>{% endif %}
 </section>
 {% endif %}
 {% elif laps %}
@@ -362,7 +369,9 @@
 
 {% endblock %}
 {% block scripts %}
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8/hammer.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1/dist/chartjs-plugin-zoom.min.js"></script>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
 Chart.defaults.color = "#8a97a9";
@@ -376,38 +385,91 @@ function busy(btn) {
 const streams = {{ streams_json | safe }};
 
 if (streams) {
-  // Per-record charts: one card per available metric
-  const metrics = [
-    ["power",   "Potenza (W)",    "#0a6ebd"],
-    ["hr",      "FC (bpm)",       "#d62828"],
-    ["cadence", "Cadenza",        "#5a9e3a"],
-    ["speed",   "Velocità (km/h)","#9046b8", v => v == null ? null : v * 3.6],
-    ["alt",     "Quota (m)",      "#8a7350"],
-  ];
-  const host = document.getElementById("streamCharts");
-  const labels = streams.t.map(s => {
-    const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60);
-    return h ? `${h}:${String(m).padStart(2, "0")}` : `${m}m`;
+  // Un solo grafico con le serie sovrapposte (asse proprio per ognuna), giri in
+  // trasparenza con la deriva FC dei blocchi, zoom col mouse/pizzico.
+  if (window.ChartZoom) Chart.register(window.ChartZoom);
+  const INDOOR = {{ 'true' if ('virtual' in (w.sub_sport or '') | lower or 'indoor' in (w.sport or '') | lower) else 'false' }};
+  const hasPower = (streams.power || []).some(v => v);
+  const metrics = [   // chiave, etichetta, colore, trasformazione, visibile all'inizio
+    ["power",   "Potenza (W)",     "#4c8dff", null, true],
+    ["hr",      "FC (bpm)",        "#f87171", null, true],
+    ["cadence", "Cadenza (rpm)",   "#5a9e3a", null, !hasPower],
+    ["speed",   "Velocità (km/h)", "#b07ce8", v => v == null ? null : v * 3.6, !hasPower && !INDOOR],
+    ["alt",     "Quota (m)",       "#a08a63", null, !hasPower && !INDOOR],
+  ].filter(m => (streams[m[0]] || []).some(v => v != null) && !(INDOOR && m[0] === "speed"));
+  const fmtT = s => { const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), ss = Math.round(s % 60);
+    return (h ? h + ":" + String(m).padStart(2, "0") : m) + ":" + String(ss).padStart(2, "0"); };
+  const LAPS = {{ lap_marks_json | safe }};
+  const smooth = (arr, n) => arr.map((_, i) => {   // media mobile ~30 s sui punti ricampionati
+    let s = 0, c = 0; for (let k = Math.max(0, i - n); k <= Math.min(arr.length - 1, i + n); k++) if (arr[k] != null) { s += arr[k]; c++; }
+    return c ? s / c : null; });
+  const step = streams.t.length > 1 ? (streams.t[streams.t.length - 1] / streams.t.length) : 1;
+  const k30 = Math.max(0, Math.round(15 / Math.max(step, 1)));
+  const datasets = metrics.map(([key, label, color, fn, on], j) => {
+    let data = fn ? streams[key].map(fn) : streams[key];
+    if (key === "power") data = smooth(data, k30);
+    return { label: label + (key === "power" && k30 ? " · media 30 s" : ""), data, yAxisID: "y_" + key,
+             borderColor: color, backgroundColor: color + "22", pointRadius: 0, borderWidth: 1.4,
+             tension: .15, spanGaps: true, hidden: !on, fill: key === "alt" };
   });
-  for (const [key, label, color, fn] of metrics) {
-    const arr = streams[key];
-    if (!arr || !arr.some(v => v != null)) continue;
-    const card = document.createElement("section");
-    card.className = "card";
-    card.innerHTML = `<h3>${label}</h3><canvas></canvas>`;
-    host.appendChild(card);
-    new Chart(card.querySelector("canvas"), {
-      type: "line",
-      data: { labels,
-              datasets: [{ data: fn ? arr.map(fn) : arr, borderColor: color,
-                           pointRadius: 0, borderWidth: 1.2, tension: .2,
-                           fill: key === "alt", backgroundColor: color + "33",
-                           spanGaps: true }] },
-      options: { plugins: { legend: { display: false } },
-                 scales: { x: { ticks: { maxTicksLimit: 12 } } },
-                 animation: false, responsive: true },
-    });
-  }
+  const tEnd = streams.t[streams.t.length - 1];
+  const scales = { x: { type: "linear", min: 0, max: tEnd, grid: { display: false },
+                        ticks: { callback: v => fmtT(v) },
+                        // tacche a minuti tondi, anche dopo lo zoom
+                        afterBuildTicks: sc => {
+                          const r = sc.max - sc.min;
+                          const st = r > 7200 ? 1800 : r > 2400 ? 600 : r > 900 ? 300 : r > 240 ? 60 : 15;
+                          const out = [];
+                          for (let v = Math.ceil(sc.min / st) * st; v <= sc.max; v += st) out.push({ value: v });
+                          sc.ticks = out;
+                        } } };
+  metrics.forEach(([key, label, color], j) => {
+    scales["y_" + key] = { position: j % 2 ? "right" : "left", display: "auto",
+      grid: { drawOnChartArea: j === 0 }, ticks: { color }, title: { display: window.innerWidth > 640, text: label, color } };
+  });
+  const lapBands = {
+    id: "lapBands",
+    beforeDatasetsDraw(c) {
+      if (!LAPS.length) return;
+      const x = c.scales.x, ctx = c.ctx, top = c.chartArea.top, bot = c.chartArea.bottom;
+      ctx.save(); ctx.font = "11px Inter, system-ui, sans-serif"; ctx.textAlign = "center";
+      LAPS.forEach((l, n) => {
+        const xa = Math.max(x.getPixelForValue(l.a), x.left), xb = Math.min(x.getPixelForValue(l.b), x.right);
+        if (xb <= xa) return;
+        ctx.fillStyle = n % 2 ? "rgba(255,255,255,.035)" : "rgba(255,255,255,0)";
+        ctx.fillRect(xa, top, xb - xa, bot - top);
+        if (l.drift != null && xb - xa > 34) {
+          ctx.fillStyle = l.drift < 3 ? "#34d399" : (l.drift < 5 ? "#e0a93c" : "#f87171");
+          ctx.fillText((l.drift >= 0 ? "+" : "") + l.drift.toFixed(1) + "%", (xa + xb) / 2, top + 12);
+        }
+      });
+      ctx.restore();
+    },
+  };
+  const host = document.getElementById("streamCharts");
+  const card = document.createElement("section");
+  card.className = "card";
+  card.innerHTML = `<div class="card-head"><h3>Andamento</h3><button class="chip" type="button" id="zoomReset">reset zoom</button></div>
+    <div style="position:relative;height:clamp(300px,48vh,460px);"><canvas class="chart-free"></canvas></div>
+    <p class="muted" style="font-size:.82rem;">Clic sulla legenda per sovrapporre/nascondere le serie · trascina per zoomare
+      (pizzica sul telefono) · bande = giri${LAPS.some(l => l.drift != null) ? ", in alto la deriva FC del blocco" : ""}.</p>`;
+  host.appendChild(card);
+  const FINE = window.matchMedia("(pointer:fine)").matches;
+  const chart = new Chart(card.querySelector("canvas"), {
+    type: "line",
+    data: { datasets: datasets.map(d => ({ ...d, data: d.data.map((v, i) => ({ x: streams.t[i], y: v })) })) },
+    options: { responsive: true, maintainAspectRatio: false, animation: false, parsing: false,
+      interaction: { mode: "index", intersect: false }, scales,
+      plugins: { legend: { position: "bottom", labels: { boxWidth: 14 } },
+        tooltip: { callbacks: { title: it => fmtT(it[0].parsed.x),
+          label: it => it.dataset.label.split(" ·")[0] + ": " + (it.parsed.y == null ? "—" : Math.round(it.parsed.y)) } },
+        zoom: { limits: { x: { minRange: 60 } },
+          pan: { enabled: true, mode: "x", modifierKey: FINE ? "shift" : null },
+          zoom: { mode: "x", wheel: { enabled: true, modifierKey: "ctrl" }, pinch: { enabled: true },
+                  drag: { enabled: FINE, backgroundColor: "rgba(76,141,255,.15)" } } } } },
+    plugins: [lapBands],
+  });
+  card.querySelector("#zoomReset").addEventListener("click", () => chart.resetZoom());
 
   // GPS route map (Leaflet) if the FIT had position data
   if (streams.latlng && streams.latlng.length > 1) {

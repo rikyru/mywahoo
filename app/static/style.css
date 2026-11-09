@@ -450,6 +450,7 @@ a.chip:hover { background: var(--card-hover); text-decoration: none; }
 
 /* ---------- charts sizing ---------- */
 .card canvas { max-height: 300px; }
+.card canvas.chart-free { max-height: none; }   /* grafici con contenitore ad altezza propria */
 
 /* ---------- trend arrows ---------- */
 .trend { display: block; margin-top: .25rem; font-family: var(--mono);

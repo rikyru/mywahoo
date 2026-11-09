@@ -72,7 +72,11 @@ erano ai watt giusti? durata e recuperi rispettati? "zone_potenza" e "zone_fc"
 sono le percentuali di tempo per zona. Nei giri "watt_max_dopo_10s" esclude i
 primi 10 s (coda del blocco precedente): un recupero con media bassa non è
 "sporco" per un picco al cambio giro. Se "drift_cardiaco" dice "non applicabile"
-(seduta a intervalli) non trarre conclusioni sulla deriva."""
+(seduta a intervalli) non trarre conclusioni sulla deriva complessiva: usa invece
+"deriva_fc_nel_blocco" dei giri di lavoro (FC/W della prima metà contro la seconda,
+esclusi i primi 2′): sotto ~3% il blocco è tenuto in controllo, 3–5% iniziano
+fatica/caldo, oltre 5% il blocco era al limite (o FTP sovrastimato). Una deriva
+che cresce di blocco in blocco indica affaticamento accumulato."""
 
 PERIOD_SYSTEM_PROMPT = """\
 Sei un allenatore esperto di endurance. Ti viene fornito l'elenco delle sessioni

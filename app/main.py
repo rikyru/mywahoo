@@ -3386,6 +3386,18 @@ def workout_detail(request: Request, workout_id: int):
         if zones_ftp:
             power_zones = fitmod.power_zone_distribution(streams, zones_ftp)
 
+    # Bande dei giri sul grafico + deriva FC dentro i blocchi di lavoro (bici)
+    lap_marks = []
+    if laps and is_bike and streams and w.start_date and laps[0].get("start"):
+        drift = fitmod.block_drift(laps, streams, w.start_date,
+                                   min_power=0.75 * zones_ftp if zones_ftp else 0)
+        laps = [dict(lp, drift=drift.get(lp.get("i"))) for lp in laps]
+        for lp in laps:
+            a = (datetime.fromisoformat(lp["start"]) - w.start_date).total_seconds()
+            lap_marks.append({"i": lp["i"], "a": a, "b": a + (lp.get("time_s") or 0),
+                              "w": lp.get("avg_power"),
+                              "drift": (lp.get("drift") or {}).get("deriva_pct")})
+
     laps_summary = None
     if laps and is_bike:
         t_tot = sum(l["time_s"] for l in laps)
@@ -3420,6 +3432,8 @@ def workout_detail(request: Request, workout_id: int):
         "est_power": est_power, "climbs": climbs, "ftp": ftp, "hr_zones": hr_zones,
         "power_zones": power_zones, "zones_ftp": zones_ftp, "is_bike": is_bike,
         "lap_tail_s": fitmod.LAP_HR_TAIL_S,
+        "lap_marks_json": json.dumps(lap_marks),
+        "has_drift": any(lp.get("drift") for lp in (laps or []) if isinstance(lp, dict)),
         "ride_vo2max": ride_vo2max, "ride_vo2max_cat": _vo2max_category(ride_vo2max),
         "laps": laps, "laps_summary": laps_summary,
         "analysis_html": md.markdown(analysis.content, extensions=["tables"]) if analysis else None,
@@ -4046,10 +4060,14 @@ async def analyze(workout_id: int, regenerate: str = Form(default="")):
         if len(laps) > 1:
             # picco SENZA i primi 10 s: lì c'è la coda del blocco prima, non un rilancio
             peaks = fitmod.lap_peak_power(laps, streams, w.start_date) if streams and w.start_date else {}
+            drift = (fitmod.block_drift(laps, streams, w.start_date,
+                                        min_power=0.75 * ftp_now if ftp_now else 0)
+                     if streams and w.start_date else {})
             row["giri"] = [{"i": lp.get("i"), "min": round((lp.get("time_s") or 0) / 60, 1),
                             "watt_medi": lp.get("avg_power"),
                             "pct_ftp": round(lp["avg_power"] / ftp_now * 100) if ftp_now and lp.get("avg_power") else None,
                             "watt_max_dopo_10s": peaks.get(lp.get("i")), "cadenza": lp.get("avg_cadence"),
+                            "deriva_fc_nel_blocco": drift.get(lp.get("i")),
                             "fc_media": lp.get("avg_hr"), "fc_max": lp.get("max_hr")} for lp in laps]
         laps = None                      # niente parziali "da nuoto" per la bici
     if laps and streams and w.start_date:

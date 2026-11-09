@@ -520,6 +520,39 @@ def ai_stats(streams: dict) -> dict:
 STEADY_VI = 1.05      # oltre, la potenza è "a blocchi" e la deriva cardiaca non si legge
 
 
+BLOCK_MIN_S = 300        # un blocco sotto i 5′ è troppo corto per leggere la deriva
+HR_SETTLE_S = 120        # i primi 2′ di un blocco la FC sta ancora salendo: esclusi
+STEADY_BLOCK_W = 0.05    # le due metà del blocco devono avere watt entro ±5%
+
+
+def block_drift(laps: list, streams: dict, start: datetime, min_power: float = 0) -> dict:
+    """Deriva cardiaca DENTRO ogni blocco di lavoro (giri ≥ 5′ con watt medi ≥
+    min_power): rapporto FC/W della prima metà contro la seconda, dopo i primi 2′.
+    È il disaccoppiamento che ha senso nelle sedute a intervalli.
+    -> {i: {"deriva_pct", "fc_inizio", "fc_fine", "w_inizio", "w_fine"}}."""
+    t, pw, hr = streams.get("t") or [], streams.get("power") or [], streams.get("hr") or []
+    out = {}
+    for lp in laps:
+        if not lp.get("start") or (lp.get("time_s") or 0) < BLOCK_MIN_S \
+                or (lp.get("avg_power") or 0) < min_power:
+            continue
+        a0 = (datetime.fromisoformat(lp["start"]) - start).total_seconds()
+        a, b = a0 + HR_SETTLE_S, a0 + lp["time_s"]
+        mid = (a + b) / 2
+        h1 = [(h, p) for ti, h, p in zip(t, hr, pw) if h and p and a <= ti < mid]
+        h2 = [(h, p) for ti, h, p in zip(t, hr, pw) if h and p and mid <= ti < b]
+        if len(h1) < 20 or len(h2) < 20:
+            continue
+        f1, f2 = (sum(h for h, _ in h1) / len(h1), sum(h for h, _ in h2) / len(h2))
+        w1, w2 = (sum(p for _, p in h1) / len(h1), sum(p for _, p in h2) / len(h2))
+        if abs(w2 / w1 - 1) > STEADY_BLOCK_W:
+            continue                 # watt non costanti (es. test in progressione): non è deriva
+        out[lp.get("i")] = {"deriva_pct": round(((f2 / w2) / (f1 / w1) - 1) * 100, 1),
+                            "fc_inizio": round(f1), "fc_fine": round(f2),
+                            "w_inizio": round(w1), "w_fine": round(w2)}
+    return out
+
+
 def lap_peak_power(laps: list, streams: dict, start: datetime, skip_s: float = 10) -> dict:
     """Picco di potenza di ogni giro ignorando i primi `skip_s` secondi: lì c'è
     ancora la coda del blocco precedente (cambio giro / ERG che scende), non un
