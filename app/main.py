@@ -1353,6 +1353,14 @@ def segments_page(request: Request):
 
 # Obiettivo di default per le previsioni (modificabile dalla pagina)
 PRED_GOAL_FTP = 180
+PRED_GOAL_GAIN = 1.08    # se l'FTP supera le attese, l'obiettivo sale: +8% sul valore attuale
+
+
+def _goal_ftp(ftp_now: float | None) -> int:
+    """FTP obiettivo di riferimento: 180 W, o di più se un test lo rende ormai facile."""
+    if not ftp_now:
+        return PRED_GOAL_FTP
+    return max(PRED_GOAL_FTP, 5 * round(ftp_now * PRED_GOAL_GAIN / 5))
 PRED_GOAL_KG_LOSS = 4.0
 PRED_MAX_CLIMBS = 8
 
@@ -1372,7 +1380,7 @@ def _climb_predictions(segments: list, params) -> dict | None:
         except (TypeError, ValueError):
             v = default
         return min(max(v, lo), hi)
-    ftp_goal = num("ftp", PRED_GOAL_FTP, 80, 500)
+    ftp_goal = num("ftp", _goal_ftp(ftp_now), 80, 500)
     kg_goal = num("kg", round((kg_now - PRED_GOAL_KG_LOSS) * 2) / 2, 40, 200)
     m_now, m_goal = cyclingmod.rider_mass(kg_now), cyclingmod.rider_mass(kg_goal)
     rows = []
@@ -1785,7 +1793,7 @@ def _season_extra() -> dict:
     tr = nutrition.weight_trend_kg_per_week() or {}
     return {"peso_kg": round(kg, 1) if kg else None,
             "trend_peso_kg_settimana": tr.get("rate"),
-            "riferimenti_obiettivo": {"ftp_w": PRED_GOAL_FTP,
+            "riferimenti_obiettivo": {"ftp_w": _goal_ftp((_estimated_ftp() or {}).get("ftp")),
                                       "peso_kg": round((kg - PRED_GOAL_KG_LOSS) * 2) / 2 if kg else None}}
 
 

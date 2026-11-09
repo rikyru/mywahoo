@@ -338,7 +338,8 @@ def season_needs_plan(prog: Program, today: date) -> str | None:
     gen = plan.get("generato") or ""
     pos = P.block_position(prog.start_date.date(), today, prog.block_weeks,
                            jl(prog.block_multipliers_json, [1.0]))
-    if pos["week_in_block"] == 1 and gen < P.monday(today).isoformat():
+    # inizio blocco: ripianifica, salvo un piano fatto negli ultimi 3 giorni (es. dopo il test)
+    if pos["week_in_block"] == 1 and gen < (P.monday(today) - timedelta(days=3)).isoformat():
         return f"inizio del blocco {pos['block']}"
     with Session(engine) as s:
         done_fixed = s.exec(select(PlanSession).where(

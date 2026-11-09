@@ -48,3 +48,17 @@ def test_week_theme_and_phase():
     tema, fase = R._week_theme(_prog(plan), "bici-weekend", date(2026, 11, 21))
     assert tema == "Sweet spot 2×15′ 88–93%" and fase["nome"] == "Soglia"
     assert R._week_theme(_prog(plan), "core", date(2026, 11, 21))[0] is None
+
+
+def test_no_double_replan_right_after_test(monkeypatch):
+    _engine(monkeypatch)
+    # piano rifatto sabato 13/12 dopo il test: il lunedì 14 (inizio blocco 3) non si rifà
+    plan = {"generato": "2026-12-13", "settimane": [{"lunedi": "2026-12-07"}]}
+    assert R.season_needs_plan(_prog(plan), date(2026, 12, 14)) is None
+
+
+def test_goal_rises_with_a_better_test():
+    from app import main
+    assert main._goal_ftp(159) == 180
+    assert main._goal_ftp(172) == 185          # 172 × 1.08 = 185.8 -> 185
+    assert main._goal_ftp(None) == 180

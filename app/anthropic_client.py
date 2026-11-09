@@ -754,6 +754,10 @@ Regole:
   previsti). Se nelle assenze è possibile solo attività libera, scrivilo nella
   "nota" della settimana (es. camminate, mantenimento, attenzione all'alimentazione),
   e riparti con gradualità al rientro.
+- OBIETTIVO: "riferimenti_obiettivo" è un riferimento, non un vincolo. Se un test
+  o i dati mostrano un FTP migliore del previsto, ALZA l'obiettivo di fine stagione
+  in modo realistico (circa +5–10% sul valore attuale nei mesi che restano) e
+  ricalibra le tappe; se è peggiore, abbassalo senza drammi e spiega perché.
 - "tappe": verifiche intermedie misurabili (test FTP con valore atteso, peso).
 Rispondi SOLO con JSON valido, senza testo attorno:
 {"obiettivo": {"descrizione": "...", "ftp_w": numero o null, "peso_kg": numero o null},
