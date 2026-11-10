@@ -58,7 +58,7 @@
 {% if message %}<div class="alert ok">{{ message }}</div>{% endif %}
 {% if error %}<div class="alert error">{{ error }}</div>{% endif %}
 
-<section class="glance{{ ' glance-4' if today_plan }}">
+<section class="glance">
   <div class="card glance-card">
     <div class="card-head"><h3>Forma</h3><a class="muted" href="/form">Dettagli →</a></div>
     {% if form %}
@@ -86,11 +86,13 @@
     <div id="nutritionGlance"></div>
   </div>
 
-  {% if today_plan %}
-  <div class="card glance-card today-card">
-    <div class="card-head"><h3>🎯 Oggi</h3><a class="muted" href="/program">Dettagli →</a></div>
-    {% for v in today_plan["items"] %}{% set s = v.ps %}
+  <div class="card glance-card">
+    <div class="card-head"><h3>In programma</h3><a class="muted" href="/program">Programma →</a></div>
+    {% set today_ids = [] %}
+    {% if today_plan %}
+    {% for v in today_plan["items"] %}{% set s = v.ps %}{% set _ = today_ids.append(s.id) %}
     <div class="today-session{% if s.done or s.skipped %} plan-session-done{% endif %}">
+      <span class="tag">oggi</span>
       <div class="glance-next-info">
         <strong>{{ sport_icon(s.sport) }} {{ s.title }}</strong>
         <span class="muted">{{ s.duration_min }} min
@@ -101,12 +103,8 @@
       {{ session_actions(s, today_plan.plan_id, v.pick_one, "/", compact=True) }}
     </div>
     {% endfor %}
-  </div>
-  {% endif %}
-
-  <div class="card glance-card">
-    <div class="card-head"><h3>In programma</h3><a class="muted" href="/program">Programma →</a></div>
-    {% for u in upcoming %}
+    {% endif %}
+    {% for u in upcoming if u.s.id not in today_ids %}
     <a class="glance-next" href="{{ u.url }}">
       <span class="glance-next-icon">{{ sport_icon(u.s.sport) }}</span>
       <span class="glance-next-info">
