@@ -127,14 +127,19 @@ small { font-size: .8em; }
 
 .page-head { display: flex; justify-content: space-between; align-items: center;
              gap: 1rem; flex-wrap: wrap; margin-bottom: .4rem; }
-.sync-buttons { display: flex; gap: .5rem; }
+.sync-buttons { display: flex; gap: .5rem; align-items: stretch; }
+.sync-buttons form { display: flex; margin: 0; }
 
 /* ---------- buttons ---------- */
 .btn {
-  background: var(--accent); color: #06101f; border: 0; border-radius: var(--radius-sm);
+  background: var(--accent); color: #06101f; border: 1px solid transparent; border-radius: var(--radius-sm);
   padding: .55rem 1.1rem; font-size: .92rem; font-weight: 600; cursor: pointer;
   font-family: inherit; transition: filter .15s, transform .05s;
+  /* stessa altezza e testo centrato per <button>, <a>, <label> e <summary> */
+  display: inline-flex; align-items: center; justify-content: center; gap: .35rem;
+  line-height: 1.2; text-decoration: none; white-space: nowrap; box-sizing: border-box; vertical-align: middle;
 }
+a.btn:hover { text-decoration: none; }
 .btn:hover { filter: brightness(1.08); }
 .btn:active { transform: translateY(1px); }
 .btn:disabled { opacity: .55; cursor: wait; }
