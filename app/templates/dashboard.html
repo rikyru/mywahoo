@@ -89,16 +89,19 @@
   <div class="card glance-card">
     <div class="card-head"><h3>In programma</h3><a class="muted" href="/program">Programma →</a></div>
     {% set today_ids = [] %}
+    {% set wd = ['lun', 'mar', 'mer', 'gio', 'ven', 'sab', 'dom'] %}
     {% if today_plan %}
     {% for v in today_plan["items"] %}{% set s = v.ps %}{% set _ = today_ids.append(s.id) %}
-    <div class="today-session{% if s.done or s.skipped %} plan-session-done{% endif %}">
-      <span class="tag">oggi</span>
-      <div class="glance-next-info">
-        <strong>{{ sport_icon(s.sport) }} {{ s.title }}</strong>
-        <span class="muted">{{ s.duration_min }} min
-          {%- if s.rpe_target %} · RPE {{ '%g'|format(s.rpe_target) }}{% endif %}
-          {%- if v.steps %} · <a href="/program/session/{{ s.id }}/workout.zwo">.zwo</a>{% endif %}
-          {%- if s.skipped %} · saltata{% elif s.done %} · fatta ✓{% endif %}</span>
+    <div class="today-session{% if s.done %} is-done{% elif s.skipped %} is-skipped{% endif %}">
+      <div class="today-head">
+        <span class="today-icon">{{ sport_icon(s.sport) }}</span>
+        <div class="glance-next-info">
+          <span class="today-kicker">Oggi{% if s.done %} · fatta ✓{% elif s.skipped %} · saltata{% endif %}</span>
+          <strong>{{ s.title }}</strong>
+          <span class="muted">{{ s.duration_min }} min
+            {%- if s.rpe_target %} · RPE {{ '%g'|format(s.rpe_target) }}{% endif %}
+            {%- if v.steps %} · <a href="/program/session/{{ s.id }}/workout.zwo">.zwo</a>{% endif %}</span>
+        </div>
       </div>
       {{ session_actions(s, today_plan.plan_id, v.pick_one, "/", compact=True) }}
     </div>
@@ -106,11 +109,11 @@
     {% endif %}
     {% for u in upcoming if u.s.id not in today_ids %}
     <a class="glance-next" href="{{ u.url }}">
+      <span class="next-date"><small>{{ wd[u.s.date.weekday()] }}</small>{{ u.s.date.day }}</span>
       <span class="glance-next-icon">{{ sport_icon(u.s.sport) }}</span>
       <span class="glance-next-info">
         <strong>{{ u.s.title }}</strong>
-        <span class="muted">{{ u.s.date | it_day }}
-          {%- if u.s.duration_min %} · {{ u.s.duration_min }} min{% endif %}
+        <span class="muted">{{ u.s.duration_min }} min
           {%- if u.s.rpe_target %} · RPE {{ '%g'|format(u.s.rpe_target) }}{% endif %}</span>
       </span>
     </a>
