@@ -513,12 +513,61 @@ def _girth_context() -> dict:
         rows = session.exec(select(BodyGirth)
                             .order_by(BodyGirth.measured_at.desc()).limit(60)).all()
     if not rows:
-        return {"girth_rows": [], "girth_series_json": "[]"}
+        return {"girth_rows": [], "girth_series_json": "[]", "girth_deltas": {},
+                "girth_summary": [], "girth_fields": GIRTH_FIELDS}
     chrono = list(reversed(rows))   # oldest -> newest
     series = [{"date": r.measured_at.strftime("%Y-%m-%d"), "vita": r.vita_cm,
                "fianchi": r.fianchi_cm, "coscia": r.coscia_cm, "braccio": r.braccio_cm}
               for r in chrono]
-    return {"girth_rows": list(rows)[:20], "girth_series_json": json.dumps(series)}
+    deltas, summary = girth_changes(chrono)
+    return {"girth_rows": list(rows)[:20], "girth_series_json": json.dumps(series),
+            "girth_deltas": deltas, "girth_summary": summary, "girth_fields": GIRTH_FIELDS}
+
+
+# (campo, etichetta, verso "buono": -1 = scendere è bene (grasso), 0 = neutro)
+GIRTH_FIELDS = [("vita", "Girovita", -1), ("fianchi", "Fianchi", -1), ("petto", "Petto", 0),
+                ("braccio", "Braccio", 0), ("coscia", "Coscia", 0),
+                ("polpaccio", "Polpaccio", 0), ("collo", "Collo", -1)]
+
+
+def girth_tone(field: str, delta: float | None) -> str:
+    """Classe CSS di una variazione: verde/arancio solo dove il verso è chiaro."""
+    good = next((g for f, _, g in GIRTH_FIELDS if f == field), 0)
+    if delta is None or abs(delta) < 0.25 or not good:
+        return ""
+    return "gd-good" if delta * good > 0 else "gd-warn"
+
+
+templates.env.globals["girth_tone"] = girth_tone
+templates.env.filters["gdelta"] = lambda d: "=" if d is None or abs(d) < 0.05 else f"{d:+.1f}"
+
+
+def girth_changes(chrono: list) -> tuple[dict, list]:
+    """chrono: misure dalla più vecchia. -> ({id: {campo: Δ vs la precedente con quel
+    campo}}, riepilogo per campo: ultima, Δ dalla precedente, Δ dalla prima)."""
+    deltas: dict = {}
+    last: dict = {}
+    first: dict = {}
+    for r in chrono:
+        for f, _, _ in GIRTH_FIELDS:
+            v = getattr(r, f + "_cm")
+            if v is None:
+                continue
+            if f in last:
+                deltas.setdefault(r.id, {})[f] = round(v - last[f][0], 1)
+            first.setdefault(f, (v, r.measured_at))
+            last[f] = (v, r.measured_at)
+    summary = []
+    for f, label, _ in GIRTH_FIELDS:
+        if f not in last:
+            continue
+        v, at = last[f]
+        v0, at0 = first[f]
+        prev = next((d[f] for r in reversed(chrono) if f in (d := deltas.get(r.id, {}))), None)
+        summary.append({"field": f, "label": label, "value": v, "date": at,
+                        "prev": prev, "total": round(v - v0, 1) if at0 != at else None,
+                        "since": at0, "days": (at - at0).days})
+    return deltas, summary
 
 
 @app.post("/body/manual", dependencies=[Depends(require_auth)])
