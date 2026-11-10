@@ -418,6 +418,23 @@ a.chip:hover { background: var(--card-hover); text-decoration: none; }
 .sp-dot-atl { background: #e08a1e; margin-left: .5rem; }
 .body-glance { margin-bottom: .5rem; }
 .gh-off { font-size: .8rem; margin: .3rem 0 0; }
+/* ---------- home: storico nutrizione ---------- */
+.nutri-hist { margin-top: .7rem; padding-top: .6rem; border-top: 1px solid var(--border); }
+.nh-head { display: flex; justify-content: space-between; align-items: baseline; font-size: .8rem; }
+.nh-score { font-family: var(--mono); font-size: 1.15rem; font-weight: 600; }
+.nh-score small { font-size: .7rem; color: var(--muted); }
+.nb-chart { display: flex; gap: 4px; height: 48px; margin: .4rem 0 .1rem;
+  background: linear-gradient(var(--border), var(--border)) center / 100% 1px no-repeat; }
+.nb-col { flex: 1; display: flex; flex-direction: column; }
+.nb-half { flex: 1; display: flex; align-items: flex-start; }
+.nb-half.nb-top { align-items: flex-end; }
+.nb-bar { width: 100%; border-radius: 2px; }
+.nb-labels { display: flex; gap: 4px; }
+.nb-labels span { flex: 1; text-align: center; font-size: .62rem; color: var(--muted); }
+.nb-ok { background: #34d399; }
+.nb-over { background: #f59e0b; }
+.nb-under { background: #4c8dff; }
+.nh-metrics { margin-top: .3rem; }
 /* ---------- home: seduta di oggi ---------- */
 .btn-sm { padding: .3rem .65rem; font-size: .82rem; }
 .prog-actions-sm { gap: .35rem; margin-top: .45rem; align-items: center; }

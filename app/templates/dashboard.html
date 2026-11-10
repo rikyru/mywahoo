@@ -103,7 +103,7 @@
   </div>
 
   <div class="card glance-card" id="nutritionGlanceCard" style="display:none">
-    <div class="card-head"><h3>Nutrizione oggi</h3><span class="muted">planmydinner</span></div>
+    <div class="card-head"><h3>Nutrizione</h3><span class="muted">planmydinner</span></div>
     <div id="nutritionGlance"></div>
   </div>
 
@@ -457,6 +457,32 @@ const esc = s => String(s).replace(/[<>&]/g, c => ({ "<": "&lt;", ">": "&gt;", "
         <div><span class="gm-value">${Math.round(d.nutrition.protein_g)}<small>g</small></span><span class="gm-label">proteine</span></div>
         <div><span class="gm-value">${Math.round(d.nutrition.carbs_g)}<small>g</small></span><span class="gm-label">carbo</span></div>
         <div><span class="gm-value">${Math.round(d.nutrition.fat_g)}<small>g</small></span><span class="gm-label">grassi</span></div></div>`);
+    const h = d.storico;
+    if (h && h.confrontati) {
+      const cls = h.score >= 67 ? 'gm-good' : (h.score < 40 ? 'gm-warn' : '');
+      // barre saldo vs obiettivo: su = sopra, giù = sotto; verde entro ±150
+      const max = Math.max(300, ...h.barre.map(b => Math.abs(b.saldo || 0)));
+      const wd = ['D', 'L', 'M', 'M', 'G', 'V', 'S'];
+      const bars = h.barre.map(b => {
+        if (b.saldo == null) return `<div class="nb-col" title="${b.d}: non tracciato"><div class="nb-half"></div><div class="nb-half"></div></div>`;
+        const hgt = Math.max(4, Math.abs(b.saldo) / max * 100);
+        const k = Math.abs(b.saldo) <= 150 ? 'nb-ok' : (b.saldo > 0 ? 'nb-over' : 'nb-under');
+        const bar = `<div class="nb-bar ${k}" style="height:${hgt}%"></div>`;
+        return `<div class="nb-col" title="${b.d}: ${b.saldo > 0 ? '+' : ''}${b.saldo} kcal vs obiettivo">
+          <div class="nb-half nb-top">${b.saldo >= 0 ? bar : ''}</div><div class="nb-half">${b.saldo < 0 ? bar : ''}</div></div>`;
+      }).join("");
+      const labels = h.barre.map(b => `<span>${wd[new Date(b.d + 'T12:00').getDay()]}</span>`).join("");
+      parts.push(`<div class="nutri-hist">
+        <div class="nh-head"><span class="muted">Ultimi ${h.giorni} giorni</span>
+          ${h.score != null ? `<span class="nh-score ${cls}">${h.score}<small>/100</small></span>` : ''}</div>
+        <div class="nb-chart">${bars}</div><div class="nb-labels">${labels}</div>
+        <div class="glance-metrics nh-metrics">
+          <div><span class="gm-value">${h.in_range}/${h.confrontati}</span><span class="gm-label">giorni in target</span></div>
+          ${h.saldo_medio != null ? `<div><span class="gm-value">${h.saldo_medio > 0 ? '+' : ''}${h.saldo_medio}<small>kcal</small></span><span class="gm-label">saldo medio</span></div>` : ''}
+          ${h.proteine_g_kg ? `<div><span class="gm-value ${h.proteine_obiettivo && h.proteine_g_kg >= h.proteine_obiettivo * 0.95 ? 'gm-good' : ''}">${h.proteine_g_kg}<small>g/kg</small></span><span class="gm-label">proteine${h.proteine_obiettivo ? ' (obj ' + h.proteine_obiettivo + ')' : ''}</span></div>` : ''}
+          ${h.aderenza_pct != null ? `<div><span class="gm-value">${h.aderenza_pct}%</span><span class="gm-label">aderenza</span></div>` : ''}
+        </div></div>`);
+    }
     host.innerHTML = parts.join("");
   } catch (e) { /* planmydinner non raggiungibile: card nascosta */ }
 })();

@@ -2839,7 +2839,43 @@ async def api_nutrition_targets():
 async def api_nutrition_today():
     """Nutrizione di oggi vs obiettivo (da planmydinner) per la card dashboard."""
     data = await nutrition.today_nutrition()
+    if data:
+        data["storico"] = await _nutrition_history(7)
     return JSONResponse(data or {})
+
+
+async def _nutrition_history(days: int) -> dict | None:
+    """Ultimi `days` giorni CHIUSI (oggi escluso, è a metà) per la card in home:
+    stesso punteggio alimentazione della pagella settimanale + aderenza + saldo per giorno."""
+    end = date.today() - timedelta(days=1)
+    start = end - timedelta(days=days - 1)
+    try:
+        nut = await nutrition.fetch_nutrition(start, end)
+    except Exception:  # noqa: BLE001 — planmydinner giù: la card mostra solo oggi
+        return None
+    if not nut:
+        return None
+    at = nut.get("alimentazione_tracciata") or {}
+    rows = [r for r in at.get("per_giorno") or [] if r.get("saldo_vs_obiettivo") is not None]
+    balances = [r["saldo_vs_obiettivo"] for r in rows]
+    weight = profilemod.load().get("weight_kg")
+    tg = nutrition.build_targets()
+    prot_target = (tg["targets"]["protein_g"] / weight) if tg and weight else None
+    by_date = {r["data"]: r["saldo_vs_obiettivo"] for r in rows}
+    return {
+        "giorni": days,
+        "score": programmod.nutrition_score(balances, at.get("proteine_g_per_kg"), prot_target),
+        "aderenza_pct": (nut.get("aderenza_al_piano") or {}).get("punteggio_pct"),
+        "in_range": sum(1 for b in balances if abs(b) <= 150),
+        "confrontati": len(balances),
+        "saldo_medio": round(sum(balances) / len(balances)) if balances else None,
+        "proteine_g_kg": at.get("proteine_g_per_kg"),
+        "proteine_obiettivo": round(prot_target, 2) if prot_target else None,
+        # una barra per giorno (None = non tracciato)
+        "barre": [{"d": (start + timedelta(days=i)).isoformat(),
+                   "saldo": by_date.get((start + timedelta(days=i)).isoformat())}
+                  for i in range(days)],
+    }
 
 
 @app.post("/nutrition/push-targets", dependencies=[Depends(require_auth)])
