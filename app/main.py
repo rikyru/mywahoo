@@ -2271,6 +2271,10 @@ async def program_settings_save(request: Request):
         prog.end_date = datetime.combine(ed, time.min) if ed else None
         prog.block_weeks = bw
         prog.block_multipliers_json = json.dumps(mults)
+        try:   # volume delle sedute di resistenza che cresce a ogni blocco (0–15%)
+            prog.block_growth = max(0.0, min(0.15, float(g("block_growth") or 0) / 100))
+        except ValueError:
+            pass
         prog.template_json = json.dumps(template)
         prog.routines_json = json.dumps(routines)
         prog.absences_json = json.dumps(absences)

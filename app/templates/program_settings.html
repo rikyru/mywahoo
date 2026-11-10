@@ -22,6 +22,8 @@
     <label>Fine <input type="date" name="end" value="{{ prog.end_date.strftime('%Y-%m-%d') if prog.end_date else '' }}"></label>
     <label>Settimane per blocco <input type="number" name="block_weeks" min="1" max="8" value="{{ prog.block_weeks }}"></label>
     <label>Moltiplicatori di carico <input type="text" name="multipliers" value="{{ multipliers }}"></label>
+    <label>Crescita bici a ogni blocco (%) <input type="number" name="block_growth" min="0" max="15" step="1"
+      value="{{ ((prog.block_growth or 0) * 100) | round | int }}"></label>
   </div>
   <p class="muted">Il carico target di ogni settimana è quello che sostieni oggi (fitness × 7) per il
     moltiplicatore della settimana nel blocco: es. 1, 1.05, 1.1 crescono, l'ultimo &lt; 1 è lo scarico.</p>

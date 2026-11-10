@@ -221,3 +221,16 @@ def test_proposal_days():
     assert P.is_proposal_day(MON, MON)
     assert P.is_proposal_day(date(2026, 10, 27), MON)
     assert not P.is_proposal_day(date(2026, 10, 28), MON)
+
+
+def test_grown_duration_only_endurance_and_capped():
+    bike = {"sport": "Ciclismo", "duration": 60, "kind": "planned"}
+    fam = lambda s: "bike" if "cicl" in s.lower() else s.lower()
+    assert P.grown_duration(bike, 1, 0.05, fam) == 60
+    assert P.grown_duration(bike, 3, 0.05, fam) == 65          # 60 × 1.1025 = 66 -> 65
+    assert P.grown_duration(bike, 6, 0.05, fam) == 75          # 60 × 1.276 = 76.6 -> 75
+    assert P.grown_duration(bike, 30, 0.05, fam) == 90         # tetto +50%
+    core = {"sport": "Corpo libero", "duration": 45, "kind": "planned"}
+    swim = {"sport": "Nuoto", "duration": 75, "kind": "external"}
+    assert P.grown_duration(core, 6, 0.05, fam) == 45 and P.grown_duration(swim, 6, 0.05, fam) == 75
+    assert P.grown_duration(bike, 6, 0.0, fam) == 60

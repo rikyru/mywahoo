@@ -76,6 +76,21 @@ def _lower_family(s: str) -> str:
     return (s or "").strip().lower()
 
 
+GROWTH_FAMILIES = ("bike", "run")   # il volume cresce a blocchi solo nella resistenza
+GROWTH_CAP = 1.5                    # al massimo +50% sulla durata della settimana tipo
+
+
+def grown_duration(slot: dict, block: int, growth: float, family=_lower_family) -> int:
+    """Durata della seduta nel blocco `block`: la settimana tipo × (1+growth)^(blocco-1)
+    per le sedute di resistenza pianificate (bici, corsa), arrotondata a 5′ e con un
+    tetto; le altre (corso di nuoto, corpo libero) restano com'erano."""
+    base = int(slot.get("duration") or 45)
+    if (not growth or block <= 1 or slot.get("kind") == "external"
+            or family(slot.get("sport", "")) not in GROWTH_FAMILIES):
+        return base
+    return int(5 * round(base * min(GROWTH_CAP, (1 + growth) ** (block - 1)) / 5))
+
+
 def expand_slots(template: list[dict], absences: list[dict], start: date, end: date,
                  today: date, family=_lower_family, keep_day: dict | None = None,
                  skipped: set | None = None, done_days: set | None = None) -> list[dict]:

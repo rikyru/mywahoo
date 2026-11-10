@@ -97,7 +97,7 @@ def _rates(s, anchors) -> dict:
 
 def _week_target_done(s, tpl: list, absences: list, wk: date, multiplier: float,
                       week_workouts: list, linked: set, anchors, rates: dict,
-                      extras: list | None = None) -> tuple:
+                      extras: list | None = None, block: int = 1, growth: float = 0.0) -> tuple:
     """(target, fatto) della settimana che inizia `wk`. Se `extras` è una lista, ci
     aggiunge le attività fuori programma (non agganciate e non su uno slot).
 
@@ -109,7 +109,7 @@ def _week_target_done(s, tpl: list, absences: list, wk: date, multiplier: float,
     planned_week, ext_week = [], []
     for i in full:
         sl = i["slot"]
-        dur = int(sl.get("duration") or 45)
+        dur = P.grown_duration(sl, block, growth, family)
         if sl.get("kind") == "external":
             ext_week.append(_external_estimate(s, sl.get("sport", ""), dur, anchors)[0])
         else:
@@ -153,7 +153,8 @@ def week_summary(anchors) -> dict | None:
         extras: list = []
         target, done = _week_target_done(
             s, jl(prog.template_json, []), jl(prog.absences_json, []), wk0,
-            pos["multiplier"], ws, linked, anchors, _rates(s, anchors), extras)
+            pos["multiplier"], ws, linked, anchors, _rates(s, anchors), extras,
+            block=pos["block"], growth=prog.block_growth or 0.0)
         rd = jl(prog.readiness_json, {})
     return {"pos": pos, "target": target, "done": done,
             "extras": sorted(extras, key=lambda x: x["date"]), "readiness": rd or None}
@@ -199,7 +200,8 @@ def season_overview(anchors, today: date | None = None) -> list[dict]:
             extras: list = []
             target, done = _week_target_done(s, tpl, absences, wk, pos["multiplier"],
                                              week_ws, linked, anchors, rates,
-                                             extras if wk <= wk0 else None)
+                                             extras if wk <= wk0 else None,
+                                             block=pos["block"], growth=prog.block_growth or 0.0)
             items = []
             for ps in sorted(by_week.get(wk, []), key=lambda p: (p.date, p.order)):
                 d = ps.date.date()
@@ -220,7 +222,8 @@ def season_overview(anchors, today: date | None = None) -> list[dict]:
                         continue
                     items.append({"date": inst["date"], "sport": google_health.canonical_sport(sl.get("sport", "")),
                                   "title": temi.get(sl.get("id")) or sl.get("focus") or sl.get("sport"),
-                                  "min": sl.get("duration"), "slot_id": sl.get("id"),
+                                  "min": P.grown_duration(sl, pos["block"], prog.block_growth or 0.0, family),
+                                  "slot_id": sl.get("id"),
                                   "state": "da programma", "fixed": False, "workout_id": None,
                                   "indoor": bool(sl.get("indoor"))})
                 items.sort(key=lambda it: it["date"])
@@ -299,7 +302,9 @@ def _season_context(s, prog: Program, ctx: dict, today: date, extra: dict | None
                                    "sport_possibili": a.get("allowed") or []} for a in absences
                                   if a.get("start") and a.get("end")
                                   and a["start"] <= sun.isoformat() and a["end"] >= wk.isoformat()],
-                      "slot_che_restano": sorted({i["slot"].get("id") for i in live})})
+                      "slot_che_restano": sorted({i["slot"].get("id") for i in live}),
+                      "durate_min": {i["slot"].get("id"): P.grown_duration(
+                          i["slot"], pos["block"], prog.block_growth or 0.0, family) for i in live}})
         wk += timedelta(days=7)
     ftp = (ctx.get("ftp") or {}).get("ftp")
     past = [w for w in season_overview(ctx["anchors"], today) if w["past"]][-6:]
@@ -437,7 +442,8 @@ async def weekly_report(monday: date, anchors, force: bool = False) -> dict | No
         extras: list = []
         target, done_load = _week_target_done(
             s, jl(prog.template_json, []), jl(prog.absences_json, []), monday,
-            pos["multiplier"], ws, linked, anchors, _rates(s, anchors), extras)
+            pos["multiplier"], ws, linked, anchors, _rates(s, anchors), extras,
+            block=pos["block"], growth=prog.block_growth or 0.0)
     t_score = P.training_score(len(planned), len(done), done_load, target)
 
     wellness, sleep_h = [], []
@@ -694,7 +700,7 @@ async def _recalc(ctx: dict, why: str) -> dict | None:
             pos = P.block_position(start_p, wk, prog.block_weeks, mults)
             target, done_load = _week_target_done(
                 s, tpl, absences, wk, pos["multiplier"], ws if wk == wk0 else [],
-                linked, anchors, rates)
+                linked, anchors, rates, block=pos["block"], growth=prog.block_growth or 0.0)
             ext_loads, planned = [], []
             for i in inst:
                 if P.monday(i["date"]) != wk:
@@ -704,7 +710,7 @@ async def _recalc(ctx: dict, why: str) -> dict | None:
                 ex = by_key.get(k)
                 if ex and (ex.done or ex.skipped):
                     continue                   # già nel fatto, o fuori dal conto
-                dur = int(sl.get("duration") or 45)
+                dur = P.grown_duration(sl, pos["block"], prog.block_growth or 0.0, family)
                 if sl.get("kind") == "external":
                     ext_est[k] = _external_estimate(s, sl.get("sport", ""), dur, anchors)
                     ext_loads.append(ext_est[k][0])
@@ -730,7 +736,7 @@ async def _recalc(ctx: dict, why: str) -> dict | None:
             if ex and (ex.done or ex.skipped or ex.kind == "fixed"):
                 continue                       # "fixed": seduta fissata a mano (es. test FTP), mai riscritta
             wi = weeks[P.monday(d)]
-            dur = int(sl.get("duration") or 45)
+            dur = P.grown_duration(sl, wi["pos"]["block"], prog.block_growth or 0.0, family)
             if sl.get("kind") == "external":
                 if not ex:
                     _, rpe = ext_est.get(k) or _external_estimate(s, sl.get("sport", ""), dur, anchors)

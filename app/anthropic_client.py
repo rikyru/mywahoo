@@ -758,6 +758,9 @@ Regole:
   o i dati mostrano un FTP migliore del previsto, ALZA l'obiettivo di fine stagione
   in modo realistico (circa +5–10% sul valore attuale nei mesi che restano) e
   ricalibra le tappe; se è peggiore, abbassalo senza drammi e spiega perché.
+- VOLUME: "durate_min" di ogni settimana sono i minuti di ogni seduta (la bici
+  cresce a ogni blocco): costruisci i temi su quella durata (es. più minuti =
+  blocchi più lunghi o più Z2 attorno), non sulla durata della settimana tipo.
 - "tappe": verifiche intermedie misurabili (test FTP con valore atteso, peso).
 Rispondi SOLO con JSON valido, senza testo attorno:
 {"obiettivo": {"descrizione": "...", "ftp_w": numero o null, "peso_kg": numero o null},
