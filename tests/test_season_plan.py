@@ -75,3 +75,34 @@ def test_easy_extra_classification():
     assert R.is_easy_extra(z2, anchors, 159) and not R.is_easy_extra(hard, anchors, 159)
     assert R.is_easy_extra(z2, anchors) and not R.is_easy_extra(hard, anchors)     # solo FC
     assert R.is_easy_extra(walk, anchors) and not R.is_easy_extra(hike_hard, anchors)
+
+
+def test_analysis_context_has_program_choices(monkeypatch):
+    # le analisi AI devono vedere fase, rulli, tappe future, assenze future e sedute già decise
+    eng = _engine(monkeypatch)
+    plan = {"fasi": [{"blocco": 1, "nome": "Scarico", "obiettivo": "assorbire"},
+                     {"blocco": 2, "nome": "Base sweet spot", "obiettivo": "88-95%"}],
+            "tappe": [{"data": "2026-11-01", "cosa": "vecchia"},
+                      {"data": "2026-12-12", "cosa": "Test FTP"}]}
+    p = _prog(plan, eng)
+    p.notes = "d'inverno bici sui rulli"
+    p.equipment_json = json.dumps(["tappetino", "rulli"])
+    p.template_json = json.dumps([{"id": "bici", "sport": "Ciclismo", "days": [5, 6], "pick": "one",
+                                   "duration": 60, "indoor": True, "enabled": True}])
+    p.absences_json = json.dumps([{"start": "2026-11-01", "end": "2026-11-02"},
+                                  {"start": "2026-12-22", "end": "2027-01-06", "note": "vacanze"}])
+    with Session(eng) as s:
+        s.add(p)
+        s.add(PlanSession(plan_id=1, title="Rulli sweet spot", sport="Ciclismo",
+                          date=datetime(2026, 11, 21), duration_min=60))
+        s.add(PlanSession(plan_id=1, title="troppo lontana", sport="Nuoto",
+                          date=datetime(2026, 12, 1), duration_min=60))
+        s.commit()
+    c = R.analysis_context(159, today=date(2026, 11, 17))
+    assert c["fase_del_blocco"]["nome"] == "Base sweet spot"
+    assert c["note_programma"] == "d'inverno bici sui rulli"
+    assert c["settimana_tipo"][0]["indoor_sui_rulli"] and c["settimana_tipo"][0]["giorni"] == ["sab", "dom"]
+    assert [t["cosa"] for t in c["prossime_tappe"]] == ["Test FTP"]
+    assert [a.get("note") for a in c["assenze_in_arrivo"]] == ["vacanze"]
+    assert [x["titolo"] for x in c["prossime_sedute_gia_pianificate"]] == ["Rulli sweet spot"]
+    assert c["ftp_attuale_w"] == 159

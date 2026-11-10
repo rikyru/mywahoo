@@ -394,11 +394,36 @@ async def _call_with_tools(system: str, messages: list, tools: list, executor,
         return await _call_messages(fallback_system or system, messages, cache=cache)
 
 
-async def analyze_workout(summary_row: dict, stream_stats: dict) -> str:
+PROGRAM_RULES = """
+
+PROGRAMMA IN CORSO. Se c'è "programma_in_corso", l'atleta segue un programma
+gestito da un coach: è la fonte di verità su cosa farà, e vale PIÙ delle note
+generiche dell'atleta (es. se le note dicono "uscite da 2 ore" ma il programma
+dice che d'inverno la bici è sui rulli ~60′, vale il programma). Quindi:
+- NON inventare un altro piano né sedute con giorni/durate/sport diversi da
+  "settimana_tipo" e "prossime_sedute_gia_pianificate": quelle sono già decise.
+  I suggerimenti riguardano COME affrontarle (ritmo, watt, recuperi, cosa curare),
+  nominandole per titolo/giorno. Se pensi che una vada cambiata, dillo come
+  proposta da chiedere al coach, motivandola.
+- Rispetta "attrezzatura", "note_programma" e "assenze_in_arrivo": niente
+  esercizi o uscite che richiedono attrezzi o condizioni non disponibili.
+- Leggi la seduta alla luce di "blocco" e "fase_del_blocco" (es. settimana di
+  scarico: volume basso è voluto, non un calo).
+- FTP: se in "prossime_tappe" c'è un test, non proporre di ritoccare l'FTP prima;
+  al massimo di' cosa la seduta suggerisce in vista del test."""
+
+SESSION_SYSTEM_PROMPT += PROGRAM_RULES
+PERIOD_SYSTEM_PROMPT += PROGRAM_RULES
+
+
+async def analyze_workout(summary_row: dict, stream_stats: dict,
+                          program: dict | None = None) -> str:
     """Generate the AI analysis for one workout: summary + aggregated stream stats."""
     body = ""
     if (who := _profile.ai_context()):
         body += ("Atleta:\n" + _dumps(who) + "\n\n")
+    if program:
+        body += ("Programma in corso (programma_in_corso):\n" + _dumps(program) + "\n\n")
     body += ("Dati di riepilogo della sessione:\n"
              + _dumps(summary_row))
     if stream_stats:
@@ -911,11 +936,14 @@ async def structure_workout(description: str) -> dict:
         return {}
 
 
-async def summarize_period(period_label: str, workouts: list[dict]) -> str:
+async def summarize_period(period_label: str, workouts: list[dict],
+                           program: dict | None = None) -> str:
     payload = {"periodo": period_label, "numero_sessioni": len(workouts),
                "sessioni": workouts}
     if (who := _profile.ai_context()):
         payload["atleta"] = who
+    if program:
+        payload["programma_in_corso"] = program
     return await _call_claude(
         PERIOD_SYSTEM_PROMPT,
         _dumps(payload))

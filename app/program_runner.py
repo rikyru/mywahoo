@@ -1162,6 +1162,55 @@ def chat_context(ctx: dict) -> dict | None:
         }
 
 
+def analysis_context(ftp: float | None = None, today: date | None = None) -> dict | None:
+    """Programma in corso, compatto, per le ANALISI AI (seduta e periodo): così i
+    consigli restano coerenti con quello che il coach ha già deciso (fase, temi,
+    attrezzatura, assenze, test FTP) invece di inventarsi un altro piano."""
+    today = today or date.today()
+    with Session(engine) as s:
+        prog = active_program(s)
+        if not prog:
+            return None
+        pos = P.block_position(prog.start_date.date(), today, prog.block_weeks,
+                               jl(prog.block_multipliers_json, [1.0]))
+        season = jl(prog.season_json, {})
+        phase = next((f for f in season.get("fasi") or []
+                      if isinstance(f, dict) and f.get("blocco") == pos["block"]), None)
+        upcoming = s.exec(select(PlanSession).where(
+            PlanSession.plan_id == prog.plan_id,
+            PlanSession.date >= datetime.combine(today, time.min),
+            PlanSession.date < datetime.combine(today + timedelta(days=8), time.min))
+            .order_by(PlanSession.date)).all() if prog.plan_id else []
+        iso = today.isoformat()
+        return {
+            "oggi": iso,
+            "obiettivo": prog.goal,
+            "obiettivo_stagione": season.get("obiettivo"),
+            "fine_programma": prog.end_date.date().isoformat() if prog.end_date else None,
+            "note_programma": prog.notes,
+            "blocco": P.block_label(pos),
+            "fase_del_blocco": phase,
+            "ftp_attuale_w": ftp,
+            "attrezzatura": jl(prog.equipment_json, []),
+            "settimana_tipo": [
+                {"sport": sl.get("sport"), "giorni": [P.WEEKDAYS_IT[d] for d in sl.get("days") or []],
+                 "uno_solo_dei_giorni": sl.get("pick") == "one", "durata_min": sl.get("duration"),
+                 "focus": sl.get("focus"), "intensita": sl.get("intensity"),
+                 **({"indoor_sui_rulli": True} if sl.get("indoor") else {})}
+                for sl in jl(prog.template_json, []) if sl.get("enabled", True)],
+            "prossime_sedute_gia_pianificate": [
+                {"data": p.date.date().isoformat(), "giorno": P.WEEKDAYS_IT[p.date.weekday()],
+                 "sport": p.sport, "titolo": p.title, "durata_min": p.duration_min,
+                 "rpe_target": p.rpe_target,
+                 "stato": "fatta" if p.done else "saltata" if p.skipped else "da fare"}
+                for p in upcoming if p.date],
+            "prossime_tappe": [t for t in season.get("tappe") or []
+                               if isinstance(t, dict) and (t.get("data") or "") >= iso][:3],
+            "assenze_in_arrivo": [a for a in jl(prog.absences_json, [])
+                                  if (a.get("end") or "") >= iso],
+        }
+
+
 def default_end(today: date) -> date:
     """«Fino a quando non fa bello»: fine marzo (modificabile)."""
     y = today.year + 1 if today.month >= 4 else today.year

@@ -3284,7 +3284,7 @@ async def analyze_period(win: str = Form("30"), end: str = Form(""),
                                 + urlencode({"error": "Nessuna attività nel periodo"}),
                                 status_code=303)
     try:
-        content = await anthropic_client.summarize_period(window["label"], rows)
+        content = await anthropic_client.summarize_period(window["label"], rows, _analysis_program())
     except anthropic_client.AnthropicError as e:
         return RedirectResponse(f"/?{_window_qs(window)}&{urlencode({'error': str(e)})}",
                                 status_code=303)
@@ -3300,6 +3300,15 @@ async def analyze_period(win: str = Form("30"), end: str = Form(""),
                                       model=anthropic_client.effective_model()))
         session.commit()
     return RedirectResponse(redirect, status_code=303)
+
+
+def _analysis_program() -> dict | None:
+    """Programma in corso per le analisi AI; mai bloccante (senza, l'analisi va lo stesso)."""
+    try:
+        return program_runner.analysis_context((_estimated_ftp() or {}).get("ftp"))
+    except Exception:  # noqa: BLE001
+        logger.exception("Contesto programma per l'analisi non disponibile")
+        return None
 
 
 @app.post("/analyze/chat", dependencies=[Depends(require_auth)])
@@ -4226,7 +4235,7 @@ async def analyze(workout_id: int, regenerate: str = Form(default="")):
         stats.pop("velocita_ms", None)
 
     try:
-        content = await anthropic_client.analyze_workout(row, stats)
+        content = await anthropic_client.analyze_workout(row, stats, _analysis_program())
     except anthropic_client.AnthropicError as e:
         return RedirectResponse(
             f"/workout/{workout_id}?{urlencode({'error': str(e)})}", status_code=303)
