@@ -412,18 +412,36 @@ dice che d'inverno la bici è sui rulli ~60′, vale il programma). Quindi:
 - FTP: se in "prossime_tappe" c'è un test, non proporre di ritoccare l'FTP prima;
   al massimo di' cosa la seduta suggerisce in vista del test."""
 
-SESSION_SYSTEM_PROMPT += PROGRAM_RULES
-PERIOD_SYSTEM_PROMPT += PROGRAM_RULES
+NUTRITION_RULES = """
+
+ALIMENTAZIONE. Se c'è "alimentazione" (pasti registrati in planmydinner: kcal e
+macro per giorno, "obiettivo_kcal" PERIODIZZATO che sale nei giorni di
+allenamento, "saldo_vs_obiettivo", proteine g/kg, pasti liberi, extra fuori pasto),
+collegala all'allenamento solo dove conta davvero: carburante prima delle sedute
+dure (es. molto sotto obiettivo il giorno prima o il giorno stesso di una seduta
+intensa → possibile causa di fatica, FC alta, crolli nel finale), recupero dopo
+(proteine e carboidrati), e nel periodo il pattern tra giorni di allenamento e
+giorni di riposo/pasto libero. L'obiettivo dell'atleta include perdere grasso:
+un deficit moderato è voluto, segnala solo quello che penalizza le sedute chiave.
+Ricorda che un saldo negativo può dipendere da pasti non registrati, e che "in_corso"
+indica la giornata di oggi non ancora finita. Una sezione breve, non un piano
+alimentare; se manca, non parlarne."""
+
+SESSION_SYSTEM_PROMPT += PROGRAM_RULES + NUTRITION_RULES
+PERIOD_SYSTEM_PROMPT += PROGRAM_RULES + NUTRITION_RULES
 
 
 async def analyze_workout(summary_row: dict, stream_stats: dict,
-                          program: dict | None = None) -> str:
+                          program: dict | None = None, nutrition: dict | None = None) -> str:
     """Generate the AI analysis for one workout: summary + aggregated stream stats."""
     body = ""
     if (who := _profile.ai_context()):
         body += ("Atleta:\n" + _dumps(who) + "\n\n")
     if program:
         body += ("Programma in corso (programma_in_corso):\n" + _dumps(program) + "\n\n")
+    if nutrition:
+        body += ("Alimentazione del giorno prima e del giorno della seduta (alimentazione):\n"
+                 + _dumps(nutrition) + "\n\n")
     body += ("Dati di riepilogo della sessione:\n"
              + _dumps(summary_row))
     if stream_stats:
@@ -937,13 +955,15 @@ async def structure_workout(description: str) -> dict:
 
 
 async def summarize_period(period_label: str, workouts: list[dict],
-                           program: dict | None = None) -> str:
+                           program: dict | None = None, nutrition: dict | None = None) -> str:
     payload = {"periodo": period_label, "numero_sessioni": len(workouts),
                "sessioni": workouts}
     if (who := _profile.ai_context()):
         payload["atleta"] = who
     if program:
         payload["programma_in_corso"] = program
+    if nutrition:
+        payload["alimentazione"] = nutrition
     return await _call_claude(
         PERIOD_SYSTEM_PROMPT,
         _dumps(payload))

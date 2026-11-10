@@ -3284,7 +3284,9 @@ async def analyze_period(win: str = Form("30"), end: str = Form(""),
                                 + urlencode({"error": "Nessuna attività nel periodo"}),
                                 status_code=303)
     try:
-        content = await anthropic_client.summarize_period(window["label"], rows, _analysis_program())
+        content = await anthropic_client.summarize_period(
+            window["label"], rows, _analysis_program(),
+            await _analysis_nutrition(window["start"].date(), window["end"].date()))
     except anthropic_client.AnthropicError as e:
         return RedirectResponse(f"/?{_window_qs(window)}&{urlencode({'error': str(e)})}",
                                 status_code=303)
@@ -3300,6 +3302,18 @@ async def analyze_period(win: str = Form("30"), end: str = Form(""),
                                       model=anthropic_client.effective_model()))
         session.commit()
     return RedirectResponse(redirect, status_code=303)
+
+
+async def _analysis_nutrition(start: date, end: date) -> dict | None:
+    """Alimentazione tracciata (planmydinner) per le analisi allenamenti; mai bloccante."""
+    try:
+        nut = await nutrition.fetch_nutrition(start, end)
+    except Exception:  # noqa: BLE001
+        logger.exception("Alimentazione per l'analisi non disponibile")
+        return None
+    if nut:
+        nut.pop("profilo", None)     # gusti/allergie: servono al planner, non qui
+    return nut
 
 
 def _analysis_program() -> dict | None:
@@ -4235,7 +4249,11 @@ async def analyze(workout_id: int, regenerate: str = Form(default="")):
         stats.pop("velocita_ms", None)
 
     try:
-        content = await anthropic_client.analyze_workout(row, stats, _analysis_program())
+        # cosa ha mangiato il giorno prima e il giorno stesso (carburante della seduta)
+        day = w.start_date.date() if w.start_date else date.today()
+        content = await anthropic_client.analyze_workout(
+            row, stats, _analysis_program(),
+            await _analysis_nutrition(day - timedelta(days=1), day))
     except anthropic_client.AnthropicError as e:
         return RedirectResponse(
             f"/workout/{workout_id}?{urlencode({'error': str(e)})}", status_code=303)
