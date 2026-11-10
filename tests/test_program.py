@@ -1,6 +1,8 @@
 """Motore del programma adattivo (puro)."""
 from datetime import date
 
+import pytest
+
 from app import program as P
 
 MON = date(2026, 10, 26)          # lunedì
@@ -162,8 +164,25 @@ def test_weekly_scores():
     assert P.training_score(0, 0, 0, 0) is None
     assert P.recovery_score([60, 70], [7.5, 7.5]) == round(0.7 * 65 + 0.3 * 100)
     assert P.recovery_score([], []) is None
-    assert P.nutrition_score([0, 100, -400, 50], 1.6, 2.0) == round(100 * (0.6 * 0.75 + 0.4 * 0.8))
+    # -400 con margine 150: 250 oltre su 300 di discesa -> 1/6; media -62 = settimana in pari
+    days = (3 + 1 / 6) / 4
+    assert P.nutrition_score([0, 100, -400, 50], 1.6, 2.0) == round(100 * (0.4 * days + 0.2 + 0.4 * 0.8))
     assert P.nutrition_score([], 1.6, 2.0) is None
+
+
+def test_nutrition_score_compensating_week():
+    # la settimana reale del 03-09/11: nessun giorno entro ±150 ma media −66 kcal/g;
+    # il vecchio calcolo (tutto-o-niente ±150) dava 39 — ora conta quanto ci si avvicina
+    bal = [-295, -629, -237, 579, -290, 804, -397]
+    tgt = [1866, 2358, 2004, 1908, 2226, 1746, 2241]
+    s = P.nutrition_score(bal, 1.4, 1.45, tgt)
+    assert 65 <= s <= 85
+    assert P.nutrition_margin(2358) == pytest.approx(235.8)
+    assert P.nutrition_margin(1200) == 150
+    assert P.nutrition_day_score(-200, 2000) == 1.0
+    assert P.nutrition_day_score(-600, 2000) == 0.0
+    # stesse oscillazioni ma tutte nello stesso verso: la settimana non è in pari
+    assert P.nutrition_score([-400] * 7, 1.4, 1.45, [2000] * 7) < s
 
 
 def test_workout_exports():

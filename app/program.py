@@ -351,17 +351,42 @@ def recovery_score(wellness: list[float], sleep_h: list[float]) -> int | None:
     return _clamp100(sum(p * w for p, w in zip(parts, weights)) / sum(weights))
 
 
+NUTRI_DAY_PCT = 0.10       # un giorno è "in target" entro ±10% dell'obiettivo…
+NUTRI_DAY_MIN = 150        # …ma mai meno di ±150 kcal
+NUTRI_WEEK_OK = 100        # saldo medio entro ±100 kcal/g: settimana in pari
+NUTRI_WEEK_ZERO = 400      # da ±400 kcal/g di media in su: zero
+
+
+def nutrition_margin(target: float | None) -> float:
+    """Margine kcal entro cui un giorno è in target (±10% dell'obiettivo, min 150)."""
+    return max(NUTRI_DAY_MIN, NUTRI_DAY_PCT * target) if target else NUTRI_DAY_MIN
+
+
+def nutrition_day_score(balance: float, target: float | None) -> float:
+    """1 dentro il margine, poi cala fino a 0 a 3× il margine (non tutto-o-niente:
+    −250 su un obiettivo di 2000 è quasi giusto, −800 no)."""
+    m = nutrition_margin(target)
+    over = abs(balance) - m
+    return 1.0 if over <= 0 else max(0.0, 1 - over / (2 * m))
+
+
 def nutrition_score(day_balances: list[float], protein_per_kg: float | None,
-                    protein_target_per_kg: float | None) -> int | None:
-    """Giorni con il consumato entro ±150 kcal dall'obiettivo periodizzato (60%) +
-    proteine rispetto all'obiettivo (40%). None senza dati tracciati."""
+                    protein_target_per_kg: float | None,
+                    day_targets: list[float | None] | None = None) -> int | None:
+    """Giorno per giorno vicino all'obiettivo periodizzato (40%) + bilancio della
+    settimana, che premia chi compensa (20%) + proteine vs obiettivo (40%).
+    Senza proteine i primi due pesano 2/3 e 1/3. None senza dati tracciati."""
     if not day_balances:
         return None
-    in_range = sum(1 for b in day_balances if abs(b) <= 150) / len(day_balances)
+    targets = day_targets or [None] * len(day_balances)
+    days = sum(nutrition_day_score(b, t) for b, t in zip(day_balances, targets)) / len(day_balances)
+    avg = abs(sum(day_balances) / len(day_balances))
+    week = 1.0 if avg <= NUTRI_WEEK_OK else max(
+        0.0, 1 - (avg - NUTRI_WEEK_OK) / (NUTRI_WEEK_ZERO - NUTRI_WEEK_OK))
     if protein_per_kg and protein_target_per_kg:
         prot = min(1.0, protein_per_kg / protein_target_per_kg)
-        return _clamp100(100 * (0.6 * in_range + 0.4 * prot))
-    return _clamp100(100 * in_range)
+        return _clamp100(100 * (0.4 * days + 0.2 * week + 0.4 * prot))
+    return _clamp100(100 * (2 * days + week) / 3)
 
 
 def needs_update(old_rpe: float | None, old_dur: int | None,

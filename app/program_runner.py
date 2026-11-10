@@ -479,12 +479,13 @@ async def weekly_report(monday: date, anchors, force: bool = False) -> dict | No
     r_score = P.recovery_score(wellness, sleep_h)
 
     at = ((await nutrition.fetch_nutrition(monday, sunday)) or {}).get("alimentazione_tracciata") or {}
-    balances = [r["saldo_vs_obiettivo"] for r in at.get("per_giorno") or []
-                if r.get("saldo_vs_obiettivo") is not None]
+    rows = [r for r in at.get("per_giorno") or [] if r.get("saldo_vs_obiettivo") is not None]
+    balances = [r["saldo_vs_obiettivo"] for r in rows]
+    day_targets = [r.get("obiettivo_kcal") for r in rows]
     weight = profilemod.load().get("weight_kg")
     tg = nutrition.build_targets()
     prot_target = (tg["targets"]["protein_g"] / weight) if tg and weight else None
-    n_score = P.nutrition_score(balances, at.get("proteine_g_per_kg"), prot_target)
+    n_score = P.nutrition_score(balances, at.get("proteine_g_per_kg"), prot_target, day_targets)
 
     numbers = {
         "settimana": f"{monday.isoformat()} → {sunday.isoformat()}", "blocco": P.block_label(pos),
@@ -495,8 +496,9 @@ async def weekly_report(monday: date, anchors, force: bool = False) -> dict | No
                             for e in extras if e["counted"]],
         "prontezza_media": round(sum(wellness) / len(wellness)) if wellness else None,
         "sonno_medio_h": round(sum(sleep_h) / len(sleep_h), 1) if sleep_h else None,
-        "giorni_entro_150kcal": (f"{sum(1 for b in balances if abs(b) <= 150)}/{len(balances)}"
-                                 if balances else None),
+        "giorni_entro_10pct_obiettivo": (
+            f"{sum(1 for b, t in zip(balances, day_targets) if abs(b) <= P.nutrition_margin(t))}"
+            f"/{len(balances)}" if balances else None),
         "saldo_medio_kcal": round(sum(balances) / len(balances)) if balances else None,
         "proteine_g_kg": at.get("proteine_g_per_kg"),
         "proteine_obiettivo_g_kg": round(prot_target, 2) if prot_target else None,

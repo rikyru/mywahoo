@@ -2861,20 +2861,22 @@ async def _nutrition_history(days: int) -> dict | None:
     weight = profilemod.load().get("weight_kg")
     tg = nutrition.build_targets()
     prot_target = (tg["targets"]["protein_g"] / weight) if tg and weight else None
-    by_date = {r["data"]: r["saldo_vs_obiettivo"] for r in rows}
+    targets = [r.get("obiettivo_kcal") for r in rows]
+    by_date = {r["data"]: (r["saldo_vs_obiettivo"], programmod.nutrition_margin(r.get("obiettivo_kcal")))
+               for r in rows}
     return {
         "giorni": days,
-        "score": programmod.nutrition_score(balances, at.get("proteine_g_per_kg"), prot_target),
+        "score": programmod.nutrition_score(balances, at.get("proteine_g_per_kg"), prot_target, targets),
         "aderenza_pct": (nut.get("aderenza_al_piano") or {}).get("punteggio_pct"),
-        "in_range": sum(1 for b in balances if abs(b) <= 150),
+        "in_range": sum(1 for b, t in zip(balances, targets) if abs(b) <= programmod.nutrition_margin(t)),
         "confrontati": len(balances),
         "saldo_medio": round(sum(balances) / len(balances)) if balances else None,
         "proteine_g_kg": at.get("proteine_g_per_kg"),
         "proteine_obiettivo": round(prot_target, 2) if prot_target else None,
         # una barra per giorno (None = non tracciato)
-        "barre": [{"d": (start + timedelta(days=i)).isoformat(),
-                   "saldo": by_date.get((start + timedelta(days=i)).isoformat())}
-                  for i in range(days)],
+        "barre": [{"d": d, "saldo": by_date[d][0], "margine": round(by_date[d][1])}
+                  if d in by_date else {"d": d, "saldo": None}
+                  for d in ((start + timedelta(days=i)).isoformat() for i in range(days))],
     }
 
 
