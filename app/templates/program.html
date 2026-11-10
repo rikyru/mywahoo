@@ -328,7 +328,9 @@
   <ul class="prog-list">
     {% for e in extras %}
     <li><a href="/workout/{{ e.id }}">{{ e.date.strftime('%d/%m') }} · {{ e.name }}</a> · {{ e.min }}′ · {{ e.load }} TRIMP
-      <span class="muted">· {{ 'conta nel carico: le prossime sedute si alleggeriscono se serve' if e.counted else 'attività di fondo (breve)' }}</span></li>
+      <span class="muted">· {% if e.counted and e.easy %}volume facile in più: conta nella forma, non toglie nulla alle sedute
+        {%- elif e.counted %}conta nel carico: le prossime sedute si alleggeriscono se serve
+        {%- else %}attività di fondo (breve){% endif %}</span></li>
     {% endfor %}
   </ul>
 </section>

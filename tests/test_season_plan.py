@@ -62,3 +62,16 @@ def test_goal_rises_with_a_better_test():
     assert main._goal_ftp(159) == 180
     assert main._goal_ftp(172) == 185          # 172 × 1.08 = 185.8 -> 185
     assert main._goal_ftp(None) == 180
+
+
+def test_easy_extra_classification():
+    from datetime import datetime as dt
+    from app.db import Workout
+    anchors = (66.0, 197.0, "M")
+    z2 = Workout(id=1, sport="Ciclismo indoor", start_date=dt(2026, 11, 10), avg_hr=120, avg_power=110, moving_s=3600)
+    hard = Workout(id=2, sport="Ciclismo indoor", start_date=dt(2026, 11, 10), avg_hr=150, avg_power=150, moving_s=3600)
+    walk = Workout(id=3, sport="Camminata", start_date=dt(2026, 11, 10), moving_s=3600)
+    hike_hard = Workout(id=4, sport="Camminata", start_date=dt(2026, 11, 10), avg_hr=160, moving_s=7200)
+    assert R.is_easy_extra(z2, anchors, 159) and not R.is_easy_extra(hard, anchors, 159)
+    assert R.is_easy_extra(z2, anchors) and not R.is_easy_extra(hard, anchors)     # solo FC
+    assert R.is_easy_extra(walk, anchors) and not R.is_easy_extra(hike_hard, anchors)

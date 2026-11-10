@@ -69,6 +69,21 @@ def _wload(w: Workout, anchors) -> float:
                                  rest, mx, sex)
 
 
+EASY_HRR = 0.50       # FC media sotto il 50% della riserva = attività facile (Z1-Z2: la media include riscaldamento e recuperi)
+EASY_FTP = 0.76       # o watt medi sotto il 76% dell'FTP
+
+
+def is_easy_extra(w: Workout, anchors, ftp: float | None = None) -> bool:
+    """Un'attività fuori programma FACILE (Z2 sui rulli, camminata): aggiunge
+    volume ma non deve togliere qualità alle sedute pianificate."""
+    rest, mx, _ = anchors
+    if w.avg_power and ftp:
+        return w.avg_power / ftp < EASY_FTP
+    if w.avg_hr and mx > rest:
+        return (w.avg_hr - rest) / (mx - rest) < EASY_HRR
+    return family(w.sport) == "walk"
+
+
 def _external_estimate(session, sport: str, duration: int, anchors) -> tuple[float, float]:
     """(carico, rpe) atteso di una seduta esterna (es. corso master): la media delle
     ultime dello stesso sport, perché il contenuto lo decide il coach."""
@@ -97,7 +112,8 @@ def _rates(s, anchors) -> dict:
 
 def _week_target_done(s, tpl: list, absences: list, wk: date, multiplier: float,
                       week_workouts: list, linked: set, anchors, rates: dict,
-                      extras: list | None = None, block: int = 1, growth: float = 0.0) -> tuple:
+                      extras: list | None = None, block: int = 1, growth: float = 0.0,
+                      easy_box: dict | None = None, ftp: float | None = None) -> tuple:
     """(target, fatto) della settimana che inizia `wk`. Se `extras` è una lista, ci
     aggiunge le attività fuori programma (non agganciate e non su uno slot).
 
@@ -125,12 +141,16 @@ def _week_target_done(s, tpl: list, absences: list, wk: date, multiplier: float,
         on_plan = w.id in linked or (family(w.sport), w.start_date.date()) in template_days
         counted = on_plan or mins >= P.CALIBRATION_MIN_MIN
         load = _wload(w, anchors)
+        easy = not on_plan and is_easy_extra(w, anchors, ftp)
         if counted:
             done += load
+            if easy and easy_box is not None:
+                # volume in più (es. Z2 fuori programma): non alleggerisce le sedute
+                easy_box["load"] = easy_box.get("load", 0.0) + load
         if extras is not None and not on_plan:
             extras.append({"id": w.id, "date": w.start_date, "name": w.name or w.sport,
                            "sport": w.sport, "min": round(mins), "load": round(load),
-                           "counted": counted})
+                           "counted": counted, "easy": easy})
     return target, done
 
 
@@ -698,9 +718,11 @@ async def _recalc(ctx: dict, why: str) -> dict | None:
         ext_est: dict = {}
         for wk in sorted({P.monday(i["date"]) for i in inst}):
             pos = P.block_position(start_p, wk, prog.block_weeks, mults)
+            easy: dict = {}
             target, done_load = _week_target_done(
                 s, tpl, absences, wk, pos["multiplier"], ws if wk == wk0 else [],
-                linked, anchors, rates, block=pos["block"], growth=prog.block_growth or 0.0)
+                linked, anchors, rates, block=pos["block"], growth=prog.block_growth or 0.0,
+                easy_box=easy, ftp=(ctx.get("ftp") or {}).get("ftp"))
             ext_loads, planned = [], []
             for i in inst:
                 if P.monday(i["date"]) != wk:
@@ -720,7 +742,7 @@ async def _recalc(ctx: dict, why: str) -> dict | None:
             levels = ({k: pos["multiplier"] * rd["factor"] for k, *_ in planned
                        if P.is_proposal_day(date.fromisoformat(k.split("@")[1]), today)}
                       if rd["factor"] < 1 else None)
-            alloc.update(P.allocate(target, done_load, ext_loads, planned, sex,
+            alloc.update(P.allocate(target, done_load - easy.get("load", 0.0), ext_loads, planned, sex,
                                     rates=rates, family=family, level=pos["multiplier"],
                                     levels=levels))
             for k in levels or {}:
