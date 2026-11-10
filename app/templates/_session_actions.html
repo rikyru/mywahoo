@@ -1,15 +1,16 @@
 {# Azioni su una seduta del programma (Fatta / Non la faccio / Modifica / Ripristina):
    le stesse nella pagina Programma e nella card "Oggi" della dashboard.
    next = pagina a cui tornare dopo l'azione. #}
-{% macro session_actions(s, plan_id, pick_one=False, next="/program") %}
+{% macro session_actions(s, plan_id, pick_one=False, next="/program", compact=False) %}
   {% if s.done and s.workout_id %}
   <p class="muted"><a href="/workout/{{ s.workout_id }}">→ allenamento registrato</a></p>
   {% endif %}
+  {% set b = ' btn-sm' if compact else '' %}
 
   {% if not s.done and not s.skipped %}
-  <div class="prog-actions">
+  <div class="prog-actions{{ ' prog-actions-sm' if compact }}">
     <details class="plan-done">
-      <summary class="btn">Fatta</summary>
+      <summary class="btn{{ b }}">Fatta</summary>
       <form method="post" action="/plans/{{ plan_id }}/session/{{ s.id }}/done" class="plan-edit-form">
         <input type="hidden" name="next" value="{{ next }}">
         <label>{% if s.kind == 'external' %}Com'è andata? <span class="muted">(due parole a spanne: l'AI ne ricava lo sforzo)</span>
@@ -25,7 +26,7 @@
       </form>
     </details>
     <details class="plan-done">
-      <summary class="btn btn-secondary">Non la faccio</summary>
+      <summary class="btn btn-secondary{{ b }}">{{ 'Salto' if compact else 'Non la faccio' }}</summary>
       <form method="post" action="/program/session/{{ s.id }}/skip" class="plan-edit-form"
             onsubmit="const b=this.querySelector('button');b.disabled=true;b.textContent='Ricalcolo…';">
         <input type="hidden" name="next" value="{{ next }}">
@@ -46,6 +47,9 @@
         <button type="submit" class="btn btn-secondary">Conferma</button>
       </form>
     </details>
+    {% if compact %}
+    <a class="btn btn-secondary btn-sm" href="/program">Modifica</a>
+    {% else %}
     <details class="plan-done">
       <summary class="btn btn-secondary">Modifica</summary>
       <form method="post" action="/plans/{{ plan_id }}/session/{{ s.id }}/edit" class="plan-edit-form">
@@ -57,11 +61,12 @@
         <button type="submit" class="btn btn-secondary">Salva</button>
       </form>
     </details>
+    {% endif %}
   </div>
   {% elif s.skipped %}
   <form method="post" action="/program/session/{{ s.id }}/unskip">
     <input type="hidden" name="next" value="{{ next }}">
-    <button class="btn btn-secondary" type="submit">↩ Ripristina</button>
+    <button class="btn btn-secondary{{ b }}" type="submit">↩ Ripristina</button>
   </form>
   {% endif %}
 {% endmacro %}

@@ -58,47 +58,7 @@
 {% if message %}<div class="alert ok">{{ message }}</div>{% endif %}
 {% if error %}<div class="alert error">{{ error }}</div>{% endif %}
 
-{% if today_plan %}
-<section class="card today-card">
-  <div class="card-head"><h3>🎯 Oggi</h3><a class="muted" href="/program">Programma →</a></div>
-  {% for v in today_plan["items"] %}{% set s = v.ps %}
-  <div class="today-session{% if s.done or s.skipped %} plan-session-done{% endif %}">
-    <div class="plan-session-head">
-      <span class="plan-session-icon">{{ sport_icon(s.sport) }}</span>
-      <div class="plan-session-info">
-        <strong>{{ s.title }}</strong>
-        <span class="muted">{{ s.sport | sport_label }} · {{ s.duration_min }} min
-          {%- if s.rpe_target %} · RPE {{ '%g'|format(s.rpe_target) }}{% endif %}
-          {%- if s.kind == 'external' %} · <span class="tag">esterna</span>{% endif %}
-          {%- if s.kind == 'fixed' %} · <span class="tag">fissata</span>{% endif %}
-          {%- if v.indoor %} · <span class="tag">rulli</span>{% endif %}
-          {%- if s.skipped %} · saltata{% elif s.done %} · fatta ✓{% endif %}</span>
-      </div>
-    </div>
-    {% if (s.description or v.steps) and not s.done and not s.skipped %}
-    <details class="prog-routine">
-      <summary>Cosa fare</summary>
-      {% if s.description %}<p class="plan-session-desc">{{ v.desc }}</p>{% endif %}
-      {% if v.steps %}
-      <p class="prog-reason">Per i rulli: <a href="/program/session/{{ s.id }}/workout.zwo">.zwo</a> ·
-        <a href="/program/session/{{ s.id }}/workout.mrc">.mrc</a></p>
-      <div class="nutri-table-wrap">
-        <table class="nutri-table prog-steps">
-          <thead><tr><th>Min</th><th>% FTP</th><th>Watt</th><th>Nota</th></tr></thead>
-          <tbody>{% for st in v.steps %}<tr><td>{{ '%g'|format(st.min) }}</td><td>{{ st.pct_ftp }}%</td>
-            <td>{{ st.watt or '—' }}</td><td class="nutri-act">{{ st.note }}</td></tr>{% endfor %}</tbody>
-        </table>
-      </div>
-      {% endif %}
-    </details>
-    {% endif %}
-    {{ session_actions(s, today_plan.plan_id, v.pick_one, "/") }}
-  </div>
-  {% endfor %}
-</section>
-{% endif %}
-
-<section class="glance">
+<section class="glance{{ ' glance-4' if today_plan }}">
   <div class="card glance-card">
     <div class="card-head"><h3>Forma</h3><a class="muted" href="/form">Dettagli →</a></div>
     {% if form %}
@@ -125,6 +85,24 @@
     <div class="card-head"><h3>Nutrizione oggi</h3><span class="muted">planmydinner</span></div>
     <div id="nutritionGlance"></div>
   </div>
+
+  {% if today_plan %}
+  <div class="card glance-card today-card">
+    <div class="card-head"><h3>🎯 Oggi</h3><a class="muted" href="/program">Dettagli →</a></div>
+    {% for v in today_plan["items"] %}{% set s = v.ps %}
+    <div class="today-session{% if s.done or s.skipped %} plan-session-done{% endif %}">
+      <div class="glance-next-info">
+        <strong>{{ sport_icon(s.sport) }} {{ s.title }}</strong>
+        <span class="muted">{{ s.duration_min }} min
+          {%- if s.rpe_target %} · RPE {{ '%g'|format(s.rpe_target) }}{% endif %}
+          {%- if v.steps %} · <a href="/program/session/{{ s.id }}/workout.zwo">.zwo</a>{% endif %}
+          {%- if s.skipped %} · saltata{% elif s.done %} · fatta ✓{% endif %}</span>
+      </div>
+      {{ session_actions(s, today_plan.plan_id, v.pick_one, "/", compact=True) }}
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
 
   <div class="card glance-card">
     <div class="card-head"><h3>In programma</h3><a class="muted" href="/program">Programma →</a></div>

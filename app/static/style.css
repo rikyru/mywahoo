@@ -404,6 +404,14 @@ a.chip:hover { background: var(--card-hover); text-decoration: none; }
   border: 1px solid var(--border); border-radius: var(--radius-sm); }
 /* ---------- home: seduta di oggi ---------- */
 .today-card { border-color: var(--accent-soft); }
+.glance.glance-4 { grid-template-columns: repeat(4, 1fr); }
+@media (max-width: 1100px) { .glance.glance-4 { grid-template-columns: 1fr 1fr; } }
+@media (max-width: 900px) { .glance.glance-4 { grid-template-columns: 1fr; } }
+.btn-sm { padding: .3rem .65rem; font-size: .82rem; }
+.prog-actions-sm { gap: .35rem; margin-top: .45rem; align-items: center; }
+.prog-actions-sm a.btn { text-decoration: none; }
+.prog-actions-sm .plan-done { margin-top: 0; }
+.today-card .today-session .glance-next-info strong { font-size: .95rem; }
 .today-session + .today-session { border-top: 1px solid var(--border-soft); margin-top: .6rem; padding-top: .6rem; }
 /* ---------- program: stagione ---------- */
 .season-list { display: flex; flex-direction: column; }
