@@ -69,6 +69,15 @@
       <div><span class="gm-value {% if form.tsb > 5 %}gm-good{% elif form.tsb < -20 %}gm-warn{% endif %}">
         {{ form.tsb }}</span><span class="gm-label">freschezza</span></div>
     </div>
+    {% if form_spark %}
+    <svg class="form-spark" viewBox="0 0 {{ form_spark.w }} {{ form_spark.h }}" preserveAspectRatio="none"
+         role="img" aria-label="fitness e fatica, ultime {{ (form_spark.days / 7) | round | int }} settimane">
+      <polyline points="{{ form_spark.atl }}" class="sp-atl"/>
+      <polyline points="{{ form_spark.ctl }}" class="sp-ctl"/>
+    </svg>
+    <p class="muted spark-legend"><span class="sp-dot sp-dot-ctl"></span>fitness
+      <span class="sp-dot sp-dot-atl"></span>fatica · ultime {{ (form_spark.days / 7) | round | int }} settimane</p>
+    {% endif %}
     <p class="muted">Fitness {{ form.trend }}
       {%- if form.delta_pct %} ({{ "+" if form.delta_pct > 0 }}{{ form.delta_pct }}% in 30 giorni){% endif %}.</p>
     {% else %}
@@ -78,6 +87,18 @@
 
   <div class="card glance-card">
     <div class="card-head"><h3>Salute</h3><a class="muted" href="/health">Dettagli →</a></div>
+    {% if body.last_weight %}
+    <div class="glance-metrics body-glance">
+      <div><span class="gm-value">{{ '%.1f'|format(body.last_weight) }}<small>kg</small></span>
+        <span class="gm-label">peso{% if body.days_since_weigh is not none %} · {{ 'oggi' if body.days_since_weigh == 0 else body.days_since_weigh ~ ' gg fa' }}{% endif %}</span></div>
+      {% if body.trend_kg_week is not none %}
+      <div><span class="gm-value {{ 'gm-good' if body.trend_kg_week < -0.05 else ('gm-warn' if body.trend_kg_week > 0.1 else '') }}">{{ '%+.2f'|format(body.trend_kg_week) }}<small>kg/sett</small></span>
+        <span class="gm-label">trend</span></div>{% endif %}
+      {% if body.waist_delta_cm is not none %}
+      <div><span class="gm-value {{ 'gm-good' if body.waist_delta_cm < 0 else '' }}">{{ '%+.1f'|format(body.waist_delta_cm) }}<small>cm</small></span>
+        <span class="gm-label">girovita</span></div>{% endif %}
+    </div>
+    {% endif %}
     <div id="healthGlance"><p class="muted">Caricamento da Google Health…</p></div>
   </div>
 
@@ -384,8 +405,8 @@ const esc = s => String(s).replace(/[<>&]/g, c => ({ "<": "&lt;", ">": "&gt;", "
     const d = await r.json();
     if (d.error) throw new Error(d.error);
     if (d.reconnect) {
-      host.innerHTML = `<p class="muted">🔌 Connessione a Google Health scaduta.
-        <a href="/login/google">Ricollega</a></p>`;
+      host.innerHTML = `<p class="muted gh-off">🔌 Google Health scollegato (sonno, FC, passi) ·
+        <a href="/login/google">ricollega</a></p>`;
       return;
     }
     const parts = [];

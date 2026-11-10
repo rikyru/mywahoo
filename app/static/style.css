@@ -308,7 +308,7 @@ a.chip:hover { background: var(--card-hover); text-decoration: none; }
 @media (max-width: 640px) { .cal-cell { min-height: 52px; padding: .2rem; } .cal-act { font-size: .95rem; } }
 
 /* ---------- dashboard "current state" strip ---------- */
-.glance { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem;
+.glance { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 1rem;
   margin-bottom: 1.2rem; align-items: start; }
 .glance-card { margin: 0; min-height: 168px; }
 .glance-card .card-head { margin-bottom: .5rem; }
@@ -402,6 +402,17 @@ a.chip:hover { background: var(--card-hover); text-decoration: none; }
   text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
 .pred-goal input { width: 5.5rem; padding: .4rem .5rem; background: var(--bg-elev); color: var(--text);
   border: 1px solid var(--border); border-radius: var(--radius-sm); }
+/* ---------- home: mini grafico forma, bilancia ---------- */
+.form-spark { width: 100%; height: 42px; margin: .55rem 0 .1rem; display: block; }
+.form-spark polyline { fill: none; stroke-width: 1.6; vector-effect: non-scaling-stroke; stroke-linejoin: round; }
+.form-spark .sp-ctl { stroke: #4c8dff; stroke-width: 2.2; }
+.form-spark .sp-atl { stroke: #e08a1e; opacity: .75; }
+.spark-legend { font-size: .75rem; margin: 0 0 .3rem; }
+.sp-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin: 0 .2rem 0 .1rem; vertical-align: middle; }
+.sp-dot-ctl { background: #4c8dff; }
+.sp-dot-atl { background: #e08a1e; margin-left: .5rem; }
+.body-glance { margin-bottom: .5rem; }
+.gh-off { font-size: .8rem; margin: .3rem 0 0; }
 /* ---------- home: seduta di oggi ---------- */
 .btn-sm { padding: .3rem .65rem; font-size: .82rem; }
 .prog-actions-sm { gap: .35rem; margin-top: .45rem; align-items: center; }

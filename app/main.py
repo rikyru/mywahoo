@@ -3055,6 +3055,22 @@ async def webhook_body(request: Request, background: BackgroundTasks):
 
 # ---------------------------------------------------------------- pages
 
+def _spark(series: list[dict], w: float = 100, h: float = 32) -> dict | None:
+    """Mini grafico fitness/fatica per la card in home: punti SVG già scalati."""
+    if len(series) < 7:
+        return None
+    vals = [v for p in series for v in (p["ctl"], p["atl"])]
+    lo, hi = min(vals), max(vals)
+    span = (hi - lo) or 1.0
+    step = w / (len(series) - 1)
+
+    def pts(key):
+        return " ".join(f"{i * step:.1f},{h - (p[key] - lo) / span * (h - 2) - 1:.1f}"
+                        for i, p in enumerate(series))
+    return {"ctl": pts("ctl"), "atl": pts("atl"), "w": w, "h": h,
+            "days": len(series), "from": series[0]["date"]}
+
+
 def _today_sessions() -> dict | None:
     """Le sedute del programma di oggi per la card in home (con scaletta in watt)."""
     today = date.today()
@@ -3173,7 +3189,7 @@ def dashboard(request: Request, win: str = "30", end: str = "",
     # "Current state" strip: independent of the selected window, and cheap enough
     # to render inline (the health card is fetched client-side instead — see
     # /api/health/summary — because Google Health takes seconds).
-    _, form_summary = _fitness_series()
+    form_series, form_summary = _fitness_series()
     upcoming = _upcoming_sessions()
     today_plan = _today_sessions()
 
@@ -3189,6 +3205,7 @@ def dashboard(request: Request, win: str = "30", end: str = "",
         "body": program_runner.body_reminders(),
         "to_rate": to_rate,
         "form": form_summary, "upcoming": upcoming, "today_plan": today_plan,
+        "form_spark": _spark(form_series[-42:]),
         "last_workout": max(workouts, key=lambda w: w.start_date) if workouts else None,
         "window": window, "windows": WINDOWS,
         "sport": sport, "sort": sort, "order": order,
