@@ -402,6 +402,9 @@ a.chip:hover { background: var(--card-hover); text-decoration: none; }
   text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
 .pred-goal input { width: 5.5rem; padding: .4rem .5rem; background: var(--bg-elev); color: var(--text);
   border: 1px solid var(--border); border-radius: var(--radius-sm); }
+/* ---------- home: seduta di oggi ---------- */
+.today-card { border-color: var(--accent-soft); }
+.today-session + .today-session { border-top: 1px solid var(--border-soft); margin-top: .6rem; padding-top: .6rem; }
 /* ---------- program: stagione ---------- */
 .season-list { display: flex; flex-direction: column; }
 .season-week { border-top: 1px solid var(--border-soft); }

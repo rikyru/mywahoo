@@ -2404,12 +2404,13 @@ async def program_session_action(sid: int, action: str, request: Request):
               "accept": program_runner.accept_proposal,
               "reject": program_runner.reject_proposal}.get(action)
         ok = bool(fn and fn(sid))
+    back = _safe_next(str(form.get("next") or ""), "/program")   # es. la card "Oggi" in home
     if not ok:
-        return _program_redirect(error="Azione non valida su questa seduta")
+        return _program_redirect(error="Azione non valida su questa seduta", path=back)
     if action in ("skip", "unskip"):
         st, err = await _program_recalc_now(
             "seduta saltata" if action == "skip" else "seduta ripristinata", push=True)
-        return _program_redirect(msg=_recalc_msg(st) if not err else "", error=err)
+        return _program_redirect(msg=_recalc_msg(st) if not err else "", error=err, path=back)
     if action == "accept" and nutrition.is_configured():
         _fire_and_forget(nutrition.recompute_and_push())
     return _program_redirect(msg="Proposta accettata" if action == "accept"
@@ -3054,6 +3055,36 @@ async def webhook_body(request: Request, background: BackgroundTasks):
 
 # ---------------------------------------------------------------- pages
 
+def _today_sessions() -> dict | None:
+    """Le sedute del programma di oggi per la card in home (con scaletta in watt)."""
+    today = date.today()
+    jl = program_runner.jl
+    with Session(engine) as session:
+        prog = program_runner.active_program(session)
+        if not prog or not prog.plan_id:
+            return None
+        rows = session.exec(select(PlanSession).where(
+            PlanSession.plan_id == prog.plan_id,
+            PlanSession.date >= datetime.combine(today, time.min),
+            PlanSession.date <= datetime.combine(today, time.max))
+            .order_by(PlanSession.order)).all()
+        tpl = {sl.get("id"): sl for sl in jl(prog.template_json, [])}
+        plan_id = prog.plan_id
+    if not rows:
+        return None
+    ftp_w = (_estimated_ftp() or {}).get("ftp")
+    items = []
+    for ps in rows:
+        steps = jl(ps.structure_json, [])
+        for st in steps:
+            st["watt"] = round(ftp_w * st["pct_ftp"] / 100) if ftp_w and st.get("pct_ftp") else None
+        slot = tpl.get(ps.slot_id) or {}
+        items.append({"ps": ps, "pick_one": slot.get("pick") == "one", "steps": steps,
+                      "indoor": bool(slot.get("indoor")),
+                      "desc": exercisesmod.linkify(ps.description or "")})
+    return {"plan_id": plan_id, "items": items}
+
+
 def _upcoming_sessions(days: int = 7, limit: int = 4) -> list:
     """Sedute da fare da oggi in avanti (non fatte, non saltate). Con un programma
     attivo solo le sue: i piani vecchi sono archivio e confonderebbero."""
@@ -3144,6 +3175,7 @@ def dashboard(request: Request, win: str = "30", end: str = "",
     # /api/health/summary — because Google Health takes seconds).
     _, form_summary = _fitness_series()
     upcoming = _upcoming_sessions()
+    today_plan = _today_sessions()
 
     with Session(engine) as session:
         # attività recenti senza FC né valutazione: il carico resterebbe stimato a occhio
@@ -3156,7 +3188,7 @@ def dashboard(request: Request, win: str = "30", end: str = "",
         "credit": ai_usage.credit_status(),
         "body": program_runner.body_reminders(),
         "to_rate": to_rate,
-        "form": form_summary, "upcoming": upcoming,
+        "form": form_summary, "upcoming": upcoming, "today_plan": today_plan,
         "last_workout": max(workouts, key=lambda w: w.start_date) if workouts else None,
         "window": window, "windows": WINDOWS,
         "sport": sport, "sort": sort, "order": order,

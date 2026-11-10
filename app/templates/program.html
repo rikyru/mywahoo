@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_session_actions.html" import session_actions %}
 {% block title %}Programma — {{ app_name }}{% endblock %}
 {% block content %}
 
@@ -258,66 +259,7 @@
   </div>
   {% endif %}
 
-  {% if s.done and s.workout_id %}
-  <p class="muted"><a href="/workout/{{ s.workout_id }}">→ allenamento registrato</a></p>
-  {% endif %}
-
-  {% if not s.done and not s.skipped %}
-  <div class="prog-actions">
-    <details class="plan-done">
-      <summary class="btn">Fatta</summary>
-      <form method="post" action="/plans/{{ prog.plan_id }}/session/{{ s.id }}/done" class="plan-edit-form">
-        <input type="hidden" name="next" value="/program">
-        <label>{% if s.kind == 'external' %}Com'è andata? <span class="muted">(due parole a spanne: l'AI ne ricava lo sforzo)</span>
-          {% else %}Cosa hai fatto davvero <span class="muted">(l'AI la usa per carico e forma)</span>{% endif %}
-          <textarea name="done_notes" rows="3" class="nw-desc"
-            placeholder="es. molto pesante, tante ripetute da 100 a ritmo gara">{% if s.kind != 'external' %}{{ s.description }}{% endif %}</textarea>
-        </label>
-        <div class="plan-edit-row">
-          <label>Durata (min) <input type="number" name="done_min" value="{{ s.duration_min }}" min="0"></label>
-          <label>Quando <input type="date" name="done_date" value="{{ s.date.strftime('%Y-%m-%d') if s.date else '' }}"></label>
-        </div>
-        <button type="submit" class="btn">Conferma</button>
-      </form>
-    </details>
-    <details class="plan-done">
-      <summary class="btn btn-secondary">Non la faccio</summary>
-      <form method="post" action="/program/session/{{ s.id }}/skip" class="plan-edit-form"
-            onsubmit="const b=this.querySelector('button');b.disabled=true;b.textContent='Ricalcolo…';">
-        <div class="prog-flags">
-          {% for k, lbl in [("riposo", "riposo"), ("stanco", "stanco"), ("fuori", "fuori casa / impegno"),
-                            ("dolore", "dolore o malessere"), ("altro", "altro")] %}
-          <label><input type="radio" name="motive" value="{{ k }}" {% if loop.first %}checked{% endif %}> {{ lbl }}</label>
-          {% endfor %}
-        </div>
-        <label>Nota <span class="muted">(facoltativa)</span>
-          <input type="text" name="note" maxlength="200" placeholder="es. riunione fino a tardi"></label>
-        {% if v.pick_one %}
-        <div class="prog-flags">
-          <label><input type="radio" name="scope" value="move" checked> spostala all'altro giorno</label>
-          <label><input type="radio" name="scope" value="week"> salta questa settimana</label>
-        </div>
-        {% endif %}
-        <button type="submit" class="btn btn-secondary">Conferma</button>
-      </form>
-    </details>
-    <details class="plan-done">
-      <summary class="btn btn-secondary">Modifica</summary>
-      <form method="post" action="/plans/{{ prog.plan_id }}/session/{{ s.id }}/edit" class="plan-edit-form">
-        <input type="hidden" name="next" value="/program">
-        <label>Titolo <input type="text" name="title" value="{{ s.title }}"></label>
-        <label>Durata (min) <input type="number" name="durata_min" value="{{ s.duration_min }}" min="0"></label>
-        <label>Contenuto <textarea name="description" rows="5" class="nw-desc">{{ s.description }}</textarea></label>
-        <p class="muted">Per farla adattare dall'AI («piove», «ho solo 30 minuti») chiedilo al coach qui sotto.</p>
-        <button type="submit" class="btn btn-secondary">Salva</button>
-      </form>
-    </details>
-  </div>
-  {% elif s.skipped %}
-  <form method="post" action="/program/session/{{ s.id }}/unskip">
-    <button class="btn btn-secondary" type="submit">↩ Ripristina</button>
-  </form>
-  {% endif %}
+  {{ session_actions(s, prog.plan_id, v.pick_one, "/program") }}
 </section>
 {% endfor %}
 {% endfor %}
