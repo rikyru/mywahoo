@@ -198,7 +198,7 @@ WEIGHIN_FIELDS = [
 _COLS = [f for f, *_ in WEIGHIN_FIELDS]
 # sotto queste variazioni è rumore della bilancia (acqua, ora, cibo): niente colore
 NOISE = {"weight_kg": 0.3, "body_fat": 0.1, "muscle_kg": 0.1, "water_pct": 0.2,
-         "visceral": 0.2, "bmi": 0.1, "metabolic_age": 1}
+         "visceral": 0.2, "bmi": 0.15, "metabolic_age": 1}   # BMI 0.1 ≈ 0.3 kg
 
 
 def is_repush(a, b) -> bool:
