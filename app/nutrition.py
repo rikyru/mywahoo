@@ -221,7 +221,8 @@ def _agg_training(items: list[tuple]) -> dict:
     return by
 
 
-def _periodize(base_kcal: float, planned: list[tuple], actual: list[tuple]) -> dict:
+def _periodize(base_kcal: float, planned: list[tuple], actual: list[tuple],
+               eatback: float = 1.0) -> dict:
     """Core puro della periodizzazione. `planned`/`actual` sono liste
     (iso_date, sport, minuti): le sessioni PIANIFICATE non ancora fatte e le
     ATTIVITÀ realmente svolte. Per ogni giorno il surplus è il MASSIMO tra reale
@@ -230,6 +231,7 @@ def _periodize(base_kcal: float, planned: list[tuple], actual: list[tuple]) -> d
     - oggi prima di allenarti usa comunque il piano (pre-fuel);
     - quando ti alleni e segni la sessione «fatta» il surplus NON sparisce,
       perché subentra l'attività reale di quel giorno.
+    `eatback` (0-1): quota delle kcal stimate della seduta che si aggiunge al target.
     Ritorna {iso: {kcal, training_note}}; i giorni senza allenamento sono omessi."""
     plan_by, real_by = _agg_training(planned), _agg_training(actual)
     out: dict = {}
@@ -238,7 +240,7 @@ def _periodize(base_kcal: float, planned: list[tuple], actual: list[tuple]) -> d
         chosen = r if (r and (not p or r["kcal"] >= p["kcal"])) else p
         if not chosen or chosen["kcal"] <= 0:
             continue
-        entry = {"kcal": round(base_kcal + chosen["kcal"])}
+        entry = {"kcal": round(base_kcal + chosen["kcal"] * eatback)}
         note = " + ".join(chosen["parts"])
         if note:
             entry["training_note"] = note
@@ -276,7 +278,8 @@ def periodized_map(base_kcal: float, back_days: int = 180, fwd_days: int = 6) ->
                    round((w.moving_s or 0) / 60))
                   for w in s.exec(select(Workout).where(
                       Workout.start_date >= lo_act, Workout.start_date <= hi_today)).all()]
-    return _periodize(base_kcal, planned, actual)
+    eatback = profilemod.nutrition_cfg()["training_eatback_pct"] / 100.0
+    return _periodize(base_kcal, planned, actual, eatback)
 
 
 def periodized_daily(base_kcal: float, days: int = 7) -> dict:

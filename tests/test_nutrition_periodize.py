@@ -48,3 +48,8 @@ def test_free_meal_quota_is_prorated_to_the_period():
     assert q == {"quota_pasti_liberi": 9, "quota_pasti_liberi_settimana": 2}
     assert free_meal_quota_period(2, date(2026, 10, 19), date(2026, 10, 25))["quota_pasti_liberi"] == 2
     assert free_meal_quota_period(2, date(2026, 10, 23), date(2026, 10, 23))["quota_pasti_liberi"] == 1
+
+
+def test_eatback_adds_only_a_share_of_session_kcal():
+    out = _periodize(1750, [("2026-11-11", "Nuoto", 75)], [], eatback=0.5)
+    assert out["2026-11-11"]["kcal"] == round(1750 + _session_kcal("Nuoto", 75) * 0.5)

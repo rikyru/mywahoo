@@ -49,7 +49,11 @@ def save(values: dict) -> None:
 # Nutrition goal config (drives the kcal/macro targets pushed to planmydinner).
 # Kept apart from the physical profile: these are preferences, not measurements.
 NUTRITION_DEFAULTS = {"goal": "cut", "adjust_pct": 15.0, "activity_factor": 1.45,
-                      "protein_per_kg_lean": 2.0, "tdee_basis": "estimate"}
+                      "protein_per_kg_lean": 2.0, "tdee_basis": "estimate",
+                      # quota delle kcal stimate di una seduta aggiunta al target del
+                      # giorno: il fattore attività conta già un po' di sport e le stime
+                      # per sport sono generose -> 50% evita il doppio conteggio
+                      "training_eatback_pct": 50.0}
 NUTRITION_GOALS = ("cut", "maintain", "bulk")
 # How to estimate daily burn: "estimate" = BMR × activity_factor (conservative,
 # trackers overcount); "measured" = average Google calories_burned.
@@ -73,7 +77,13 @@ def nutrition_cfg() -> dict:
         or NUTRITION_DEFAULTS["activity_factor"],
         "protein_per_kg_lean": _num(get_setting("nutrition.protein_per_kg_lean", ""))
         or NUTRITION_DEFAULTS["protein_per_kg_lean"],
+        "training_eatback_pct": _eatback(),
     }
+
+
+def _eatback() -> float:
+    v = _num(get_setting("nutrition.training_eatback_pct", ""))
+    return max(0.0, min(100.0, v)) if v is not None else NUTRITION_DEFAULTS["training_eatback_pct"]
 
 
 def save_nutrition_cfg(values: dict) -> None:
@@ -83,7 +93,7 @@ def save_nutrition_cfg(values: dict) -> None:
     if "tdee_basis" in values:
         b = (values["tdee_basis"] or "").strip()
         set_setting("nutrition.tdee_basis", b if b in TDEE_BASES else "")
-    for k in ("adjust_pct", "activity_factor", "protein_per_kg_lean"):
+    for k in ("adjust_pct", "activity_factor", "protein_per_kg_lean", "training_eatback_pct"):
         if k in values:
             v = _num(values[k])
             set_setting(f"nutrition.{k}", "" if v is None else str(v))

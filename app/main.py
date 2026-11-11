@@ -2870,11 +2870,12 @@ def settings_profile(height_cm: str = Form(""), weight_kg: str = Form(""),
 @app.post("/settings/nutrition", dependencies=[Depends(require_auth)])
 def settings_nutrition(goal: str = Form("cut"), tdee_basis: str = Form("estimate"),
                        adjust_pct: str = Form(""), activity_factor: str = Form(""),
-                       protein_per_kg_lean: str = Form("")):
+                       protein_per_kg_lean: str = Form(""), training_eatback_pct: str = Form("")):
     """Save the meal-plan goal config (drives the planmydinner targets)."""
     profilemod.save_nutrition_cfg({
         "goal": goal, "tdee_basis": tdee_basis, "adjust_pct": adjust_pct,
-        "activity_factor": activity_factor, "protein_per_kg_lean": protein_per_kg_lean})
+        "activity_factor": activity_factor, "protein_per_kg_lean": protein_per_kg_lean,
+        "training_eatback_pct": training_eatback_pct})
     return RedirectResponse(
         f"/settings?{urlencode({'msg': 'Obiettivo alimentare salvato'})}", status_code=303)
 
