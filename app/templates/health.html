@@ -44,18 +44,30 @@
 <section class="card">
   <div class="card-head">
     <h3>Composizione corporea <small class="muted">· bilancia</small></h3>
-    <span class="muted">{{ b.measured_at.strftime("%d/%m/%Y %H:%M") }}
-      {%- if body_day and body_day.n > 1 %} · media di {{ body_day.n }} pesate del giorno{% endif %}
-      {%- if body_prev_day %} · confronto col {{ body_prev_day.date.strftime("%d/%m") }}{% endif %}</span>
+    <span class="muted">ultima {{ b.measured_at.strftime("%d/%m/%Y %H:%M") }}
+      {%- if body_day and body_day.n > 1 %} (media di {{ body_day.n }} del giorno){% endif %}</span>
   </div>
-  <section class="kpi-row">
-    {% for c in body_changes %}
-    <div class="kpi"><span class="kpi-value">{{ ("%." ~ c.nd ~ "f")|format(c.value) }}{% if c.unit %}<small>{{ '' if c.unit == '%' else ' ' }}{{ c.unit }}</small>{% endif %}</span>
+  {% set ref = (body_changes | selectattr("field", "equalto", "weight_kg") | first) %}
+  {% if ref and ref.base_n %}
+  <p class="muted body-ref">Variazioni: media dell'ultima settimana{% if ref.cur_n > 1 %} ({{ ref.cur_n }} pesate){% endif %}
+    contro {% if ref.base_n > 1 %}la media delle {{ ref.base_n }} pesate dal {{ ref.base_from.strftime("%d/%m") }} al {{ ref.base_to.strftime("%d/%m") }}{% else %}la pesata del {{ ref.base_from.strftime("%d/%m") }}{% endif %}.
+    Una pesata singola balla di ±0,3 kg: conta la tendenza.</p>
+  {% endif %}
+  {% macro kpi(c) %}
+    <div class="kpi{{ '' if c.measured else ' kpi-derived' }}"><span class="kpi-value">{{ ("%." ~ c.nd ~ "f")|format(c.value) }}{% if c.unit %}<small>{{ '' if c.unit == '%' else ' ' }}{{ c.unit }}</small>{% endif %}</span>
       <span class="kpi-label">{{ c.label }}</span>
-      {% if c.delta is not none %}<span class="gd {{ c.tone }}" title="rispetto alla pesata del {{ c.prev_date.strftime('%d/%m') }}">{{ '=' if c.delta == 0 else ("%+." ~ c.nd ~ "f")|format(c.delta) ~ (c.unit if c.unit == '%' else '') }} dall'ultima</span>{% endif %}
+      {% if c.delta is not none %}<span class="gd {{ c.tone }}">{{ '=' if c.delta == 0 else ("%+." ~ c.nd ~ "f")|format(c.delta) ~ (c.unit if c.unit == '%' else '') }}</span>{% endif %}
     </div>
-    {% endfor %}
+  {% endmacro %}
+  <section class="kpi-row">
+    {% for c in body_changes if c.measured %}{{ kpi(c) }}{% endfor %}
   </section>
+  {% if body_changes | rejectattr("measured") | list %}
+  <p class="muted derived-head">Calcolati da peso, altezza ed età (e dalla massa grassa): indicativi, si muovono col peso</p>
+  <section class="kpi-row kpi-row-derived">
+    {% for c in body_changes if not c.measured %}{{ kpi(c) }}{% endfor %}
+  </section>
+  {% endif %}
   <canvas id="bodyChart" height="90"></canvas>
 </section>
 {% endif %}

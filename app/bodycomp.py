@@ -238,24 +238,50 @@ def daily_weighins(rows: list) -> list[dict]:
     return out
 
 
+# misurati davvero (peso) o con un segnale proprio (massa grassa: usa l'impedenza);
+# gli altri sono formule su peso/altezza/età o derivati dalla massa grassa
+MEASURED = {"weight_kg", "body_fat"}
+CURRENT_DAYS = 7         # "adesso" = media delle pesate dell'ultima settimana…
+BASELINE_DAYS = 28       # …contro la media delle 4 settimane prima
+
+
+def _mean(vals):
+    vals = [v for v in vals if v is not None]
+    return sum(vals) / len(vals) if vals else None
+
+
 def weighin_changes(days: list[dict]) -> list[dict]:
-    """Ultima pesata vs la precedente che ha quel dato: [{field, label, unit, value,
-    delta, prev_date, tone}] per i campi presenti nell'ultima."""
+    """Variazione di ogni dato: media dell'ultima settimana di pesate contro la media
+    delle 4 settimane prima (una pesata da sola balla di ±0,3 kg / ±0,3 punti per
+    acqua e impedenza). Senza pesate nelle 4 settimane prima: contro la precedente.
+    [{field, label, unit, nd, value, delta, base_from, base_to, base_n, tone, measured}]"""
     if not days:
         return []
-    last = days[-1]
+    last_d = days[-1]["date"]
+    from datetime import timedelta as _td
+    cur = [d for d in days if d["date"] > last_d - _td(days=CURRENT_DAYS)]
+    base = [d for d in days if last_d - _td(days=CURRENT_DAYS + BASELINE_DAYS) < d["date"]
+            <= last_d - _td(days=CURRENT_DAYS)]
     out = []
     for f, label, unit, nd, good in WEIGHIN_FIELDS:
-        v = last.get(f)
-        if v is None:
+        if days[-1].get(f) is None:
             continue
-        prev = next((d for d in reversed(days[:-1]) if d.get(f) is not None), None)
-        delta = round(v - prev[f], nd if nd else 0) if prev else None
+        v = _mean(d.get(f) for d in cur)
+        b_days = [d for d in base if d.get(f) is not None]
+        if not b_days:   # niente storico recente: la pesata precedente con quel dato
+            prev = next((d for d in reversed(days[:-1]) if d.get(f) is not None), None)
+            b_days = [prev] if prev else []
+        b = _mean(d.get(f) for d in b_days)
+        delta = round(v - b, nd) if b is not None else None
+        measured = f in MEASURED
         noise = NOISE.get(f, 0.5 if nd == 0 else 0.1)
         tone = ""
-        if delta is not None and good and abs(delta) >= noise:
+        if measured and delta is not None and good and abs(delta) >= noise:
             tone = "gd-good" if delta * good > 0 else "gd-warn"
         out.append({"field": f, "label": label, "unit": unit, "nd": nd,
-                    "value": round(v, nd) if nd else round(v),
-                    "delta": delta, "prev_date": prev["date"] if prev else None, "tone": tone})
+                    "value": round(v, nd) if nd else round(v), "delta": delta,
+                    "base_from": b_days[0]["date"] if b_days else None,
+                    "base_to": b_days[-1]["date"] if b_days else None,
+                    "base_n": len(b_days), "cur_n": len(cur),
+                    "tone": tone, "measured": measured})
     return out

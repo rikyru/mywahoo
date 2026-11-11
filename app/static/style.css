@@ -429,6 +429,10 @@ a.chip:hover { background: var(--card-hover); text-decoration: none; }
 .gd.gd-good { color: #34d399; }
 .gd.gd-warn { color: #f59e0b; }
 .glance-metrics .gd, .kpi .gd { display: block; line-height: 1.2; }
+.body-ref { font-size: .8rem; margin: .2rem 0 .6rem; }
+.derived-head { font-size: .78rem; margin: .9rem 0 .4rem; }
+.kpi-row-derived .kpi-derived { opacity: .62; padding-top: .55rem; padding-bottom: .55rem; }
+.kpi-row-derived .kpi-derived .kpi-value { font-size: 1.15rem; }
 .girth-howto { margin: .6rem 0 .2rem; }
 .girth-howto > summary { cursor: pointer; font-size: .9rem; color: var(--accent); }
 .girth-howto-body { display: grid; grid-template-columns: 170px 1fr; gap: 1.2rem; align-items: start; margin-top: .7rem; }

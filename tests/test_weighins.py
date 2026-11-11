@@ -26,7 +26,20 @@ def test_changes_vs_previous_weighin():
     ch = {c["field"]: c for c in weighin_changes(days)}
     assert ch["weight_kg"]["delta"] == 0.2 and ch["weight_kg"]["tone"] == ""   # rumore bilancia
     assert ch["body_fat"]["delta"] == -0.1 and ch["body_fat"]["tone"] == "gd-good"
-    assert ch["muscle_kg"]["delta"] == 0.2 and ch["muscle_kg"]["tone"] == "gd-good"
+    # muscolo = peso − grasso − ossa: derivato, mai colorato
+    assert ch["muscle_kg"]["delta"] == 0.2 and ch["muscle_kg"]["tone"] == ""
+    assert not ch["muscle_kg"]["measured"] and ch["weight_kg"]["measured"]
+
+
+def test_changes_use_week_vs_previous_four_weeks():
+    # le pesate reali 06/10 → 11/11: l'ultima (81.4) contro la media delle 4 settimane prima
+    w = [("2026-10-06", 81.6), ("2026-10-13", 81.8), ("2026-10-16", 82.0), ("2026-10-22", 81.65),
+         ("2026-10-27", 82.1), ("2026-10-29", 82.1), ("2026-10-30", 82.45), ("2026-11-04", 81.2),
+         ("2026-11-11", 81.4)]
+    days = daily_weighins([_m(datetime.fromisoformat(d + "T06:00"), kg, 500 + i) for i, (d, kg) in enumerate(w)])
+    c = next(c for c in weighin_changes(days) if c["field"] == "weight_kg")
+    base = [81.8, 82.0, 81.65, 82.1, 82.1, 82.45, 81.2]     # 13/10 … 04/11 (il 06/10 è fuori)
+    assert c["base_n"] == len(base) and c["delta"] == round(81.4 - sum(base) / len(base), 1)
 
 
 def test_is_repush_needs_same_impedance():
