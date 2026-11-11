@@ -544,7 +544,13 @@ def body_reminders() -> dict:
     waist_delta = (round(waist[0].vita_cm - waist[-1].vita_cm, 1)
                    if len(waist) >= 2 else None)
     tr = nutrition.weight_trend_kg_per_week()
+    with Session(engine) as s:
+        recent = s.exec(select(BodyMeasure).where(BodyMeasure.measured_at >= now - timedelta(days=120))
+                        .order_by(BodyMeasure.measured_at)).all()
+    from . import bodycomp
+    changes = {c["field"]: c for c in bodycomp.weighin_changes(bodycomp.daily_weighins(recent))}
     return {"weigh_due": dw is None or dw >= WEIGH_EVERY_DAYS, "days_since_weigh": dw,
+            "changes": changes,
             "last_weight": round(last_w.weight_kg, 1) if last_w else None,
             "measure_due": dg is None or dg >= MEASURE_EVERY_DAYS, "days_since_measure": dg,
             "trend_kg_week": round(tr["rate"], 2) if tr else None,

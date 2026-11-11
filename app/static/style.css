@@ -428,6 +428,7 @@ a.chip:hover { background: var(--card-hover); text-decoration: none; }
 .gd { font-family: var(--mono); font-size: .75rem; color: var(--muted); }
 .gd.gd-good { color: #34d399; }
 .gd.gd-warn { color: #f59e0b; }
+.glance-metrics .gd, .kpi .gd { display: block; line-height: 1.2; }
 .girth-howto { margin: .6rem 0 .2rem; }
 .girth-howto > summary { cursor: pointer; font-size: .9rem; color: var(--accent); }
 .girth-howto-body { display: grid; grid-template-columns: 170px 1fr; gap: 1.2rem; align-items: start; margin-top: .7rem; }

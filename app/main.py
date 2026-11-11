@@ -497,14 +497,20 @@ def _body_context() -> dict:
         rows = session.exec(select(BodyMeasure)
                             .order_by(BodyMeasure.measured_at.desc()).limit(60)).all()
     if not rows:
-        return {"body_latest": None, "body_series_json": "[]", "body_rows": []}
+        return {"body_latest": None, "body_series_json": "[]", "body_rows": [],
+                "body_changes": [], "body_day": None}
     newest_first = list(rows)
     rows = list(reversed(rows))   # oldest -> newest
-    series = [{"date": r.measured_at.strftime("%Y-%m-%d"),
-               "weight": r.weight_kg, "fat": r.body_fat, "muscle": r.muscle_kg}
-              for r in rows]
+    # una pesata per giorno (re-invii scartati, doppie mediate): grafico e confronti
+    days = bodycomp.daily_weighins(rows)
+    series = [{"date": d["date"].isoformat(),
+               "weight": d["weight_kg"], "fat": d["body_fat"], "muscle": d["muscle_kg"]}
+              for d in days]
     return {"body_latest": rows[-1], "body_series_json": json.dumps(series),
-            "body_rows": newest_first[:20]}
+            "body_rows": newest_first[:20],
+            "body_changes": bodycomp.weighin_changes(days),
+            "body_day": days[-1] if days else None,
+            "body_prev_day": days[-2] if len(days) >= 2 else None}
 
 
 def _girth_context() -> dict:
@@ -3123,9 +3129,16 @@ async def webhook_body(request: Request, background: BackgroundTasks):
 
     now = datetime.utcnow()
     with Session(engine) as session:
-        recent = session.exec(select(BodyMeasure).where(
-            BodyMeasure.measured_at >= now - timedelta(minutes=5))
+        last = session.exec(select(BodyMeasure).where(
+            BodyMeasure.measured_at >= now - timedelta(days=3))
             .order_by(BodyMeasure.measured_at.desc())).first()
+        # Home Assistant al riavvio rimanda l'ultima lettura: stesso peso e stessa
+        # impedenza = non è una nuova pesata, non la registriamo di nuovo
+        if last and last.measured_at < now - timedelta(minutes=5) and \
+                bodycomp.is_repush(last, BodyMeasure(**vals)):
+            logger.info("Body webhook: re-invio della pesata del %s, ignorato", last.measured_at)
+            return JSONResponse({"status": "ok", "duplicato": True})
+        recent = last if last and last.measured_at >= now - timedelta(minutes=5) else None
         m = recent or BodyMeasure(measured_at=now)
         for col, v in vals.items():
             setattr(m, col, v)

@@ -44,18 +44,17 @@
 <section class="card">
   <div class="card-head">
     <h3>Composizione corporea <small class="muted">· bilancia</small></h3>
-    <span class="muted">{{ b.measured_at.strftime("%d/%m/%Y %H:%M") }}</span>
+    <span class="muted">{{ b.measured_at.strftime("%d/%m/%Y %H:%M") }}
+      {%- if body_day and body_day.n > 1 %} · media di {{ body_day.n }} pesate del giorno{% endif %}
+      {%- if body_prev_day %} · confronto col {{ body_prev_day.date.strftime("%d/%m") }}{% endif %}</span>
   </div>
   <section class="kpi-row">
-    {% if b.weight_kg %}<div class="kpi"><span class="kpi-value">{{ "%.1f"|format(b.weight_kg) }}<small> kg</small></span><span class="kpi-label">peso</span></div>{% endif %}
-    {% if b.body_fat %}<div class="kpi"><span class="kpi-value">{{ "%.1f"|format(b.body_fat) }}<small>%</small></span><span class="kpi-label">massa grassa</span></div>{% endif %}
-    {% if b.muscle_kg %}<div class="kpi"><span class="kpi-value">{{ "%.1f"|format(b.muscle_kg) }}<small> kg</small></span><span class="kpi-label">muscolo</span></div>{% endif %}
-    {% if b.water_pct %}<div class="kpi"><span class="kpi-value">{{ "%.1f"|format(b.water_pct) }}<small>%</small></span><span class="kpi-label">acqua</span></div>{% endif %}
-    {% if b.visceral %}<div class="kpi"><span class="kpi-value">{{ "%.1f"|format(b.visceral) }}</span><span class="kpi-label">grasso viscerale</span></div>{% endif %}
-    {% if b.bmi %}<div class="kpi"><span class="kpi-value">{{ "%.1f"|format(b.bmi) }}</span><span class="kpi-label">BMI</span></div>{% endif %}
-    {% if b.bmr %}<div class="kpi"><span class="kpi-value">{{ "%.0f"|format(b.bmr) }}<small> kcal</small></span><span class="kpi-label">metabolismo basale</span></div>{% endif %}
-    {% if b.bone_kg %}<div class="kpi"><span class="kpi-value">{{ "%.1f"|format(b.bone_kg) }}<small> kg</small></span><span class="kpi-label">massa ossea</span></div>{% endif %}
-    {% if b.metabolic_age %}<div class="kpi"><span class="kpi-value">{{ "%.0f"|format(b.metabolic_age) }}<small> anni</small></span><span class="kpi-label">età metabolica</span></div>{% endif %}
+    {% for c in body_changes %}
+    <div class="kpi"><span class="kpi-value">{{ ("%." ~ c.nd ~ "f")|format(c.value) }}{% if c.unit %}<small>{{ '' if c.unit == '%' else ' ' }}{{ c.unit }}</small>{% endif %}</span>
+      <span class="kpi-label">{{ c.label }}</span>
+      {% if c.delta is not none %}<span class="gd {{ c.tone }}" title="rispetto alla pesata del {{ c.prev_date.strftime('%d/%m') }}">{{ '=' if c.delta == 0 else ("%+." ~ c.nd ~ "f")|format(c.delta) ~ (c.unit if c.unit == '%' else '') }} dall'ultima</span>{% endif %}
+    </div>
+    {% endfor %}
   </section>
   <canvas id="bodyChart" height="90"></canvas>
 </section>

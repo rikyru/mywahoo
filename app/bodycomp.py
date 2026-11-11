@@ -179,3 +179,83 @@ def compute(weight: Optional[float], impedance: Optional[float],
         out["metabolic_age"] = round(_metabolic_age(weight, height, age, imp, male), 0)
 
     return out
+
+
+# ------------------------------------------------------------ pesate per giorno
+
+# (campo, etichetta, unità, decimali, verso "buono": -1 scendere è bene, +1 salire, 0 neutro)
+WEIGHIN_FIELDS = [
+    ("weight_kg", "peso", "kg", 1, -1),
+    ("body_fat", "massa grassa", "%", 1, -1),
+    ("muscle_kg", "muscolo", "kg", 1, +1),
+    ("water_pct", "acqua", "%", 1, +1),
+    ("visceral", "grasso viscerale", "", 1, -1),
+    ("bmi", "BMI", "", 1, -1),
+    ("bmr", "metabolismo basale", "kcal", 0, 0),
+    ("bone_kg", "massa ossea", "kg", 1, 0),
+    ("metabolic_age", "età metabolica", "anni", 0, -1),
+]
+_COLS = [f for f, *_ in WEIGHIN_FIELDS]
+# sotto queste variazioni è rumore della bilancia (acqua, ora, cibo): niente colore
+NOISE = {"weight_kg": 0.3, "body_fat": 0.1, "muscle_kg": 0.1, "water_pct": 0.2,
+         "visceral": 0.2, "bmi": 0.1, "metabolic_age": 1}
+
+
+def is_repush(a, b) -> bool:
+    """La lettura b è un re-invio di a (Home Assistant che rimanda l'ultimo valore
+    al riavvio): stesso peso e stessa impedenza, quindi non è una nuova pesata."""
+    if a is None or b is None or a.weight_kg is None or b.weight_kg is None:
+        return False
+    same_w = abs(a.weight_kg - b.weight_kg) < 0.01
+    if a.impedance is not None and b.impedance is not None:
+        return same_w and abs(a.impedance - b.impedance) < 0.5
+    # senza impedenza (manuali): uguale solo se coincidono tutti i campi
+    return same_w and all(getattr(a, c) == getattr(b, c) for c in _COLS)
+
+
+def daily_weighins(rows: list) -> list[dict]:
+    """Letture della bilancia (dalla più vecchia) -> una pesata per giorno:
+    i re-invii identici sono scartati, più pesate vere nello stesso giorno sono
+    mediate campo per campo. [{date, at, n, <campi>}] dalla più vecchia."""
+    kept, prev = [], None
+    for r in rows:
+        if r.weight_kg is None and all(getattr(r, c) is None for c in _COLS):
+            continue
+        if is_repush(prev, r):
+            continue
+        kept.append(r)
+        prev = r
+    days: dict = {}
+    for r in kept:
+        days.setdefault(r.measured_at.date(), []).append(r)
+    out = []
+    for d, rs in sorted(days.items()):
+        day = {"date": d, "at": rs[-1].measured_at, "n": len(rs)}
+        for c in _COLS:
+            vals = [getattr(r, c) for r in rs if getattr(r, c) is not None]
+            day[c] = sum(vals) / len(vals) if vals else None
+        out.append(day)
+    return out
+
+
+def weighin_changes(days: list[dict]) -> list[dict]:
+    """Ultima pesata vs la precedente che ha quel dato: [{field, label, unit, value,
+    delta, prev_date, tone}] per i campi presenti nell'ultima."""
+    if not days:
+        return []
+    last = days[-1]
+    out = []
+    for f, label, unit, nd, good in WEIGHIN_FIELDS:
+        v = last.get(f)
+        if v is None:
+            continue
+        prev = next((d for d in reversed(days[:-1]) if d.get(f) is not None), None)
+        delta = round(v - prev[f], nd if nd else 0) if prev else None
+        noise = NOISE.get(f, 0.5 if nd == 0 else 0.1)
+        tone = ""
+        if delta is not None and good and abs(delta) >= noise:
+            tone = "gd-good" if delta * good > 0 else "gd-warn"
+        out.append({"field": f, "label": label, "unit": unit, "nd": nd,
+                    "value": round(v, nd) if nd else round(v),
+                    "delta": delta, "prev_date": prev["date"] if prev else None, "tone": tone})
+    return out

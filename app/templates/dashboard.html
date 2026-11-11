@@ -87,10 +87,22 @@
 
   <div class="card glance-card">
     <div class="card-head"><h3>Salute</h3><a class="muted" href="/health">Dettagli →</a></div>
+    {% macro wdelta(c) %}{% if c and c.delta is not none %}<span class="gd {{ c.tone }}" title="rispetto alla pesata del {{ c.prev_date.strftime('%d/%m') }}">{{ '=' if c.delta == 0 else ("%+." ~ c.nd ~ "f")|format(c.delta) ~ (c.unit if c.unit == '%' else '') }}</span>{% endif %}{% endmacro %}
     {% if body.last_weight %}
+    {% set ch = body.changes or {} %}
     <div class="glance-metrics body-glance">
-      <div><span class="gm-value">{{ '%.1f'|format(body.last_weight) }}<small>kg</small></span>
-        <span class="gm-label">peso{% if body.days_since_weigh is not none %} · {{ 'oggi' if body.days_since_weigh == 0 else body.days_since_weigh ~ ' gg fa' }}{% endif %}</span></div>
+      <div><span class="gm-value">{{ '%.1f'|format(ch.weight_kg.value if ch.weight_kg else body.last_weight) }}<small>kg</small></span>
+        <span class="gm-label">peso{% if body.days_since_weigh is not none %} · {{ 'oggi' if body.days_since_weigh == 0 else body.days_since_weigh ~ ' gg fa' }}{% endif %}</span>
+        {{ wdelta(ch.weight_kg) }}</div>
+      {% if ch.body_fat %}
+      <div><span class="gm-value">{{ '%.1f'|format(ch.body_fat.value) }}<small>%</small></span>
+        <span class="gm-label">massa grassa</span>{{ wdelta(ch.body_fat) }}</div>{% endif %}
+      {% if ch.muscle_kg %}
+      <div><span class="gm-value">{{ '%.1f'|format(ch.muscle_kg.value) }}<small>kg</small></span>
+        <span class="gm-label">muscolo</span>{{ wdelta(ch.muscle_kg) }}</div>{% endif %}
+      {% if ch.visceral %}
+      <div><span class="gm-value">{{ '%.1f'|format(ch.visceral.value) }}</span>
+        <span class="gm-label">viscerale</span>{{ wdelta(ch.visceral) }}</div>{% endif %}
       {% if body.trend_kg_week is not none %}
       <div><span class="gm-value {{ 'gm-good' if body.trend_kg_week < -0.05 else ('gm-warn' if body.trend_kg_week > 0.1 else '') }}">{{ '%+.2f'|format(body.trend_kg_week) }}<small>kg/sett</small></span>
         <span class="gm-label">trend</span></div>{% endif %}

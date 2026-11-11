@@ -84,12 +84,11 @@ def weight_trend_kg_per_week(days: int = 28, start: datetime | None = None,
         q = q.where(BodyMeasure.measured_at < end)
     with Session(engine) as session:
         rows = session.exec(q.order_by(BodyMeasure.measured_at)).all()
-    # una media per giorno: pesate ripetute (webhook doppi, test) non devono pesare di più
-    by_day: dict = {}
-    for r in rows:
-        if r.weight_kg:
-            by_day.setdefault(r.measured_at.date(), []).append((r.measured_at, r.weight_kg))
-    pts = [(v[0][0], sum(w for _, w in v) / len(v)) for _, v in sorted(by_day.items())]
+    # una pesata per giorno: re-invii identici scartati (anche se a cavallo di due
+    # giorni), pesate doppie mediate — così non pesano di più nella retta
+    from . import bodycomp
+    pts = [(datetime.combine(d["date"], datetime.min.time()), d["weight_kg"])
+           for d in bodycomp.daily_weighins(rows) if d["weight_kg"]]
     if len(pts) < 4:
         return None
     span = (pts[-1][0] - pts[0][0]).total_seconds() / 86400.0
