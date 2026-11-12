@@ -4037,9 +4037,13 @@ def _merge_candidate(session, keep: Workout) -> Workout | None:
 
 def _merge_workouts(session, keep: Workout, absorb: Workout) -> None:
     """Move `absorb`'s measured data + streams into `keep`, then delete `absorb`.
-    `keep` keeps its id, so a PlanSession link and the description survive."""
+    `keep` keeps its id, so a PlanSession link and the description survive.
+    Se `keep` ha già il FIT e `absorb` no (un riepilogo Wahoo/Google della stessa
+    attività), il FIT resta la fonte: dal riepilogo si prendono solo i campi vuoti
+    e la serie del FIT non si tocca."""
+    fit_wins = keep.has_fit and not absorb.has_fit
     for f in _MEASURED_FIELDS:
-        if (v := getattr(absorb, f)):
+        if (v := getattr(absorb, f)) and not (fit_wins and getattr(keep, f)):
             setattr(keep, f, v)
     if absorb.has_fit:
         keep.has_fit, keep.fit_path = True, absorb.fit_path
@@ -4047,7 +4051,10 @@ def _merge_workouts(session, keep: Workout, absorb: Workout) -> None:
 
     stream = session.get(WorkoutStream, absorb.id)
     old = session.get(WorkoutStream, keep.id)
-    if old:
+    if stream and fit_wins and old:
+        session.delete(stream)           # la serie del FIT vale più di quella del riepilogo
+        stream = None
+    if stream and old:
         session.delete(old)
     if stream:
         blob, n = stream.data, stream.n_records

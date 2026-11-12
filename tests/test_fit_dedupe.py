@@ -51,3 +51,24 @@ def test_plan_rows_and_far_activities_untouched(monkeypatch):
     eng = _engine(monkeypatch, [fit, plan, later], plan_wid=2)
     assert main.reconcile_fit_duplicates() == 0
     assert _ids(eng) == {1, 2, 3}
+
+
+def test_plan_with_fit_keeps_its_stream_when_a_summary_folds_in(monkeypatch):
+    """FIT caricato sulla seduta del programma, poi arriva l'import Google della
+    stessa nuotata (senza serie): la serie e i dati del FIT devono restare."""
+    plan = Workout(id=2, name="Nuoto — corso", sport="Swimming", start_date=T, duration_s=4080,
+                   avg_hr=140, max_hr=170, distance_m=2500, has_fit=True, fit_path="x.fit",
+                   manual=True)
+    goog = Workout(id=5, name="Nuoto", sport="Nuoto", start_date=T, duration_s=4100,
+                   avg_hr=143, max_hr=188, calories=600)
+    eng = _engine(monkeypatch, [plan, goog], plan_wid=2)
+    with Session(eng) as s:
+        s.add(db.WorkoutStream(workout_id=2, data=db.pack_streams({"t": [0, 1], "hr": [100, 101]}),
+                               n_records=2))
+        s.commit()
+    assert main.reconcile_plan_duplicates() == 1
+    with Session(eng) as s:
+        keep = s.get(Workout, 2)
+        assert s.get(db.WorkoutStream, 2) is not None
+        assert keep.avg_hr == 140 and keep.max_hr == 170 and keep.calories == 600
+        assert s.get(Workout, 5) is None
