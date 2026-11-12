@@ -3614,6 +3614,10 @@ def workout_detail(request: Request, workout_id: int):
             lap_marks.append({"i": lp["i"], "a": a, "b": a + (lp.get("time_s") or 0),
                               "w": lp.get("avg_power"),
                               "drift": (lp.get("drift") or {}).get("deriva_pct")})
+    elif laps and streams and w.start_date and all(lp.get("start") for lp in laps):
+        # Nuoto: ogni ripetuta con le sue vasche (tempo e stile di ognuna), così sul
+        # grafico della FC si vedono vasche, stili e pause
+        lap_marks = swim_lap_marks(laps, w.start_date)
 
     laps_summary = None
     if laps and is_bike:
@@ -3662,6 +3666,33 @@ def workout_detail(request: Request, workout_id: int):
 
 # FTP proxy: best 20-min estimated power over recent rides × 0.95. Computing the
 # power series for every bike ride is heavy, so cache the result for a while.
+SWIM_STROKES = {"freestyle": "SL", "backstroke": "DO", "breaststroke": "RA",
+                "butterfly": "DE", "drill": "tec", "mixed": "mx", "im": "mx"}
+
+
+def swim_lap_marks(laps: list, start: datetime) -> list:
+    """Ripetute del nuoto per il grafico: {a, b, swim, dist, st, lens:[{a, b, st}]},
+    tempi in secondi dall'inizio. Le vasche sono consecutive dentro la ripetuta
+    (il FIT dà solo la durata di ognuna) e vengono riscalate sulla durata del giro."""
+    out = []
+    for lp in laps:
+        a = (datetime.fromisoformat(lp["start"]) - start).total_seconds()
+        dur = lp.get("time_s") or 0
+        lens = [l for l in lp.get("lengths") or [] if l.get("time_s")]
+        tot = sum(l["time_s"] for l in lens)
+        k = dur / tot if tot else 1.0
+        marks, t = [], a
+        for l in lens:
+            d = l["time_s"] * k
+            marks.append({"a": round(t, 1), "b": round(t + d, 1),
+                          "st": SWIM_STROKES.get(l.get("stroke") or "", "")})
+            t += d
+        out.append({"i": lp.get("i"), "a": round(a, 1), "b": round(a + dur, 1), "swim": True,
+                    "dist": lp.get("distance_m"), "st": SWIM_STROKES.get(lp.get("stroke") or "", ""),
+                    "lens": marks})
+    return out
+
+
 _FTP_CACHE: dict = {}
 _FTP_TTL = timedelta(hours=6)
 

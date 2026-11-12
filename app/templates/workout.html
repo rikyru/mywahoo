@@ -427,6 +427,9 @@ if (streams) {
     scales["y_" + key] = { position: j % 2 ? "right" : "left", display: "auto",
       grid: { drawOnChartArea: j === 0 }, ticks: { color }, title: { display: window.innerWidth > 640, text: label, color } };
   });
+  const STROKE_COL = { SL: "#4c8dff", DO: "#a78bfa", RA: "#34d399", DE: "#f59e0b", tec: "#9aa4b2", mx: "#22d3ee", "": "#4c8dff" };
+  const STROKE_NAME = { SL: "stile libero", DO: "dorso", RA: "rana", DE: "delfino", tec: "tecnica", mx: "misti" };
+  const SWIM = LAPS.some(l => l.swim);
   const lapBands = {
     id: "lapBands",
     beforeDatasetsDraw(c) {
@@ -436,6 +439,24 @@ if (streams) {
       LAPS.forEach((l, n) => {
         const xa = Math.max(x.getPixelForValue(l.a), x.left), xb = Math.min(x.getPixelForValue(l.b), x.right);
         if (xb <= xa) return;
+        if (l.swim) {          // nuoto: una fascia per vasca, colore = stile; pause vuote
+          const segs = l.lens.length ? l.lens : [{ a: l.a, b: l.b, st: l.st }];
+          segs.forEach((s, k) => {
+            const sa = Math.max(x.getPixelForValue(s.a), x.left), sb = Math.min(x.getPixelForValue(s.b), x.right);
+            if (sb <= sa) return;
+            ctx.fillStyle = (STROKE_COL[s.st] || STROKE_COL[""]) + "2e";
+            ctx.fillRect(sa, top + 16, sb - sa, bot - top - 16);
+            if (k && sb - sa > 7) {   // stacco tra le vasche, solo se c'è spazio (zoom)
+              ctx.fillStyle = "rgba(255,255,255,.28)";
+              ctx.fillRect(sa, top + 16, 1, bot - top - 16);
+            }
+          });
+          if (xb - xa > 18) {
+            ctx.fillStyle = STROKE_COL[l.st] || "#9aa4b2";
+            ctx.fillText(l.dist + (xb - xa > 46 && l.st ? " " + l.st : ""), (xa + xb) / 2, top + 11);
+          }
+          return;
+        }
         ctx.fillStyle = n % 2 ? "rgba(255,255,255,.035)" : "rgba(255,255,255,0)";
         ctx.fillRect(xa, top, xb - xa, bot - top);
         if (l.drift != null && xb - xa > 34) {
@@ -452,7 +473,10 @@ if (streams) {
   card.innerHTML = `<div class="card-head"><h3>Andamento</h3><button class="chip" type="button" id="zoomReset">reset zoom</button></div>
     <div style="position:relative;height:clamp(300px,48vh,460px);"><canvas class="chart-free"></canvas></div>
     <p class="muted" style="font-size:.82rem;">Clic sulla legenda per sovrapporre/nascondere le serie · trascina per zoomare
-      (pizzica sul telefono) · bande = giri${LAPS.some(l => l.drift != null) ? ", in alto la deriva FC del blocco" : ""}.</p>`;
+      (pizzica sul telefono) · ${SWIM ? "fasce = vasche (vuoto = pausa), in alto i metri della ripetuta"
+        : "bande = giri" + (LAPS.some(l => l.drift != null) ? ", in alto la deriva FC del blocco" : "")}.</p>
+    ${SWIM ? `<p class="swim-legend">${[...new Set(LAPS.flatMap(l => (l.lens.length ? l.lens : [l]).map(s => s.st)))]
+        .filter(s => STROKE_NAME[s]).map(s => `<span><i style="background:${STROKE_COL[s]}"></i>${STROKE_NAME[s]}</span>`).join("")}</p>` : ""}`;
   host.appendChild(card);
   const FINE = window.matchMedia("(pointer:fine)").matches;
   const chart = new Chart(card.querySelector("canvas"), {
