@@ -39,6 +39,31 @@ _EXERCISES: dict[str, tuple[list[str], str]] = {
                  "Prono, solleva insieme braccia e gambe, pausa breve in alto."),
     "Bird dog": (["bird dog"],
                  "Quadrupedia, estendi braccio e gamba opposti tenendo il bacino stabile."),
+    "Affondo bulgaro": (["affondo bulgaro", "affondi bulgari", "bulgarian split squat",
+                         "split squat bulgaro"],
+                        "Piede dietro su una sedia (collo del piede), quello davanti a un passo lungo: "
+                        "scendi dritto in 3\", ginocchio davanti in linea col piede (non verso "
+                        "l'interno), risali spingendo col tallone. All'inizio una mano al muro."),
+    "Squat su una gamba": (["squat su una gamba", "squat monopodalico", "squat a una gamba",
+                            "pistol squat", "squat alla sedia su una gamba"],
+                           "Su una gamba davanti a una sedia, l'altra sollevata avanti: scendi "
+                           "lento fino a sfiorarla, senza lasciarti cadere, e risali. Ginocchio "
+                           "in linea col piede; appoggio più basso quando ne fai 10 puliti."),
+    "Stacco a una gamba": (["stacco a una gamba", "stacco monopodalico", "single leg deadlift",
+                            "stacco rumeno a una gamba"],
+                           "Ginocchio d'appoggio appena piegato, bacino indietro e busto avanti "
+                           "come una leva, schiena dritta, gamba libera tesa dietro. Scendi finché "
+                           "tira dietro la coscia, non oltre. Peso nella mano opposta."),
+    "Ponte su una gamba": (["ponte su una gamba", "ponte monopodalico", "single leg glute bridge",
+                            "hip thrust a una gamba"],
+                           "Come il ponte, con una gamba sola a terra: spingi col tallone, pausa "
+                           "2\" in alto, bacino dritto senza ruotare."),
+    "Step-up": (["step-up", "step up", "salita sulla sedia"],
+                "Piede intero sulla sedia (stabile, contro il muro), sali spingendo solo con "
+                "quella gamba senza slancio dalla gamba a terra, scendi lento."),
+    "Squat jump": (["squat jump", "salto in squat", "jump squat"],
+                   "Mezzo squat e salto esplosivo; atterra morbido sull'avampiede poi tallone, "
+                   "ginocchia in linea. Al primo fastidio alle ginocchia, stop."),
     "Wall sit": (["wall sit", "sedia al muro"],
                  "Schiena al muro, cosce parallele al pavimento, tieni la posizione."),
     "Calf raise": (["calf raise", "calf raises", "sollevamenti polpacci"],

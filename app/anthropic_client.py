@@ -758,6 +758,29 @@ la settimana rispetto a quanto l'atleta ha già fatto).
   comunque la seduta strutturata. Bici outdoor: descrivi l'uscita con zone e
   intensità, "structure": null. Per gli altri sport "structure": null.
 - Descrizioni concrete: esercizi con serie × ripetizioni (o tempi) e recuperi.
+- FORZA GAMBE (focus gambe/carico) a casa senza bilanciere: lo scopo è tenere il
+  muscolo in deficit calorico e dare forza alla pedalata, non il "tono" con tante
+  ripetizioni. Questa regola vale anche se le sedute precedenti erano circuiti.
+  · Esercizi su una gamba: affondo bulgaro, squat su una gamba (verso una sedia),
+    stacco a una gamba, ponte su una gamba, step-up. 3-4 serie × 6-10 ripetizioni
+    per gamba, discesa in 3", recupero 90-120" tra le serie: lavoro a serie, non a giri.
+  · Intensità vera: chiudi la serie a 1-2 ripetizioni dal cedimento (2-3 nelle
+    prime sedute e nello scarico). Se con quel margine si superano 12 ripetizioni
+    l'esercizio è troppo facile: zavorra o variante più difficile.
+  · Zavorra: zaino con bottiglie o libri, se è nell'attrezzatura; i pesetti da
+    pochi kg non bastano per le gambe. Le prime 2 sedute di questo tipo: senza
+    zavorra, per imparare la tecnica.
+  · Progressione: gli STESSI esercizi per settimane; prima si sale di ripetizioni
+    fino a 10, poi +2-3 kg nello zaino (o variante più difficile) e si torna a 6-8.
+    Se nelle ultime sedute svolte c'è il carico usato, riparti da lì.
+  · Isometrie (wall sit) e calf raise solo come complementari brevi, mai come
+    lavoro principale. Salti esplosivi (squat jump 3×5, atterraggio morbido) solo
+    dopo le prime settimane, mai nello scarico né nella settimana di un test.
+  · Scarico: stessi esercizi, metà delle serie, 3 ripetizioni di margine.
+    Settimana di un test FTP: solo attivazione leggera, niente indolenzimento.
+  · Per ogni esercizio una riga di tecnica (ginocchio in linea col piede, non cade
+    verso l'interno; appoggio e busto) e la regola: dolore articolare acuto = stop
+    e riduci l'ampiezza; il bruciore muscolare va bene.
 - Se lo slot ha "tema_del_coach", la seduta DEVE realizzare quel tema: è la
   periodizzazione decisa per arrivare all'obiettivo di stagione. "fase_del_blocco"
   dice a cosa serve il blocco.
@@ -790,6 +813,11 @@ Regole:
   l'ultima esecuzione mostra deriva FC bassa sui blocchi, c'è margine.
 - Forza/corpo libero: tema coerente con la fase e con la bici del weekend (niente
   gambe pesanti il giorno prima della seduta di qualità).
+- Forza GAMBE: esercizi su una gamba (affondo bulgaro, squat su una gamba,
+  stacco a una gamba, ponte su una gamba) a serie, NON circuiti a giri; progressione
+  a blocchi: prime sedute senza zavorra per la tecnica, poi zaino zavorrato e
+  serie 6-10 ripetizioni, salti (squat jump) dopo le prime settimane; scarico =
+  stessi esercizi a metà serie; settimana di un test = solo attivazione.
 - Considera dimagrimento e recupero (deficit calorico, nuoto pesante 2 volte).
 - ASSENZE: in ogni settimana "assenze" (con gli sport ancora possibili) e
   "slot_che_restano" dicono quali sedute esistono davvero: dai un tema SOLO a
