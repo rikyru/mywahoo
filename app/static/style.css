@@ -724,3 +724,18 @@ a.chip:hover { background: var(--card-hover); text-decoration: none; }
     border-radius: var(--radius-sm); padding: .55rem 1rem; font: 600 .95rem inherit; font-family: inherit; }
   input[type=checkbox], input[type=radio] { width: 1.15rem; height: 1.15rem; }
 }
+/* home: titolo della seduta di oggi -> pagina della seduta */
+.today-title { font-weight: 600; color: var(--text); text-decoration: none; }
+.today-title:hover { text-decoration: underline; }
+/* seduta raggiunta da un link #ses<id>: evidenziata */
+.plan-session { scroll-margin-top: 4.5rem; }
+.plan-session:target { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* fatica percepita (RPE) quando si segna una seduta fatta */
+.rpe-field { display: flex; flex-direction: column; gap: .3rem; }
+.rpe-row { display: flex; align-items: center; gap: .6rem; }
+.rpe-row input[type=range] { flex: 1; accent-color: var(--accent); }
+.rpe-field.is-unset input[type=range] { opacity: .45; }
+.rpe-out { min-width: 9.5rem; font-variant-numeric: tabular-nums; font-size: .9rem; }
+.rpe-ends { display: flex; justify-content: space-between; font-size: .72rem; color: var(--muted); }
+.rpe-head { font-size: .78rem; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+.rpe-field input[type=range] { padding: 0; background: none; border: 0; }

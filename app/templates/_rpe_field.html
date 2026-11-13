@@ -1,0 +1,24 @@
+{# Fatica percepita 1-10 quando si segna una seduta fatta. Finché non si tocca il
+   cursore resta "non indicata" (campo vuoto): l'AI la stima dalla descrizione. #}
+{% macro rpe_field() %}
+<div class="rpe-field is-unset">
+  <span class="rpe-head">Fatica percepita <span class="muted">(facoltativa: senza FC è quella che conta per il carico)</span></span>
+  <div class="rpe-row">
+    <input type="range" min="1" max="10" step="1" value="5" aria-label="Fatica percepita da 1 a 10"
+           oninput="rpeSet(this)">
+    <output class="rpe-out">non indicata</output>
+  </div>
+  <div class="rpe-ends"><span>1 riposo</span><span>5 moderata</span><span>10 al limite</span></div>
+  <input type="hidden" name="done_rpe" value="">
+</div>
+<script>
+window.rpeSet = window.rpeSet || function (r) {
+  const L = {1: "riposo", 2: "molto facile", 3: "facile", 4: "tranquilla", 5: "moderata",
+             6: "un po' impegnativa", 7: "impegnativa", 8: "dura", 9: "molto dura", 10: "al limite"};
+  const box = r.closest(".rpe-field");
+  box.classList.remove("is-unset");
+  box.querySelector("input[name=done_rpe]").value = r.value;
+  box.querySelector(".rpe-out").textContent = r.value + " · " + L[r.value];
+};
+</script>
+{% endmacro %}

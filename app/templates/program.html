@@ -216,7 +216,7 @@
 {% for iso, day in days.items() %}
 <h2 class="seg-h2">{{ day.label }}{% if iso == today %} · oggi{% endif %}</h2>
 {% for v in day["items"] %}{% set s = v.ps %}
-<section class="card plan-session {% if s.done or s.skipped %}plan-session-done{% endif %}">
+<section class="card plan-session {% if s.done or s.skipped %}plan-session-done{% endif %}" id="ses{{ s.id }}">
   <div class="plan-session-head">
     <span class="plan-session-icon">{{ sport_icon(s.sport) }}</span>
     <div class="plan-session-info">

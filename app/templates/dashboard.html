@@ -124,7 +124,7 @@
         <span class="today-icon">{{ sport_icon(s.sport) }}</span>
         <div class="glance-next-info">
           <span class="today-kicker">Oggi{% if s.done %} · fatta ✓{% elif s.skipped %} · saltata{% endif %}</span>
-          <strong>{{ s.title }}</strong>
+          <a class="today-title" href="{{ session_url(s) }}" title="Vedi cosa fare">{{ s.title }} <span class="muted">→</span></a>
           <span class="muted">{{ s.duration_min }} min
             {%- if s.rpe_target %} · RPE {{ '%g'|format(s.rpe_target) }}{% endif %}
             {%- if v.steps %} · <a href="/program/session/{{ s.id }}/workout.zwo">.zwo</a>{% endif %}</span>

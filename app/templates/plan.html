@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_rpe_field.html" import rpe_field %}
 {% block title %}{{ plan.title }} — {{ app_name }}{% endblock %}
 {% block content %}
 
@@ -35,7 +36,7 @@
 </section>
 
 {% for s in sessions %}
-<section class="card plan-session {% if s.done %}plan-session-done{% endif %}">
+<section class="card plan-session {% if s.done %}plan-session-done{% endif %}" id="ses{{ s.id }}">
   <div class="plan-session-head">
     <span class="plan-session-icon">{{ sport_icon(s.sport) }}</span>
     <div class="plan-session-info">
@@ -78,6 +79,7 @@
                  value="{{ (s.date or now).strftime('%Y-%m-%d') }}">
         </label>
       </div>
+      {{ rpe_field() }}
       <button type="submit" class="btn">Conferma fatto</button>
     </form>
   </details>

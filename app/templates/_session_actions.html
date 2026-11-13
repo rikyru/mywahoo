@@ -1,6 +1,7 @@
 {# Azioni su una seduta del programma (Fatta / Non la faccio / Modifica / Ripristina):
    le stesse nella pagina Programma e nella card "Oggi" della dashboard.
    next = pagina a cui tornare dopo l'azione. #}
+{% from "_rpe_field.html" import rpe_field %}
 {% macro session_actions(s, plan_id, pick_one=False, next="/program", compact=False) %}
   {% if s.done and s.workout_id %}
   <p class="muted"><a href="/workout/{{ s.workout_id }}">→ allenamento registrato</a></p>
@@ -22,6 +23,7 @@
           <label>Durata (min) <input type="number" name="done_min" value="{{ s.duration_min }}" min="0"></label>
           <label>Quando <input type="date" name="done_date" value="{{ s.date.strftime('%Y-%m-%d') if s.date else '' }}"></label>
         </div>
+        {{ rpe_field() }}
         <button type="submit" class="btn">Conferma</button>
       </form>
     </details>

@@ -2057,7 +2057,7 @@ def _safe_next(nxt: str, fallback: str) -> str:
 @app.post("/plans/{plan_id}/session/{sid}/done", dependencies=[Depends(require_auth)])
 async def plan_session_done(plan_id: int, sid: int, done_notes: str = Form(""),
                             done_min: str = Form(""), done_date: str = Form(""),
-                            next: str = Form("")):
+                            done_rpe: str = Form(""), next: str = Form("")):
     """Mark a session done, recording what was *actually* done (defaults to the
     planned session) as the workout notes, so the AI can judge the real load."""
     back = _safe_next(next, f"/plans/{plan_id}")
@@ -2076,8 +2076,12 @@ async def plan_session_done(plan_id: int, sid: int, done_notes: str = Form(""),
     # Home sessions carry no heart rate: ask the AI to rate the effort from the
     # description so the load model sees more than a per-sport average. Best
     # effort — a failure here must not lose the fact that the session was done.
-    rpe = None
-    if notes:
+    # fatica indicata col cursore: vale più della stima dell'AI (che allora non serve)
+    try:
+        rpe = max(1.0, min(10.0, float(done_rpe.replace(",", ".")))) if done_rpe.strip() else None
+    except ValueError:
+        rpe = None
+    if rpe is None and notes:
         try:
             rpe = await anthropic_client.estimate_rpe(
                 title, sport, mins, notes, profilemod.ai_context())
@@ -3217,8 +3221,15 @@ def _upcoming_sessions(days: int = 7, limit: int = 4) -> list:
         if prog and prog.plan_id:
             q = q.where(PlanSession.plan_id == prog.plan_id)
         rows = session.exec(q.order_by(PlanSession.date)).all()
-    return [{"s": s, "plan": p, "url": "/program" if s.kind else f"/plans/{p.id}"}
-            for s, p in rows][:limit]
+    return [{"s": s, "plan": p, "url": _session_url(s)} for s, p in rows][:limit]
+
+
+def _session_url(ps: PlanSession) -> str:
+    """Pagina della seduta, scrollata su di lei (ancora #ses<id>)."""
+    return (f"/program#ses{ps.id}" if ps.kind else f"/plans/{ps.plan_id}#ses{ps.id}")
+
+
+templates.env.globals["session_url"] = _session_url
 
 
 # Google Health needs ~9s per call, far too slow to block the dashboard: the card
