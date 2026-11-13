@@ -428,7 +428,8 @@ const esc = s => String(s).replace(/[<>&]/g, c => ({ "<": "&lt;", ">": "&gt;", "
     const cells = (d.metrics || []).map(m =>
       `<div><span class="gm-value">${esc(m.value)}<small>${esc(m.unit)}</small></span>
          <span class="gm-label">${esc(m.label)}</span></div>`);
-    if (d.sleep_h) cells.push(`<div><span class="gm-value">${d.sleep_h}<small>h</small></span>
+    if (d.sleep_min) cells.push(`<div><span class="gm-value">${Math.floor(d.sleep_min / 60)}<small>h</small>
+        ${String(d.sleep_min % 60).padStart(2, "0")}<small>m</small></span>
         <span class="gm-label">sonno medio</span></div>`);
     if (cells.length) parts.push(`<div class="glance-metrics">${cells.join("")}</div>`);
     if (!parts.length) parts.push('<p class="muted">Nessun dato negli ultimi 7 giorni.</p>');

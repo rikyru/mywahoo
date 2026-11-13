@@ -3267,6 +3267,8 @@ async def api_health_summary():
                                 latest("calories_burned")) if m],
         "sleep_h": (round(sum(n["asleep_min"] for n in nights) / len(nights) / 60, 1)
                     if nights else None),
+        "sleep_min": (round(sum(n["asleep_min"] for n in nights) / len(nights))
+                      if nights else None),
         "nights": len(nights),
         "stale_days": _health_stale_days(data),   # connected but data stopped flowing
     }
