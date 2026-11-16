@@ -38,8 +38,8 @@
         <button class="btn btn-secondary" id="g-pause" disabled>Pausa</button>
         <button class="btn btn-secondary" id="g-skip" disabled>Fatto / salta ▸</button>
       </div>
-      <p class="muted tl-foot">Mani alzate sopra la testa per un secondo = «fatto» (fine esercizio o salta il recupero).
-        Gli esercizi che riconosco li conto io; gli altri a tempo o con le mani alzate.</p>
+      <p class="muted tl-foot">Webcam facoltativa. Con la webcam conto io le ripetizioni degli esercizi spuntati
+        e le mani alzate sopra la testa per un secondo = «fatto»; senza, «Fatto» o la barra spaziatrice.</p>
       <p><a href="#" id="g-refresh" class="muted tl-foot">la sequenza non torna? rileggi la seduta</a></p>
       <div id="g-end" hidden>
         <h3>Fatto! 💪</h3>
@@ -429,9 +429,22 @@ function renderBlocks() {
     li.textContent = (b.title ? b.title + ": " : "") + (b.rounds > 1 ? `${b.rounds} × ` : "") +
       (exs.length > 3 ? exs.length + " esercizi" : exs.join(", ")) + (b.rest ? ` · rec. ${b.rest}″` : "");
     if (bi === curB && curIt.round) li.textContent += `  — giro ${curIt.round}/${curIt.rounds}`;
+    b.exercises.filter((e) => e.reps && e.canon && P[e.canon]).forEach((e) => {
+      const lab = document.createElement("label"); lab.className = "g-cam";
+      const cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = camOn(e);
+      cb.addEventListener("change", () => setCam(e, cb.checked));
+      lab.append(cb, ` conta con la webcam: ${e.name}`);
+      li.append(lab);
+    });
     ol.append(li);
   });
 }
+
+// conteggio con la webcam: scelta per esercizio, ricordata sul dispositivo.
+// Di base sì per le gambe, no per le braccia (flessioni: difficili da inquadrare).
+function camPrefs() { try { return JSON.parse(localStorage.getItem("g-cam") || "{}"); } catch (_) { return {}; } }
+function camOn(e) { const v = camPrefs()[e.canon]; return v == null ? P[e.canon].kind !== "elbow" : v; }
+function setCam(e, on) { const c = camPrefs(); c[e.canon] = on; try { localStorage.setItem("g-cam", JSON.stringify(c)); } catch (_) {} }
 
 function setDeadline(sec) { G.deadline = performance.now() + sec * 1000; G.marks = new Set(); }
 
@@ -457,7 +470,7 @@ function gNext() {
   $("tl-what").hidden = false;
   $("tl-what").textContent = workLabel(it, true) + (it.rounds > 1 ? ` · ${it.round}/${it.rounds}` : "") +
     (e.note ? " — " + e.note : "");
-  G.tracked = !!(p && e.reps);
+  G.tracked = !!(p && e.reps && running && camOn(e));
   if (e.secs) {
     setDeadline(e.secs);
     say(`${workLabel(it)}. Via`, true, true);
@@ -467,7 +480,7 @@ function gNext() {
     say(`${workLabel(it)}. Via`, true, true);
   } else {
     $("tl-big").textContent = `× ${e.reps}`;
-    say(`${workLabel(it)}. Alza le mani quando hai finito`, true, true);
+    say(`${workLabel(it)}. ` + (running ? "Alza le mani quando hai finito" : "Premi fatto quando hai finito"), true, true);
   }
 }
 
@@ -547,8 +560,8 @@ async function gLoad(refresh) {
     if (d.done) $("g-title").append(" ", Object.assign(document.createElement("span"), { className: "muted", textContent: "(già segnata fatta)" }));
     if (d.done) $("g-form").hidden = true;
     renderBlocks();
-    $("g-start").disabled = !running;
-    if (!running) status("Accendi la webcam per iniziare.");
+    $("g-start").disabled = false;
+    if (!running) status("La webcam è facoltativa: senza, i tempi e i recuperi vanno da soli e le ripetizioni le chiudi con «Fatto» (o la barra spaziatrice).");
   } catch (e) { $("g-title").textContent = "Non riesco a leggere la seduta: " + e.message; }
 }
 
@@ -574,6 +587,10 @@ if ($("g-panel")) {
     $("g-pause").textContent = G.paused ? "Riprendi" : "Pausa";
   });
   $("g-skip").addEventListener("click", () => { if (G && !G.paused) gComplete("salto"); });
+  document.addEventListener("keydown", (e) => {
+    if (e.code !== "Space" || !G || G.paused || /INPUT|TEXTAREA|SELECT|BUTTON/.test(e.target.tagName)) return;
+    e.preventDefault(); gComplete("salto");
+  });
 }
 
 // aggancio per i test automatici (simulazione delle ripetizioni senza webcam)
