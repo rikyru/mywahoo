@@ -739,3 +739,28 @@ a.chip:hover { background: var(--card-hover); text-decoration: none; }
 .rpe-ends { display: flex; justify-content: space-between; font-size: .72rem; color: var(--muted); }
 .rpe-head { font-size: .78rem; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
 .rpe-field input[type=range] { padding: 0; background: none; border: 0; }
+
+/* controllo tecnica da video */
+.fc-dialog { width: min(640px, calc(100vw - 24px)); max-height: calc(100vh - 32px); padding: 0;
+  background: var(--card); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius); }
+.fc-dialog::backdrop { background: rgba(0, 0, 0, .6); }
+.fc-head { display: flex; justify-content: space-between; align-items: center; padding: 12px 16px;
+  border-bottom: 1px solid var(--border-soft); margin: 0; }
+.fc-body { padding: 12px 16px 16px; display: flex; flex-direction: column; gap: 10px; }
+.fc-body label { display: flex; flex-direction: column; gap: 4px; }
+.fc-body select, .fc-body input[type=text] { width: 100%; }
+.fc-status:empty { display: none; }
+.fc-thumbs { display: grid; grid-template-columns: repeat(8, 1fr); gap: 3px; }
+.fc-thumbs:empty { display: none; }
+.fc-thumbs figure { margin: 0; position: relative; }
+.fc-thumbs img { width: 100%; display: block; border-radius: 4px; }
+.fc-thumbs figcaption { position: absolute; top: 2px; left: 4px; font-size: 11px; color: #fff;
+  text-shadow: 0 0 3px #000; }
+.fc-verdict { padding: 8px 10px; border-radius: var(--radius-sm); background: var(--accent-soft); margin: 0; }
+.fc-verdict.fc-good { background: var(--good-soft); }
+.fc-verdict.fc-bad { background: var(--bad-soft); }
+.fc-verdict.fc-warn { background: rgba(251, 191, 36, .14); }
+#fc-out h4 { margin: 12px 0 4px; }
+#fc-out ul, #fc-out ol { margin: 0; padding-left: 20px; }
+#fc-out li { margin-bottom: 6px; }
+.fc-foot { font-size: 12px; margin: 0; }

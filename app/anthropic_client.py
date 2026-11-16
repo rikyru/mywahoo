@@ -889,6 +889,45 @@ dillo). Se un voto manca, dillo in una frase senza inventare. Tono diretto, nien
 frasi motivazionali vuote."""
 
 
+FORM_CHECK_PROMPT = """Sei un preparatore atletico e controlli la TECNICA di un esercizio da fotogrammi
+estratti in ordine da un video dell'atleta (a casa, ripreso col telefono). Ricevi
+nome dell'esercizio, criteri di esecuzione corretta, da che lato è ripreso e i
+fotogrammi numerati (1 = inizio). Guarda soprattutto: ginocchio in linea col piede
+o che cade verso l'interno, profondità, posizione del busto e della schiena,
+rotazione del bacino, ampiezza del passo, appoggio del piede, simmetria.
+Regole: giudica SOLO ciò che si vede; se l'inquadratura non permette di valutare
+un punto (lato sbagliato, corpo tagliato, buio) dillo in "limiti" invece di
+inventare. Non puoi vedere la velocità di esecuzione: non giudicarla. Tono diretto,
+italiano, frasi brevi e pratiche. Al massimo 3 errori, dal più importante.
+Rispondi SOLO con JSON valido, senza testo attorno:
+{"giudizio": "buona" | "da sistemare" | "rischiosa" | "non valutabile",
+ "sintesi": "1-2 frasi",
+ "bene": ["cosa è fatto bene", ...],
+ "errori": [{"problema": "...", "fotogrammi": [numeri], "correzione": "cosa fare alla prossima serie"}],
+ "limiti": "cosa non si è potuto valutare e come riprendersi la prossima volta, o stringa vuota"}"""
+
+
+async def form_check(exercise: str, cues: str, view: str, notes: str,
+                     frames: list[str]) -> dict | None:
+    """Giudizio sulla tecnica di un esercizio da fotogrammi JPEG (data URL)."""
+    text = _dumps({"esercizio": exercise, "criteri": cues,
+                   "ripreso": view or "non indicato", "note_atleta": notes or "",
+                   "fotogrammi": len(frames)})
+    if effective_provider() == "openai":
+        content = [{"type": "text", "text": text}] + [
+            {"type": "image_url", "image_url": {"url": f, "detail": "low"}} for f in frames]
+    else:
+        content = [{"type": "text", "text": text}]
+        for f in frames:
+            head, _, data = f.partition(",")
+            mt = head[5:].split(";")[0] or "image/jpeg"
+            content.append({"type": "image", "source": {"type": "base64", "media_type": mt,
+                                                        "data": data}})
+    raw = await _call_messages(FORM_CHECK_PROMPT, [{"role": "user", "content": content}])
+    d = _json_object(raw)
+    return d if isinstance(d, dict) else None
+
+
 async def weekly_report_text(payload: dict) -> str:
     """Commento della pagella settimanale (i voti li calcola il codice)."""
     if (who := _profile.ai_context()):

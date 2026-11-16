@@ -108,6 +108,8 @@ def fmt_day(d) -> str:
 templates.env.filters["duration"] = fmt_duration
 templates.env.filters["it_day"] = fmt_day
 templates.env.filters["exercise_links"] = exercisesmod.linkify
+templates.env.filters["exercise_names"] = exercisesmod.found
+templates.env.globals["exercise_names_all"] = exercisesmod.canonical_names
 def sport_icon(sport: str) -> str:
     s = (sport or "").lower()
     if any(k in s for k in ("swim", "nuot")):
@@ -775,6 +777,36 @@ def exercises_page(request: Request):
     how-to video link each."""
     return templates.TemplateResponse(request, "exercises.html",
                                       {"exercises": exercisesmod.catalog()})
+
+
+FORM_CHECK_MAX_FRAMES = 16
+FORM_CHECK_MAX_FRAME_B = 400_000     # data URL; i fotogrammi arrivano già ridotti dal browser
+
+
+@app.post("/api/form-check", dependencies=[Depends(require_auth)])
+async def form_check(request: Request):
+    """Controllo tecnica: fotogrammi estratti nel browser da un video
+    dell'esercizio -> giudizio dell'AI (vision)."""
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Richiesta non valida."}, status_code=400)
+    name = str(body.get("exercise") or "").strip()[:80]
+    frames = [f for f in body.get("frames") or []
+              if isinstance(f, str) and f.startswith("data:image/") and len(f) <= FORM_CHECK_MAX_FRAME_B]
+    if not name:
+        return JSONResponse({"error": "Scegli l'esercizio."}, status_code=400)
+    if len(frames) < 3:
+        return JSONResponse({"error": "Video troppo corto o non leggibile."}, status_code=400)
+    try:
+        res = await anthropic_client.form_check(
+            name, exercisesmod.cues(name), str(body.get("view") or "")[:40],
+            str(body.get("notes") or "")[:300], frames[:FORM_CHECK_MAX_FRAMES])
+    except anthropic_client.AnthropicError as e:
+        return JSONResponse({"error": str(e)}, status_code=502)
+    if not res:
+        return JSONResponse({"error": "Nessuna risposta leggibile dall'AI, riprova."}, status_code=502)
+    return JSONResponse(res)
 
 
 @app.get("/health", response_class=HTMLResponse, dependencies=[Depends(require_auth)])

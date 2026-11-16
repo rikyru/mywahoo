@@ -126,3 +126,18 @@ def linkify(text: str) -> Markup:
                 f'class="ex-link" title="{escape(cues)}">{shown} ▶</a>')
 
     return Markup(_PATTERN.sub(repl, safe))
+
+
+def found(text: str) -> list[str]:
+    """Canonical names of the glossary exercises mentioned in `text`, in order of
+    first appearance (for the "controlla la tecnica" picker)."""
+    out: list[str] = []
+    for m in _PATTERN.finditer(text or ""):
+        name = _ALIAS.get(m.group(0).lower())
+        if name and name not in out:
+            out.append(name)
+    return out
+
+
+def cues(name: str) -> str:
+    return (_EXERCISES.get(name) or ((), ""))[1]

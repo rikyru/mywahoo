@@ -1,0 +1,148 @@
+{# Controllo tecnica da video: il browser estrae i fotogrammi (niente upload del
+   video), il server li passa all'AI vision. Aperto da qualunque bottone
+   .fc-open con data-ex = lista JSON degli esercizi da proporre. #}
+<dialog id="fc-dialog" class="fc-dialog" data-all='{{ exercise_names_all() | tojson }}'>
+  <form method="dialog" class="fc-head">
+    <strong>📹 Controlla la tecnica</strong>
+    <button class="btn btn-secondary btn-sm" aria-label="Chiudi">✕</button>
+  </form>
+  <div class="fc-body">
+    <label>Esercizio <select id="fc-ex"></select></label>
+    <label>Ripreso
+      <select id="fc-view">
+        <option value="di fronte">di fronte — ginocchia, bacino</option>
+        <option value="di lato">di lato — profondità, busto</option>
+        <option value="da dietro">da dietro — bacino, appoggio</option>
+      </select>
+    </label>
+    <label>Video di una serie <span class="muted">(20–60 s, telefono fermo a 2–3 m, all'altezza delle anche, corpo intero)</span>
+      <input type="file" id="fc-file" accept="video/*">
+    </label>
+    <label>Note <span class="muted">(facoltative)</span>
+      <input type="text" id="fc-notes" maxlength="300" placeholder="es. gamba destra, zaino 4 kg, sento il ginocchio">
+    </label>
+    <button type="button" class="btn" id="fc-go">Analizza</button>
+    <p class="muted fc-status" id="fc-status"></p>
+    <div class="fc-thumbs" id="fc-thumbs"></div>
+    <div id="fc-out"></div>
+    <p class="muted fc-foot">Il video resta sul telefono: all'AI vanno solo 16 fotogrammi ridotti.
+      Non vede la velocità di esecuzione.</p>
+  </div>
+</dialog>
+<script>
+(function () {
+  const dlg = document.getElementById("fc-dialog");
+  if (!dlg) return;
+  const $ = (id) => document.getElementById(id);
+  const N = 16, MAX_SIDE = 512;
+  let allNames = [];
+
+  document.addEventListener("click", (e) => {
+    const b = e.target.closest(".fc-open");
+    if (!b) return;
+    e.preventDefault();
+    let names = [];
+    try { names = JSON.parse(b.dataset.ex || "[]"); } catch (_) {}
+    const sel = $("fc-ex");
+    sel.innerHTML = "";
+    (names.length ? names : allNames).forEach((n) => sel.add(new Option(n, n)));
+    $("fc-status").textContent = ""; $("fc-out").innerHTML = ""; $("fc-thumbs").innerHTML = "";
+    dlg.showModal();
+  });
+  try { allNames = JSON.parse(dlg.dataset.all || "[]"); } catch (_) {}
+
+  function once(el, ev, ms) {
+    return new Promise((res, rej) => {
+      const t = setTimeout(() => rej(new Error("timeout")), ms);
+      el.addEventListener(ev, () => { clearTimeout(t); res(); }, { once: true });
+    });
+  }
+
+  async function extract(file) {
+    const v = document.createElement("video");
+    v.muted = true; v.playsInline = true; v.preload = "auto";
+    v.src = URL.createObjectURL(file);
+    try {
+      await once(v, "loadeddata", 15000);
+      try { await v.play(); v.pause(); } catch (_) {}
+      const d = v.duration;
+      if (!isFinite(d) || d <= 0) throw new Error("durata");
+      const sc = Math.min(1, MAX_SIDE / Math.max(v.videoWidth, v.videoHeight));
+      const c = document.createElement("canvas");
+      c.width = Math.round(v.videoWidth * sc); c.height = Math.round(v.videoHeight * sc);
+      const ctx = c.getContext("2d");
+      const out = [];
+      for (let i = 0; i < N; i++) {
+        const t = d * (0.03 + 0.94 * i / (N - 1));
+        const p = once(v, "seeked", 8000);
+        v.currentTime = t;
+        await p;
+        ctx.drawImage(v, 0, 0, c.width, c.height);
+        out.push(c.toDataURL("image/jpeg", 0.72));
+        $("fc-status").textContent = `Estraggo i fotogrammi… ${i + 1}/${N}`;
+      }
+      return { frames: out, duration: d };
+    } finally { URL.revokeObjectURL(v.src); }
+  }
+
+  function el(tag, cls, text) {
+    const e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text != null) e.textContent = text;
+    return e;
+  }
+
+  function render(r) {
+    const out = $("fc-out"); out.innerHTML = "";
+    const g = (r.giudizio || "").toLowerCase();
+    const cls = g === "buona" ? "fc-good" : g === "rischiosa" ? "fc-bad" : g === "non valutabile" ? "" : "fc-warn";
+    const head = el("p", "fc-verdict " + cls);
+    head.append(el("strong", null, (r.giudizio || "—").replace(/^./, (m) => m.toUpperCase())));
+    if (r.sintesi) head.append(" — " + r.sintesi);
+    out.append(head);
+    if ((r.bene || []).length) {
+      out.append(el("h4", null, "👍 Bene"));
+      const ul = el("ul"); r.bene.forEach((t) => ul.append(el("li", null, t))); out.append(ul);
+    }
+    if ((r.errori || []).length) {
+      out.append(el("h4", null, "🔧 Da sistemare"));
+      const ol = el("ol");
+      r.errori.forEach((x) => {
+        const li = el("li");
+        li.append(el("strong", null, x.problema || ""));
+        if ((x.fotogrammi || []).length) li.append(el("span", "muted", ` (fotogr. ${x.fotogrammi.join(", ")})`));
+        if (x.correzione) li.append(el("div", null, "→ " + x.correzione));
+        ol.append(li);
+      });
+      out.append(ol);
+    }
+    if (r.limiti) out.append(el("p", "muted", "ℹ️ " + r.limiti));
+  }
+
+  $("fc-go").addEventListener("click", async () => {
+    const f = $("fc-file").files[0], btn = $("fc-go");
+    if (!f) { $("fc-status").textContent = "Scegli prima il video."; return; }
+    btn.disabled = true; $("fc-out").innerHTML = ""; $("fc-thumbs").innerHTML = "";
+    try {
+      const { frames, duration } = await extract(f);
+      frames.forEach((src, i) => {
+        const fig = el("figure"); const im = new Image(); im.src = src;
+        fig.append(im, el("figcaption", null, String(i + 1))); $("fc-thumbs").append(fig);
+      });
+      $("fc-status").textContent = duration > 90
+        ? "Video lungo: i fotogrammi sono radi, meglio una serie sola. Analizzo…" : "Analizzo… (10–30 s)";
+      const res = await fetch("/api/form-check", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ exercise: $("fc-ex").value, view: $("fc-view").value,
+                               notes: $("fc-notes").value, frames }) });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `errore ${res.status}`);
+      $("fc-status").textContent = "";
+      render(data);
+    } catch (e) {
+      $("fc-status").textContent = "Non riesco: " + (e.message === "timeout"
+        ? "il browser non legge questo video (prova a registrarlo di nuovo o in H.264)." : e.message);
+    } finally { btn.disabled = false; }
+  });
+})();
+</script>
