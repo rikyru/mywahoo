@@ -56,8 +56,9 @@
   </div>
 
   {% if s.description %}<p class="plan-session-desc">{{ s.description | exercise_links }}</p>{% endif %}
-  {% set exn = s.description | exercise_names %}{% if exn and not s.done and not s.skipped %}
-  <p><button type="button" class="btn btn-secondary btn-sm fc-open" data-ex='{{ exn | tojson }}'>📹 Controlla la tecnica</button></p>{% endif %}
+  {% set exn = s.description | exercise_names %}{% if (exn or 'Routine:' in s.description) and not s.done and not s.skipped %}
+  <p class="prog-actions"><a class="btn btn-sm" href="/tecnica-live?sid={{ s.id }}">🏋️ Allenamento guidato</a>
+    {% if exn %}<button type="button" class="btn btn-secondary btn-sm fc-open" data-ex='{{ exn | tojson }}'>📹 Controlla la tecnica</button>{% endif %}</p>{% endif %}
   {% if s.done and s.workout_id %}
   <p class="muted"><a href="/workout/{{ s.workout_id }}">→ Vedi allenamento registrato</a>
     {% if s.id in mergeable %}

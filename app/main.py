@@ -1,4 +1,5 @@
 """FastAPI application: routing, auth guard, webhook ingestion, dashboard, AI."""
+import hashlib
 import json
 import logging
 import secrets
@@ -784,11 +785,71 @@ LIVE_EXERCISES = ["Affondo bulgaro", "Squat su una gamba", "Stacco a una gamba",
 
 
 @app.get("/tecnica-live", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
-def technique_live(request: Request, ex: str = ""):
+def technique_live(request: Request, ex: str = "", sid: int = 0):
     """Controllo tecnica in diretta: webcam + MediaPipe Pose nel browser (niente
     immagini al server). Serve HTTPS (o localhost) per la webcam."""
     return templates.TemplateResponse(request, "tecnica_live.html", {
-        "names": LIVE_EXERCISES, "ex": ex if ex in LIVE_EXERCISES else LIVE_EXERCISES[0]})
+        "names": LIVE_EXERCISES, "ex": ex if ex in LIVE_EXERCISES else LIVE_EXERCISES[0],
+        "sid": sid, "today": date.today().isoformat()})
+
+
+def _clean_steps(raw: dict) -> list[dict]:
+    """Blocchi dell'AI -> forma sicura per la pagina (interi nei limiti, nome canonico
+    se l'esercizio è nel glossario: serve al conteggio automatico)."""
+    def num(v, lo, hi):
+        try:
+            return max(lo, min(hi, int(round(float(v)))))
+        except (TypeError, ValueError):
+            return None
+    out = []
+    for b in raw.get("blocchi") or []:
+        if not isinstance(b, dict):
+            continue
+        exs = []
+        for e in b.get("esercizi") or []:
+            if not isinstance(e, dict) or not str(e.get("nome") or "").strip():
+                continue
+            reps, secs = num(e.get("ripetizioni"), 1, 200), num(e.get("secondi"), 5, 3600)
+            if not reps and not secs:
+                continue
+            name = str(e["nome"]).strip()[:60]
+            canon = exercisesmod.found(name)
+            exs.append({"name": name, "canon": canon[0] if canon else None,
+                        "reps": None if secs and not reps else reps, "secs": secs if not reps else None,
+                        "per_side": bool(e.get("per_lato")),
+                        "pause": num(e.get("pausa_dopo_s"), 0, 600) or 0,
+                        "note": str(e.get("nota") or "")[:80]})
+        if exs:
+            out.append({"title": str(b.get("titolo") or "")[:60], "rounds": num(b.get("giri"), 1, 20) or 1,
+                        "rest": num(b.get("recupero_giri_s"), 0, 600) or 0, "exercises": exs})
+    return out
+
+
+@app.get("/program/session/{sid}/steps", dependencies=[Depends(require_auth)])
+async def session_steps(sid: int, refresh: int = 0):
+    """Sequenza dell'allenamento guidato per una seduta (AI, in cache finché la
+    descrizione non cambia)."""
+    with Session(engine) as session:
+        ps = session.get(PlanSession, sid)
+        if not ps:
+            return JSONResponse({"error": "Seduta non trovata."}, status_code=404)
+        desc, title, plan_id, done = ps.description or "", ps.title, ps.plan_id, ps.done
+        prog = program_runner.active_program(session)
+        routines = [{"nome": r.get("name"), "contenuto": r.get("content")}
+                    for r in program_runner.jl(prog.routines_json if prog else "[]", [])
+                    if isinstance(r, dict) and r.get("name") and f"Routine: {r.get('name')}" in desc]
+    key = "steps:%d:%s" % (sid, hashlib.sha1((desc + json.dumps(routines)).encode()).hexdigest()[:12])
+    blocks = [] if refresh else program_runner.jl(get_setting(key), [])
+    if not blocks:
+        try:
+            raw = await anthropic_client.session_steps(desc, routines, exercisesmod.canonical_names())
+        except anthropic_client.AnthropicError as e:
+            return JSONResponse({"error": str(e)}, status_code=502)
+        blocks = _clean_steps(raw or {})
+        if not blocks:
+            return JSONResponse({"error": "Non riesco a ricavare gli esercizi da questa seduta."}, status_code=422)
+        set_setting(key, json.dumps(blocks, ensure_ascii=False))
+    return JSONResponse({"title": title, "plan_id": plan_id, "done": done, "blocks": blocks})
 
 
 FORM_CHECK_MAX_FRAMES = 16

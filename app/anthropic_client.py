@@ -928,6 +928,36 @@ async def form_check(exercise: str, cues: str, view: str, notes: str,
     return d if isinstance(d, dict) else None
 
 
+SESSION_STEPS_PROMPT = """Trasforma una seduta a corpo libero (testo libero + routine fisse) nella sequenza
+da eseguire con un allenamento guidato (timer, conteggio, recuperi a voce).
+Ricevi "routine" (contenuto delle routine citate dalla seduta con "Routine: <nome>")
+e "seduta". Ordine: prima le routine citate all'inizio, poi il resto nell'ordine scritto.
+Rispondi SOLO con JSON valido, senza testo attorno:
+{"blocchi": [{"titolo": "breve", "giri": intero, "recupero_giri_s": intero,
+  "esercizi": [{"nome": "nome esercizio", "ripetizioni": intero o null,
+                "secondi": intero o null, "per_lato": true/false,
+                "pausa_dopo_s": intero, "nota": "max 60 caratteri o vuota"}]}]}
+Regole:
+- Serie classiche (es. "affondo bulgaro 3 × 8 per gamba, recupero 90\"") = un blocco
+  con giri = numero di serie, recupero_giri_s = recupero tra le serie, un esercizio.
+- Circuiti = un blocco con giri e gli esercizi in ordine; pausa_dopo_s = pausa tra
+  gli esercizi, recupero_giri_s = pausa tra i giri.
+- Esattamente uno tra ripetizioni e secondi. Intervalli ("6-8") = valore più alto.
+  Riscaldamento, mobilità e defaticamento = esercizi a tempo (secondi totali).
+- per_lato = true per gli esercizi su una gamba/un lato quando le ripetizioni o i
+  secondi sono per lato (si fa prima la sinistra, poi la destra).
+- Usa i nomi standard quando l'esercizio corrisponde: """ + "{NAMES}" + """.
+- Non inventare esercizi né cambiare numeri."""
+
+
+async def session_steps(description: str, routines: list[dict], names: list[str]) -> dict | None:
+    """Seduta a corpo libero -> blocchi strutturati per l'allenamento guidato."""
+    raw = await _call_claude(SESSION_STEPS_PROMPT.replace("{NAMES}", ", ".join(names)),
+                             _dumps({"routine": routines, "seduta": description}))
+    d = _json_object(raw)
+    return d if isinstance(d, dict) and isinstance(d.get("blocchi"), list) else None
+
+
 async def weekly_report_text(payload: dict) -> str:
     """Commento della pagella settimanale (i voti li calcola il codice)."""
     if (who := _profile.ai_context()):

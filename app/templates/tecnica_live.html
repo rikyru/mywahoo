@@ -1,9 +1,10 @@
 {% extends "base.html" %}
+{% from "_rpe_field.html" import rpe_field %}
 {% block title %}Tecnica in diretta — {{ app_name }}{% endblock %}
 {% block content %}
 
 <div class="page-head">
-  <h1>🎥 Tecnica in diretta</h1>
+  <h1>{% if sid %}🏋️ Allenamento guidato{% else %}🎥 Tecnica in diretta{% endif %}</h1>
   <span class="muted">webcam + riconoscimento della postura, tutto nel browser</span>
 </div>
 
@@ -20,12 +21,40 @@
       <div id="tl-big" class="tl-big">0</div>
       <div id="tl-banner" class="tl-banner" hidden></div>
       <div id="tl-count" class="tl-countdown" hidden></div>
+      <div id="tl-what" class="tl-what" hidden></div>
+      <div id="tl-rest" class="tl-rest" hidden><div id="tl-rest-s"></div><div id="tl-rest-next"></div></div>
     </div>
     <p class="muted tl-hint">Computer a 2–3 m, webcam all'altezza delle anche (sopra una sedia o
       una scatola), corpo intero nell'inquadratura, luce davanti a te e non alle spalle.</p>
   </section>
 
   <section class="card tl-side">
+    {% if sid %}
+    <div id="g-panel" data-sid="{{ sid }}">
+      <p id="g-title"><strong>Carico la seduta…</strong></p>
+      <ol id="g-blocks" class="g-blocks"></ol>
+      <div class="tl-btns">
+        <button class="btn" id="g-start" disabled>Avvia allenamento</button>
+        <button class="btn btn-secondary" id="g-pause" disabled>Pausa</button>
+        <button class="btn btn-secondary" id="g-skip" disabled>Fatto / salta ▸</button>
+      </div>
+      <p class="muted tl-foot">Mani alzate sopra la testa per un secondo = «fatto» (fine esercizio o salta il recupero).
+        Gli esercizi che riconosco li conto io; gli altri a tempo o con le mani alzate.</p>
+      <p><a href="#" id="g-refresh" class="muted tl-foot">la sequenza non torna? rileggi la seduta</a></p>
+      <div id="g-end" hidden>
+        <h3>Fatto! 💪</h3>
+        <form method="post" id="g-form" class="plan-edit-form">
+          <input type="hidden" name="next" value="/program#ses{{ sid }}">
+          <input type="hidden" name="done_date" value="{{ today }}">
+          <label>Cosa hai fatto <textarea name="done_notes" id="g-notes" rows="6" class="nw-desc"></textarea></label>
+          <label>Durata (min) <input type="number" name="done_min" id="g-min" min="1"></label>
+          {{ rpe_field() }}
+          <button type="submit" class="btn">Segna la seduta fatta</button>
+        </form>
+      </div>
+    </div>
+    <details class="g-manual"><summary class="muted">Impostazioni del controllo</summary>
+    {% endif %}
     <label>Esercizio
       <select id="tl-ex">
         {% for n in names %}<option {% if n == ex %}selected{% endif %}>{{ n }}</option>{% endfor %}
@@ -40,10 +69,11 @@
       </label>
     </div>
     <label class="tl-check"><input type="checkbox" id="tl-voice" checked> Voce (conta e corregge)</label>
+    {% if sid %}</details>{% endif %}
     <div class="tl-btns">
       <button class="btn" id="tl-cam">Accendi webcam</button>
-      <button class="btn" id="tl-start" disabled>Inizia serie</button>
-      <button class="btn btn-secondary" id="tl-stop" disabled>Fine serie</button>
+      <button class="btn" id="tl-start" disabled {% if sid %}style="display:none"{% endif %}>Inizia serie</button>
+      <button class="btn btn-secondary" id="tl-stop" disabled {% if sid %}style="display:none"{% endif %}>Fine serie</button>
     </div>
     <p id="tl-status" class="muted"></p>
 
@@ -88,9 +118,13 @@ const P = {
   "Stacco a una gamba":{ kind: "hinge", depth: [110, 135], standKnee: 140, pelvis: true, tempo: 2.0 },
   "Ponte su una gamba":{ kind: "bridge", top: 165, hold: 2, pelvis: true },
   "Ponte per i glutei":{ kind: "bridge", both: true, top: 165, hold: 1 },
+  "Flessioni":         { kind: "elbow", both: true },
+  "Pike push up":      { kind: "elbow", both: true },
+  "Dips":              { kind: "elbow", both: true },
 };
 const DEF = { kind: "knee", valgus: true };
-const IDX = { L: { sh: 11, hip: 23, knee: 25, ank: 27 }, R: { sh: 12, hip: 24, knee: 26, ank: 28 } };
+const IDX = { L: { sh: 11, hip: 23, knee: 25, ank: 27, elb: 13, wri: 15 },
+              R: { sh: 12, hip: 24, knee: 26, ank: 28, elb: 14, wri: 16 } };
 const $ = (id) => document.getElementById(id);
 
 let landmarker = null, running = false, recording = false;
@@ -107,15 +141,16 @@ try { const s = JSON.parse(localStorage.getItem("tl-prefs") || "{}");
     view: $("tl-view").value, voice: $("tl-voice").checked })); } catch (_) {}
 }));
 
-const prof = () => P[$("tl-ex").value] || DEF;
+let G = null, guidedProf = null;      // allenamento guidato (vedi sotto)
+const prof = () => G ? (guidedProf || DEF) : (P[$("tl-ex").value] || DEF);
 const status = (t) => { $("tl-status").textContent = t; };
 
-function say(text, force) {
+function say(text, force, queue) {
   if (!$("tl-voice").checked || !window.speechSynthesis) return;
   const now = performance.now();
   if (!force && now - lastSay < 700) return;
   lastSay = now;
-  speechSynthesis.cancel();
+  if (!queue) speechSynthesis.cancel();
   const u = new SpeechSynthesisUtterance(text); u.lang = "it-IT"; u.rate = 1.1;
   speechSynthesis.speak(u);
 }
@@ -145,8 +180,11 @@ function measure(res) {
   const im = res.landmarks?.[0], w = res.worldLandmarks?.[0];
   if (!im || !w) return null;
   const p = prof(), leg = $("tl-leg").value, other = leg === "L" ? "R" : "L";
-  const need = [IDX[leg].hip, IDX[leg].knee, IDX[leg].ank, IDX[leg].sh];
-  const vis = need.every((i) => (im[i].visibility ?? 1) > 0.5);
+  const need = p.kind === "elbow" ? [11, 12, 13, 14, 15, 16].filter((i) => i % 2 === (leg === "L" ? 1 : 0))
+             : [IDX[leg].hip, IDX[leg].knee, IDX[leg].ank, IDX[leg].sh];
+  const vis = p.kind === "elbow"
+    ? [[11, 13, 15], [12, 14, 16]].some((g) => g.every((i) => (im[i].visibility ?? 1) > 0.5))
+    : need.every((i) => (im[i].visibility ?? 1) > 0.5);
   const knee = (s) => ang3(w[IDX[s].hip], w[IDX[s].knee], w[IDX[s].ank]);
   const hip = (s) => ang3(w[IDX[s].sh], w[IDX[s].hip], w[IDX[s].knee]);
   const sh = mid(w[11], w[12]), hp = mid(w[23], w[24]);
@@ -157,11 +195,17 @@ function measure(res) {
   let a;
   if (p.kind === "hinge") a = hip(leg);
   else if (p.kind === "bridge") a = p.both ? (hip("L") + hip("R")) / 2 : hip(leg);
+  else if (p.kind === "elbow") {
+    const el = (s) => ang3(w[IDX[s].sh], w[IDX[s].elb], w[IDX[s].wri]);
+    // il braccio più visibile (di lato uno dei due è coperto)
+    const vL = (im[13].visibility ?? 1) + (im[15].visibility ?? 1), vR = (im[14].visibility ?? 1) + (im[16].visibility ?? 1);
+    a = vL >= vR ? el("L") : el("R");
+  }
   else a = p.both ? (knee("L") + knee("R")) / 2 : knee(leg);
   const front = $("tl-view").value === "front";
   return {
     vis, a, lean, pelvis: front ? pelvis : null,
-    valg: front ? (p.both ? Math.max(valgus(im, "L"), valgus(im, "R")) : valgus(im, leg)) : null,
+    valg: front && p.valgus ? (p.both ? Math.max(valgus(im, "L"), valgus(im, "R")) : valgus(im, leg)) : null,
     standKnee: p.kind === "hinge" ? knee(leg) : null,
     // segnale per le ripetizioni: scende durante la fase di lavoro
     s: p.kind === "bridge" ? 300 - a : a,
@@ -232,6 +276,7 @@ function finishRep(tEnd) {
   r.faults.forEach((f) => ul.append(Object.assign(document.createElement("li"), {
     className: f.bad ? "tl-bad" : f.voice ? "tl-mid" : "", textContent: `Rip. ${r.n}: ${f.msg}` })));
   say(String(r.n) + (real.length ? ", " + real[0].voice : ""), true);
+  if (G) guidedRep(r);
 }
 
 // ---------- disegno
@@ -267,9 +312,10 @@ function loop() {
     const res = landmarker.detectForVideo(v, t);
     const m = measure(res);
     draw(res, m);
+    if (G) handsUp(res.landmarks?.[0], t);
     const ban = $("tl-banner");
     if (!m) { ban.hidden = false; ban.textContent = "Non ti vedo: entra nell'inquadratura"; }
-    else if (!m.vis) { ban.hidden = false; ban.textContent = "Inquadrati tutto: anca, ginocchio e caviglia della gamba che lavora"; }
+    else if (!m.vis) { ban.hidden = !(recording || !G); ban.textContent = "Inquadrati tutto: anca, ginocchio e caviglia della gamba che lavora"; }
     else {
       ban.hidden = true;
       $("tl-angle").textContent = Math.round(m.a) + "°";
@@ -293,6 +339,7 @@ $("tl-cam").addEventListener("click", async () => {
     const v = $("tl-video"); v.srcObject = stream; await v.play();
     running = true; loop();
     $("tl-start").disabled = false; $("tl-cam").textContent = "Webcam accesa";
+    if (window.__gReady) window.__gReady();
     status("Mettiti in posizione e premi «Inizia serie» (hai 5 secondi).");
   } catch (e) {
     $("tl-cam").disabled = false;
@@ -342,8 +389,193 @@ function summary() {
   say(`${reps.length} ripetizioni, ${clean} pulite`, true);
 }
 
+// ---------- allenamento guidato
+const SIDE = { L: "sinistra", R: "destra" };
+const fmt = (sec) => sec >= 60 ? `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, "0")}` : String(sec);
+let gBlocks = [], gPlan = null, hands = { since: 0, cool: 0 };
+
+function flatten(blocks) {
+  const items = [];
+  blocks.forEach((b, bi) => {
+    for (let g = 1; g <= b.rounds; g++) {
+      b.exercises.forEach((e, ei) => {
+        (e.per_side ? ["L", "R"] : [null]).forEach((sd) => {
+          items.push({ type: "work", e, side: sd, round: g, rounds: b.rounds, bi });
+          if (sd === "L") items.push({ type: "rest", secs: 10, why: "cambia lato", bi });
+        });
+        if (ei < b.exercises.length - 1 && e.pause) items.push({ type: "rest", secs: e.pause, bi });
+      });
+      const r = b.rest || b.exercises[b.exercises.length - 1].pause;
+      if (g < b.rounds && r) items.push({ type: "rest", secs: r, bi });
+    }
+    if (bi < blocks.length - 1) items.push({ type: "rest", secs: 30, why: "cambio esercizio", bi: bi + 1 });
+  });
+  return items;
+}
+
+function workLabel(it, short) {
+  const e = it.e, tgt = e.reps ? `${e.reps} ripetizioni` : `${fmt(e.secs)} secondi`;
+  const side = it.side ? ` gamba ${SIDE[it.side]}` : "";
+  return short ? `${e.name}${side}` : `${e.name}${side}, ${tgt}`;
+}
+
+function renderBlocks() {
+  const ol = $("g-blocks"); ol.innerHTML = "";
+  const curIt = G && G.items[G.i], curB = curIt ? curIt.bi : -1;
+  gBlocks.forEach((b, bi) => {
+    const li = document.createElement("li");
+    if (bi === curB) li.className = "g-cur"; else if (G && bi < curB) li.className = "g-done";
+    const exs = b.exercises.map((e) => `${e.name} ${e.reps ? e.reps + " rip." : fmt(e.secs) + " s"}${e.per_side ? " per lato" : ""}`);
+    li.textContent = (b.title ? b.title + ": " : "") + (b.rounds > 1 ? `${b.rounds} × ` : "") +
+      (exs.length > 3 ? exs.length + " esercizi" : exs.join(", ")) + (b.rest ? ` · rec. ${b.rest}″` : "");
+    if (bi === curB && curIt.round) li.textContent += `  — giro ${curIt.round}/${curIt.rounds}`;
+    ol.append(li);
+  });
+}
+
+function setDeadline(sec) { G.deadline = performance.now() + sec * 1000; G.marks = new Set(); }
+
+function gNext() {
+  if (!G) return;
+  recording = false; cur = null; guidedProf = null;
+  G.i++;
+  $("tl-rest").hidden = true; $("tl-what").hidden = true; $("tl-big").textContent = "";
+  if (G.i >= G.items.length) return gFinish();
+  const it = G.items[G.i]; G.itemStart = performance.now(); G.deadline = null;
+  renderBlocks();
+  if (it.type === "rest") {
+    const nx = G.items.slice(G.i + 1).find((x) => x.type === "work");
+    $("tl-rest").hidden = false;
+    $("tl-rest-next").textContent = nx ? "Poi: " + workLabel(nx) : "";
+    setDeadline(it.secs);
+    if (it.why === "cambia lato") say("cambia gamba", true, true);
+    else say(`recupero ${it.secs} secondi` + (nx ? `. Poi ${workLabel(nx)}` : ""), true, true);
+    return;
+  }
+  const e = it.e, p = e.canon && P[e.canon];
+  if (it.side) $("tl-leg").value = it.side;
+  $("tl-what").hidden = false;
+  $("tl-what").textContent = workLabel(it, true) + (it.rounds > 1 ? ` · ${it.round}/${it.rounds}` : "") +
+    (e.note ? " — " + e.note : "");
+  G.tracked = !!(p && e.reps);
+  if (e.secs) {
+    setDeadline(e.secs);
+    say(`${workLabel(it)}. Via`, true, true);
+  } else if (G.tracked) {
+    guidedProf = p; reps = []; cur = null; upHist = []; sEma = null; recording = true;
+    $("tl-big").textContent = `0/${e.reps}`;
+    say(`${workLabel(it)}. Via`, true, true);
+  } else {
+    $("tl-big").textContent = `× ${e.reps}`;
+    say(`${workLabel(it)}. Alza le mani quando hai finito`, true, true);
+  }
+}
+
+function guidedRep(r) {
+  const it = G.items[G.i];
+  if (!it || it.type !== "work" || !G.tracked) return;
+  $("tl-big").textContent = `${reps.length}/${it.e.reps}`;
+  if (reps.length >= it.e.reps) gComplete("conteggio");
+}
+
+function gComplete(how) {
+  const it = G.items[G.i];
+  if (it && it.type === "work") {
+    const e = it.e, row = { name: e.name, side: it.side, round: it.round, rounds: it.rounds };
+    if (e.secs) row.done = `${fmt(Math.round(Math.min(e.secs, (performance.now() - G.itemStart) / 1000)))} s`;
+    else if (G.tracked) {
+      row.done = `${reps.length}/${e.reps} rip.`;
+      const f = {}; reps.forEach((r) => r.faults.filter((x) => x.voice).forEach((x) => { f[x.voice] = (f[x.voice] || 0) + 1; }));
+      row.faults = Object.entries(f).map(([k, n]) => `${k} ${n}`).join(", ");
+      if (reps.length) row.descent = reps.reduce((a, r) => a + r.descent, 0) / reps.length;
+    } else row.done = `${e.reps} rip.`;
+    if (how === "salto" && e.secs) row.done += " (interrotto)";
+    G.log.push(row);
+    if (how === "conteggio") say("basta", true);
+  }
+  gNext();
+}
+
+function handsUp(im, t) {
+  if (!im || !G || G.paused || t < hands.cool || t - G.itemStart < 2000) { hands.since = 0; return; }
+  const up = [15, 16].every((i) => (im[i].visibility ?? 1) > 0.5 && im[i].y < im[0].y - 0.03);
+  if (!up) { hands.since = 0; return; }
+  if (!hands.since) hands.since = t;
+  if (t - hands.since > 900) { hands.since = 0; hands.cool = t + 3000; gComplete("mani"); }
+}
+
+setInterval(() => {
+  if (!G || G.paused || !G.deadline) return;
+  const it = G.items[G.i], rem = Math.ceil((G.deadline - performance.now()) / 1000);
+  if (rem <= 0) { if (it.type === "work") say("stop", true); return gComplete("tempo"); }
+  if (it.type === "rest") $("tl-rest-s").textContent = fmt(rem); else $("tl-big").textContent = fmt(rem);
+  const total = it.type === "rest" ? it.secs : it.e.secs;
+  const mark = (k, text) => { if (!G.marks.has(k)) { G.marks.add(k); say(text, true, true); } };
+  if (rem <= 3) mark("c" + rem, String(rem));
+  else if (rem === 10 && total >= 25) mark("10", "dieci secondi");
+  else if (it.type === "work" && total >= 40 && rem === Math.round(total / 2)) mark("half", "metà");
+}, 200);
+
+function gFinish() {
+  const mins = Math.max(1, Math.round((performance.now() - G.t0) / 60000));
+  const by = new Map();      // per esercizio, nell'ordine in cui compare
+  G.log.forEach((r) => {
+    const txt = `${r.side ? (r.side === "L" ? "sx " : "dx ") : ""}${r.done}` +
+      (r.descent ? ` (discesa ${r.descent.toFixed(1)} s)` : "") + (r.faults ? ` [${r.faults}]` : "");
+    by.set(r.name, [...(by.get(r.name) || []), txt]);
+  });
+  const lines = [...by].map(([n, t]) => `${n}: ${t.join("; ")}`);
+  $("g-notes").value = `${gPlan.title} — allenamento guidato, ${mins} min.\n` + lines.join("\n");
+  $("g-min").value = mins;
+  $("g-form").action = `/plans/${gPlan.plan_id}/session/${$("g-panel").dataset.sid}/done`;
+  $("g-end").hidden = false; ["g-pause", "g-skip"].forEach((id) => { $(id).disabled = true; });
+  $("g-start").disabled = false; $("g-start").textContent = "Ricomincia";
+  say("allenamento finito, bravo", true, true);
+  G = null; renderBlocks();
+}
+
+async function gLoad(refresh) {
+  const panel = $("g-panel"); if (!panel) return;
+  $("g-title").textContent = "Leggo la seduta… (la prima volta 10–20 s)";
+  try {
+    const r = await fetch(`/program/session/${panel.dataset.sid}/steps${refresh ? "?refresh=1" : ""}`);
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || r.status);
+    gPlan = d; gBlocks = d.blocks;
+    $("g-title").innerHTML = ""; const st = document.createElement("strong"); st.textContent = d.title; $("g-title").append(st);
+    if (d.done) $("g-title").append(" ", Object.assign(document.createElement("span"), { className: "muted", textContent: "(già segnata fatta)" }));
+    if (d.done) $("g-form").hidden = true;
+    renderBlocks();
+    $("g-start").disabled = !running;
+    if (!running) status("Accendi la webcam per iniziare.");
+  } catch (e) { $("g-title").textContent = "Non riesco a leggere la seduta: " + e.message; }
+}
+
+if ($("g-panel")) {
+  gLoad(false);
+  window.__gReady = () => { if (gBlocks.length) { $("g-start").disabled = false; status("Premi «Avvia allenamento»: hai 5 secondi per metterti in posizione."); } };
+  $("g-refresh").addEventListener("click", (e) => { e.preventDefault(); if (!G) gLoad(true); });
+  $("g-start").addEventListener("click", () => {
+    $("g-end").hidden = true;
+    G = { items: flatten(gBlocks), i: -1, log: [], t0: performance.now(), paused: false };
+    $("g-start").disabled = true; $("g-pause").disabled = false; $("g-skip").disabled = false;
+    $("g-pause").textContent = "Pausa"; status("");
+    say("si parte", true);
+    let n = 5; const cd = $("tl-count"); cd.hidden = false; cd.textContent = n;
+    const iv = setInterval(() => { n--; if (n > 0) { cd.textContent = n; return; } clearInterval(iv); cd.hidden = true; gNext(); }, 1000);
+  });
+  $("g-pause").addEventListener("click", () => {
+    if (!G) return;
+    G.paused = !G.paused;
+    if (G.paused) { G.left = G.deadline ? G.deadline - performance.now() : null; G.wasRec = recording; recording = false; say("pausa", true); }
+    else { if (G.left != null) G.deadline = performance.now() + G.left; recording = G.wasRec; G.itemStart = performance.now(); say("si riparte", true); }
+    $("g-pause").textContent = G.paused ? "Riprendi" : "Pausa";
+  });
+  $("g-skip").addEventListener("click", () => { if (G && !G.paused) gComplete("salto"); });
+}
+
 // aggancio per i test automatici (simulazione delle ripetizioni senza webcam)
-window.__tl = { onFrame, summary, reps: () => reps,
+window.__tl = { onFrame, summary, reps: () => reps, flatten, gNext, gComplete, state: () => G,
   arm() { reps = []; cur = null; upHist = []; sEma = null; recording = true; } };
 
 $("tl-copy").addEventListener("click", async () => {
