@@ -531,6 +531,7 @@ function gFinish() {
   $("g-end").hidden = false; ["g-pause", "g-skip"].forEach((id) => { $(id).disabled = true; });
   $("g-start").disabled = false; $("g-start").textContent = "Ricomincia";
   say("allenamento finito, bravo", true, true);
+  try { G.lock?.release(); } catch (_) {}
   G = null; renderBlocks();
 }
 
@@ -560,6 +561,7 @@ if ($("g-panel")) {
     G = { items: flatten(gBlocks), i: -1, log: [], t0: performance.now(), paused: false };
     $("g-start").disabled = true; $("g-pause").disabled = false; $("g-skip").disabled = false;
     $("g-pause").textContent = "Pausa"; status("");
+    try { navigator.wakeLock?.request("screen").then((l) => { G && (G.lock = l); }).catch(() => {}); } catch (_) {}
     say("si parte", true);
     let n = 5; const cd = $("tl-count"); cd.hidden = false; cd.textContent = n;
     const iv = setInterval(() => { n--; if (n > 0) { cd.textContent = n; return; } clearInterval(iv); cd.hidden = true; gNext(); }, 1000);
