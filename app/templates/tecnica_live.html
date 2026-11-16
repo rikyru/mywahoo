@@ -1,0 +1,354 @@
+{% extends "base.html" %}
+{% block title %}Tecnica in diretta — {{ app_name }}{% endblock %}
+{% block content %}
+
+<div class="page-head">
+  <h1>🎥 Tecnica in diretta</h1>
+  <span class="muted">webcam + riconoscimento della postura, tutto nel browser</span>
+</div>
+
+<div id="tl-insecure" class="card tl-warn" hidden>
+  <strong>La webcam qui non si può aprire:</strong> il browser la permette solo su una pagina HTTPS
+  (o su localhost). Apri OpenFit dal suo indirizzo HTTPS.
+</div>
+
+<div class="tl-grid">
+  <section class="card tl-stage">
+    <div class="tl-video-wrap">
+      <video id="tl-video" playsinline muted></video>
+      <canvas id="tl-canvas"></canvas>
+      <div id="tl-big" class="tl-big">0</div>
+      <div id="tl-banner" class="tl-banner" hidden></div>
+      <div id="tl-count" class="tl-countdown" hidden></div>
+    </div>
+    <p class="muted tl-hint">Computer a 2–3 m, webcam all'altezza delle anche (sopra una sedia o
+      una scatola), corpo intero nell'inquadratura, luce davanti a te e non alle spalle.</p>
+  </section>
+
+  <section class="card tl-side">
+    <label>Esercizio
+      <select id="tl-ex">
+        {% for n in names %}<option {% if n == ex %}selected{% endif %}>{{ n }}</option>{% endfor %}
+      </select>
+    </label>
+    <div class="tl-row">
+      <label>Gamba che lavora
+        <select id="tl-leg"><option value="L">sinistra</option><option value="R">destra</option></select>
+      </label>
+      <label>Ripreso
+        <select id="tl-view"><option value="front">di fronte</option><option value="side">di lato</option></select>
+      </label>
+    </div>
+    <label class="tl-check"><input type="checkbox" id="tl-voice" checked> Voce (conta e corregge)</label>
+    <div class="tl-btns">
+      <button class="btn" id="tl-cam">Accendi webcam</button>
+      <button class="btn" id="tl-start" disabled>Inizia serie</button>
+      <button class="btn btn-secondary" id="tl-stop" disabled>Fine serie</button>
+    </div>
+    <p id="tl-status" class="muted"></p>
+
+    <div class="tl-live">
+      <div><span class="muted">angolo</span><strong id="tl-angle">—</strong></div>
+      <div><span class="muted">ultima discesa</span><strong id="tl-desc">—</strong></div>
+      <div><span class="muted">ginocchio dentro</span><strong id="tl-valg">—</strong></div>
+    </div>
+    <ul id="tl-last" class="tl-faults"></ul>
+
+    <div id="tl-summary" hidden>
+      <h3>Riepilogo serie</h3>
+      <div class="nutri-table-wrap"><table class="nutri-table" id="tl-table"></table></div>
+      <p id="tl-sumtext"></p>
+      <button class="btn btn-secondary btn-sm" id="tl-copy">Copia il riepilogo</button>
+      <span class="muted" id="tl-copied"></span>
+    </div>
+    <p class="muted tl-foot">Misure indicative: angoli da un modello che stima le articolazioni da una
+      sola telecamera. Di fronte valuta bene ginocchio e bacino; di lato profondità e busto.
+      Il video non lascia il computer.</p>
+  </section>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script type="module">
+import { FilesetResolver, PoseLandmarker } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs";
+
+const WASM = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm";
+const MODEL = "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task";
+
+// Profili: kind = quale angolo segue le ripetizioni. Soglie in gradi (angolo
+// interno dell'articolazione: 180 = dritta). tempo = discesa minima in s.
+const P = {
+  "Affondo bulgaro":   { kind: "knee", depth: [100, 115], lean: 45, valgus: true, pelvis: true, tempo: 2.0 },
+  "Squat su una gamba":{ kind: "knee", depth: [100, 120], lean: 55, valgus: true, pelvis: true, tempo: 2.0 },
+  "Step-up":           { kind: "knee", lean: 50, valgus: true, pelvis: true, tempo: 1.5 },
+  "Affondi":           { kind: "knee", depth: [100, 115], lean: 35, valgus: true, tempo: 1.5 },
+  "Squat":             { kind: "knee", both: true, depth: [95, 115], lean: 50, valgus: true, tempo: 2.0 },
+  "Squat jump":        { kind: "knee", both: true, valgus: true },
+  "Wall sit":          { kind: "knee", both: true, valgus: true },
+  "Stacco a una gamba":{ kind: "hinge", depth: [110, 135], standKnee: 140, pelvis: true, tempo: 2.0 },
+  "Ponte su una gamba":{ kind: "bridge", top: 165, hold: 2, pelvis: true },
+  "Ponte per i glutei":{ kind: "bridge", both: true, top: 165, hold: 1 },
+};
+const DEF = { kind: "knee", valgus: true };
+const IDX = { L: { sh: 11, hip: 23, knee: 25, ank: 27 }, R: { sh: 12, hip: 24, knee: 26, ank: 28 } };
+const $ = (id) => document.getElementById(id);
+
+let landmarker = null, running = false, recording = false;
+let reps = [], cur = null, sEma = null, upHist = [], lastNearTop = 0, lastSay = 0;
+
+if (!window.isSecureContext) {
+  $("tl-insecure").hidden = false; $("tl-cam").disabled = true;
+}
+try { const s = JSON.parse(localStorage.getItem("tl-prefs") || "{}");
+  if (s.leg) $("tl-leg").value = s.leg; if (s.view) $("tl-view").value = s.view;
+  if (s.voice === false) $("tl-voice").checked = false; } catch (_) {}
+["tl-leg", "tl-view", "tl-voice"].forEach((id) => $(id).addEventListener("change", () => {
+  try { localStorage.setItem("tl-prefs", JSON.stringify({ leg: $("tl-leg").value,
+    view: $("tl-view").value, voice: $("tl-voice").checked })); } catch (_) {}
+}));
+
+const prof = () => P[$("tl-ex").value] || DEF;
+const status = (t) => { $("tl-status").textContent = t; };
+
+function say(text, force) {
+  if (!$("tl-voice").checked || !window.speechSynthesis) return;
+  const now = performance.now();
+  if (!force && now - lastSay < 700) return;
+  lastSay = now;
+  speechSynthesis.cancel();
+  const u = new SpeechSynthesisUtterance(text); u.lang = "it-IT"; u.rate = 1.1;
+  speechSynthesis.speak(u);
+}
+
+// ---------- geometria
+function ang3(a, b, c) {   // angolo in b (gradi), punti 3D
+  const u = [a.x - b.x, a.y - b.y, a.z - b.z], v = [c.x - b.x, c.y - b.y, c.z - b.z];
+  const d = u[0]*v[0] + u[1]*v[1] + u[2]*v[2];
+  const n = Math.hypot(...u) * Math.hypot(...v) || 1;
+  return Math.acos(Math.max(-1, Math.min(1, d / n))) * 180 / Math.PI;
+}
+const mid = (a, b) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, z: (a.z + b.z) / 2 });
+
+// ginocchio verso l'interno (vista frontale, coordinate immagine): distanza del
+// ginocchio dalla linea anca-caviglia, verso il centro del corpo, in larghezze d'anca
+function valgus(im, s) {
+  const H = im[IDX[s].hip], K = im[IDX[s].knee], A = im[IDX[s].ank];
+  const hw = Math.abs(im[23].x - im[24].x) || 0.05;
+  if (Math.abs(A.y - H.y) < 1e-3) return 0;
+  const xl = H.x + (A.x - H.x) * (K.y - H.y) / (A.y - H.y);
+  const m = (im[23].x + im[24].x) / 2;
+  const d = K.x - xl, inward = Math.sign(d) === Math.sign(m - xl);
+  return (inward ? 1 : -1) * Math.abs(d) / hw;
+}
+
+function measure(res) {
+  const im = res.landmarks?.[0], w = res.worldLandmarks?.[0];
+  if (!im || !w) return null;
+  const p = prof(), leg = $("tl-leg").value, other = leg === "L" ? "R" : "L";
+  const need = [IDX[leg].hip, IDX[leg].knee, IDX[leg].ank, IDX[leg].sh];
+  const vis = need.every((i) => (im[i].visibility ?? 1) > 0.5);
+  const knee = (s) => ang3(w[IDX[s].hip], w[IDX[s].knee], w[IDX[s].ank]);
+  const hip = (s) => ang3(w[IDX[s].sh], w[IDX[s].hip], w[IDX[s].knee]);
+  const sh = mid(w[11], w[12]), hp = mid(w[23], w[24]);
+  // inclinazione del busto rispetto alla verticale (y del mondo = verticale)
+  const lean = Math.atan2(Math.hypot(sh.x - hp.x, sh.z - hp.z), Math.abs(sh.y - hp.y)) * 180 / Math.PI;
+  const tilt = Math.abs(Math.atan2(im[24].y - im[23].y, im[24].x - im[23].x) * 180 / Math.PI);
+  const pelvis = Math.min(tilt, Math.abs(180 - tilt));
+  let a;
+  if (p.kind === "hinge") a = hip(leg);
+  else if (p.kind === "bridge") a = p.both ? (hip("L") + hip("R")) / 2 : hip(leg);
+  else a = p.both ? (knee("L") + knee("R")) / 2 : knee(leg);
+  const front = $("tl-view").value === "front";
+  return {
+    vis, a, lean, pelvis: front ? pelvis : null,
+    valg: front ? (p.both ? Math.max(valgus(im, "L"), valgus(im, "R")) : valgus(im, leg)) : null,
+    standKnee: p.kind === "hinge" ? knee(leg) : null,
+    // segnale per le ripetizioni: scende durante la fase di lavoro
+    s: p.kind === "bridge" ? 300 - a : a,
+  };
+}
+
+// ---------- ripetizioni
+function onFrame(m, t) {
+  sEma = sEma == null ? m.s : sEma * 0.5 + m.s * 0.5;
+  const s = sEma;
+  if (!cur) {
+    upHist.push([t, s]);
+    while (upHist.length && t - upHist[0][0] > 1500) upHist.shift();
+    const ref = Math.max(...upHist.map((x) => x[1]));
+    if (s >= ref - 4) lastNearTop = t;
+    if (s < ref - 12) cur = { ref, start: lastNearTop || t, samples: [] };
+  }
+  if (cur) {
+    cur.samples.push({ t, s, ...m });
+    const minS = Math.min(...cur.samples.map((x) => x.s));
+    if (s > cur.ref - 10 && cur.ref - minS >= 30) { finishRep(t); }
+    else if (t - cur.start > 20000 || (s > cur.ref - 6 && cur.ref - minS < 30 && t - cur.start > 1500)) {
+      cur = null; upHist = [];          // movimento troppo piccolo o fermo: non è una ripetizione
+    }
+  }
+}
+
+function finishRep(tEnd) {
+  const p = prof(), S = cur.samples;
+  const minS = Math.min(...S.map((x) => x.s));
+  const atBottom = S.filter((x) => x.s <= minS + 4);
+  const tBottom = atBottom[0].t;
+  const r = {
+    n: reps.length + 1,
+    descent: (tBottom - cur.start) / 1000,
+    hold: (atBottom[atBottom.length - 1].t - tBottom) / 1000,
+    angle: p.kind === "bridge" ? Math.max(...S.map((x) => x.a)) : Math.min(...S.map((x) => x.a)),
+    lean: Math.max(...atBottom.map((x) => x.lean)),
+    valg: S.some((x) => x.valg != null) ? Math.max(...S.filter((x) => x.valg != null).map((x) => x.valg)) : null,
+    pelvis: S.some((x) => x.pelvis != null) ? Math.max(...S.filter((x) => x.pelvis != null).map((x) => x.pelvis)) : null,
+    standKnee: p.kind === "hinge" ? Math.min(...S.map((x) => x.standKnee)) : null,
+    faults: [],
+  };
+  const F = (msg, voice, bad) => r.faults.push({ msg, voice, bad });
+  if (r.valg != null && p.valgus) {
+    if (r.valg >= 0.4) F("Ginocchio molto verso l'interno: spingilo verso il mignolo del piede", "ginocchio fuori", true);
+    else if (r.valg >= 0.25) F("Ginocchio un po' verso l'interno", "ginocchio fuori");
+  }
+  if (p.depth && $("tl-view").value === "side") {
+    if (r.angle > p.depth[1]) F(p.kind === "hinge" ? "Busto poco inclinato: porta il bacino più indietro" : "Poco profondo: scendi di più",
+                                p.kind === "hinge" ? "bacino indietro" : "più giù");
+    else if (r.angle > p.depth[0]) F("Profondità quasi giusta", null);
+  }
+  if (p.lean && $("tl-view").value === "side" && r.lean > p.lean) F(`Busto molto inclinato (${Math.round(r.lean)}°)`, "busto su");
+  if (p.pelvis && r.pelvis != null && r.pelvis > 8) F(`Bacino storto (${Math.round(r.pelvis)}°): tienilo dritto`, "bacino dritto");
+  if (p.standKnee && r.standKnee < p.standKnee) F("Ginocchio d'appoggio troppo piegato: è uno stacco, non uno squat", "gamba più tesa");
+  if (p.tempo && r.descent < p.tempo) F(`Discesa veloce (${r.descent.toFixed(1)} s): conta fino a 3`, "più lento");
+  if (p.kind === "bridge") {
+    if (r.angle < p.top) F("Anca non del tutto estesa in alto: spingi di più col tallone", "spingi su");
+    if (r.hold < p.hold - 0.5) F(`Tenuta in alto breve (${r.hold.toFixed(1)} s)`, "tieni su");
+  }
+  reps.push(r); cur = null; upHist = [];
+  $("tl-big").textContent = r.n;
+  $("tl-desc").textContent = p.kind === "bridge" ? `tenuta ${r.hold.toFixed(1)} s` : `${r.descent.toFixed(1)} s`;
+  const ul = $("tl-last"); ul.innerHTML = "";
+  const real = r.faults.filter((f) => f.voice);
+  if (!real.length) ul.append(Object.assign(document.createElement("li"), { className: "tl-ok", textContent: `Rip. ${r.n}: pulita ✓` }));
+  r.faults.forEach((f) => ul.append(Object.assign(document.createElement("li"), {
+    className: f.bad ? "tl-bad" : f.voice ? "tl-mid" : "", textContent: `Rip. ${r.n}: ${f.msg}` })));
+  say(String(r.n) + (real.length ? ", " + real[0].voice : ""), true);
+}
+
+// ---------- disegno
+const BONES = [[11,12],[11,23],[12,24],[23,24],[23,25],[25,27],[27,31],[24,26],[26,28],[28,32],[11,13],[13,15],[12,14],[14,16]];
+function draw(res, m) {
+  const c = $("tl-canvas"), v = $("tl-video"), ctx = c.getContext("2d");
+  if (c.width !== v.videoWidth) { c.width = v.videoWidth; c.height = v.videoHeight; }
+  ctx.clearRect(0, 0, c.width, c.height);
+  const im = res.landmarks?.[0]; if (!im) return;
+  const leg = $("tl-leg").value, legIdx = new Set(Object.values(IDX[leg]));
+  const col = m?.valg == null ? "#4c8dff" : m.valg >= 0.4 ? "#f87171" : m.valg >= 0.25 ? "#fbbf24" : "#34d399";
+  ctx.lineWidth = Math.max(3, c.width / 250); ctx.lineCap = "round";
+  for (const [a, b] of BONES) {
+    const working = legIdx.has(a) && legIdx.has(b);
+    ctx.strokeStyle = working ? col : "rgba(255,255,255,.65)";
+    ctx.beginPath(); ctx.moveTo(im[a].x * c.width, im[a].y * c.height);
+    ctx.lineTo(im[b].x * c.width, im[b].y * c.height); ctx.stroke();
+  }
+  ctx.fillStyle = "#fff";
+  for (const i of [11,12,23,24,25,26,27,28]) {
+    ctx.beginPath(); ctx.arc(im[i].x * c.width, im[i].y * c.height, ctx.lineWidth * 1.3, 0, 7); ctx.fill();
+  }
+}
+
+// ---------- ciclo
+let lastVideoT = -1;
+function loop() {
+  if (!running) return;
+  const v = $("tl-video");
+  if (v.readyState >= 2 && v.currentTime !== lastVideoT) {
+    lastVideoT = v.currentTime;
+    const t = performance.now();
+    const res = landmarker.detectForVideo(v, t);
+    const m = measure(res);
+    draw(res, m);
+    const ban = $("tl-banner");
+    if (!m) { ban.hidden = false; ban.textContent = "Non ti vedo: entra nell'inquadratura"; }
+    else if (!m.vis) { ban.hidden = false; ban.textContent = "Inquadrati tutto: anca, ginocchio e caviglia della gamba che lavora"; }
+    else {
+      ban.hidden = true;
+      $("tl-angle").textContent = Math.round(m.a) + "°";
+      $("tl-valg").textContent = m.valg == null ? "solo di fronte" : m.valg >= 0.25 ? "sì" : "no";
+      if (recording) onFrame(m, t);
+    }
+  }
+  requestAnimationFrame(loop);
+}
+
+$("tl-cam").addEventListener("click", async () => {
+  $("tl-cam").disabled = true;
+  try {
+    status("Carico il modello (la prima volta qualche secondo)…");
+    const fs = await FilesetResolver.forVisionTasks(WASM);
+    const opts = (d) => ({ baseOptions: { modelAssetPath: MODEL, delegate: d }, runningMode: "VIDEO", numPoses: 1 });
+    try { landmarker = await PoseLandmarker.createFromOptions(fs, opts("GPU")); }
+    catch (_) { landmarker = await PoseLandmarker.createFromOptions(fs, opts("CPU")); }
+    status("Accendo la webcam…");
+    const stream = await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false });
+    const v = $("tl-video"); v.srcObject = stream; await v.play();
+    running = true; loop();
+    $("tl-start").disabled = false; $("tl-cam").textContent = "Webcam accesa";
+    status("Mettiti in posizione e premi «Inizia serie» (hai 5 secondi).");
+  } catch (e) {
+    $("tl-cam").disabled = false;
+    status("Non riesco ad avviare: " + (e.name === "NotAllowedError" ? "permesso della webcam negato." : e.message));
+  }
+});
+
+$("tl-start").addEventListener("click", () => {
+  reps = []; cur = null; upHist = []; sEma = null; $("tl-big").textContent = "0"; $("tl-last").innerHTML = "";
+  $("tl-summary").hidden = true; $("tl-start").disabled = true; $("tl-stop").disabled = false;
+  let n = 5; const cd = $("tl-count"); cd.hidden = false; cd.textContent = n;
+  say("in posizione", true);
+  const iv = setInterval(() => {
+    n--; if (n > 0) { cd.textContent = n; return; }
+    clearInterval(iv); cd.hidden = true; recording = true; say("via", true); status("Serie in corso…");
+  }, 1000);
+});
+
+$("tl-stop").addEventListener("click", () => {
+  recording = false; cur = null; $("tl-start").disabled = false; $("tl-stop").disabled = true;
+  status(""); summary();
+});
+
+function summary() {
+  const p = prof(), ex = $("tl-ex").value, front = $("tl-view").value === "front";
+  const legTxt = p.both ? "" : ($("tl-leg").value === "L" ? " gamba sx" : " gamba dx");
+  const t = $("tl-table"); t.innerHTML = "";
+  if (!reps.length) { $("tl-sumtext").textContent = "Nessuna ripetizione riconosciuta."; $("tl-summary").hidden = false; return; }
+  const cols = [["#", (r) => r.n],
+    [p.kind === "bridge" ? "tenuta" : "discesa", (r) => (p.kind === "bridge" ? r.hold : r.descent).toFixed(1) + " s"],
+    [p.kind === "bridge" ? "anca" : "angolo", (r) => Math.round(r.angle) + "°"]];
+  if (front) cols.push(["ginocchio", (r) => r.valg == null ? "—" : r.valg >= 0.4 ? "molto" : r.valg >= 0.25 ? "un po'" : "no"]);
+  if (front && p.pelvis) cols.push(["bacino", (r) => r.pelvis == null ? "—" : Math.round(r.pelvis) + "°"]);
+  if (!front) cols.push(["busto", (r) => Math.round(r.lean) + "°"]);
+  cols.push(["note", (r) => r.faults.filter((f) => f.voice).map((f) => f.voice).join(", ") || "✓"]);
+  const tr = t.insertRow(); cols.forEach(([h]) => tr.append(Object.assign(document.createElement("th"), { textContent: h })));
+  reps.forEach((r) => { const row = t.insertRow(); cols.forEach(([, f]) => { row.insertCell().textContent = f(r); }); });
+  const avg = (k) => reps.reduce((a, r) => a + r[k], 0) / reps.length;
+  const clean = reps.filter((r) => !r.faults.some((f) => f.voice)).length;
+  const count = {}; reps.forEach((r) => r.faults.filter((f) => f.voice).forEach((f) => { count[f.voice] = (count[f.voice] || 0) + 1; }));
+  const top = Object.entries(count).sort((a, b) => b[1] - a[1]).map(([k, n]) => `${k} ${n}/${reps.length}`);
+  const txt = `${ex}${legTxt}: ${reps.length} rip., ${clean} pulite; ` +
+    (p.kind === "bridge" ? `tenuta media ${avg("hold").toFixed(1)} s` : `discesa media ${avg("descent").toFixed(1)} s`) +
+    `, angolo medio ${Math.round(avg("angle"))}°` + (top.length ? `; da correggere: ${top.join(", ")}` : "") +
+    ` (ripreso ${front ? "di fronte" : "di lato"}).`;
+  $("tl-sumtext").textContent = txt; $("tl-summary").hidden = false;
+  say(`${reps.length} ripetizioni, ${clean} pulite`, true);
+}
+
+// aggancio per i test automatici (simulazione delle ripetizioni senza webcam)
+window.__tl = { onFrame, summary, reps: () => reps,
+  arm() { reps = []; cur = null; upHist = []; sEma = null; recording = true; } };
+
+$("tl-copy").addEventListener("click", async () => {
+  try { await navigator.clipboard.writeText($("tl-sumtext").textContent); $("tl-copied").textContent = "copiato: incollalo in «Fatta»"; }
+  catch (_) { $("tl-copied").textContent = "copia non riuscita"; }
+});
+</script>
+{% endblock %}

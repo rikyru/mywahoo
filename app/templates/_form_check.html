@@ -22,6 +22,7 @@
       <input type="text" id="fc-notes" maxlength="300" placeholder="es. gamba destra, zaino 4 kg, sento il ginocchio">
     </label>
     <button type="button" class="btn" id="fc-go">Analizza</button>
+    <a class="muted fc-live" id="fc-live" href="/tecnica-live">🎥 oppure in diretta con la webcam (computer)</a>
     <p class="muted fc-status" id="fc-status"></p>
     <div class="fc-thumbs" id="fc-thumbs"></div>
     <div id="fc-out"></div>
@@ -47,6 +48,8 @@
     sel.innerHTML = "";
     (names.length ? names : allNames).forEach((n) => sel.add(new Option(n, n)));
     $("fc-status").textContent = ""; $("fc-out").innerHTML = ""; $("fc-thumbs").innerHTML = "";
+    $("fc-live").href = "/tecnica-live?ex=" + encodeURIComponent(sel.value || "");
+    sel.onchange = () => { $("fc-live").href = "/tecnica-live?ex=" + encodeURIComponent(sel.value); };
     dlg.showModal();
   });
   try { allNames = JSON.parse(dlg.dataset.all || "[]"); } catch (_) {}

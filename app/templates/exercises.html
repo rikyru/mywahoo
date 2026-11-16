@@ -16,7 +16,8 @@
     <div class="card-head">
       <h3>{{ ex.nome }}</h3>
       <span><a class="btn btn-secondary" href="{{ ex.url }}" target="_blank" rel="noopener">▶ Video</a>
-      <button type="button" class="btn btn-secondary fc-open" data-ex='{{ [ex.nome] | tojson }}' title="Controlla la tecnica da un tuo video">📹</button></span>
+      <button type="button" class="btn btn-secondary fc-open" data-ex='{{ [ex.nome] | tojson }}' title="Controlla la tecnica da un tuo video">📹</button>
+      <a class="btn btn-secondary" href="/tecnica-live?ex={{ ex.nome | urlencode }}" title="Tecnica in diretta con la webcam">🎥</a></span>
     </div>
     <p class="muted">{{ ex.cues }}</p>
   </section>

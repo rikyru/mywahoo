@@ -779,6 +779,18 @@ def exercises_page(request: Request):
                                       {"exercises": exercisesmod.catalog()})
 
 
+LIVE_EXERCISES = ["Affondo bulgaro", "Squat su una gamba", "Stacco a una gamba", "Ponte su una gamba",
+                  "Step-up", "Affondi", "Squat", "Squat jump", "Ponte per i glutei", "Wall sit"]
+
+
+@app.get("/tecnica-live", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
+def technique_live(request: Request, ex: str = ""):
+    """Controllo tecnica in diretta: webcam + MediaPipe Pose nel browser (niente
+    immagini al server). Serve HTTPS (o localhost) per la webcam."""
+    return templates.TemplateResponse(request, "tecnica_live.html", {
+        "names": LIVE_EXERCISES, "ex": ex if ex in LIVE_EXERCISES else LIVE_EXERCISES[0]})
+
+
 FORM_CHECK_MAX_FRAMES = 16
 FORM_CHECK_MAX_FRAME_B = 400_000     # data URL; i fotogrammi arrivano già ridotti dal browser
 

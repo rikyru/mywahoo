@@ -764,3 +764,37 @@ a.chip:hover { background: var(--card-hover); text-decoration: none; }
 #fc-out ul, #fc-out ol { margin: 0; padding-left: 20px; }
 #fc-out li { margin-bottom: 6px; }
 .fc-foot { font-size: 12px; margin: 0; }
+
+/* tecnica in diretta */
+.tl-grid { display: grid; grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr); gap: 16px; }
+@media (max-width: 900px) { .tl-grid { grid-template-columns: 1fr; } }
+.tl-video-wrap { position: relative; background: #000; border-radius: var(--radius-sm); overflow: hidden;
+  aspect-ratio: 16 / 9; }
+.tl-video-wrap video, .tl-video-wrap canvas { position: absolute; inset: 0; width: 100%; height: 100%;
+  object-fit: contain; transform: scaleX(-1); }
+.tl-big { position: absolute; top: 8px; right: 16px; font-size: clamp(48px, 9vw, 120px); font-weight: 800;
+  color: #fff; text-shadow: 0 2px 10px #000; line-height: 1; }
+.tl-countdown { position: absolute; inset: 0; display: grid; place-items: center; font-size: 160px;
+  font-weight: 800; color: #fff; text-shadow: 0 2px 16px #000; }
+.tl-banner { position: absolute; left: 0; right: 0; bottom: 0; padding: 10px 14px; font-size: 20px;
+  background: rgba(248, 113, 113, .85); color: #fff; text-align: center; }
+.tl-side { display: flex; flex-direction: column; gap: 10px; }
+.tl-side label { display: flex; flex-direction: column; gap: 4px; }
+.tl-side label.tl-check { flex-direction: row; align-items: center; gap: 8px; }
+.tl-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.tl-btns { display: flex; flex-wrap: wrap; gap: 8px; }
+.tl-live { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.tl-live div { display: flex; flex-direction: column; background: var(--bg-elev); border-radius: var(--radius-sm);
+  padding: 8px; }
+.tl-live strong { font-size: 22px; }
+.tl-faults { margin: 0; padding-left: 18px; }
+.tl-faults .tl-bad { color: var(--bad); }
+.tl-faults .tl-mid { color: #fbbf24; }
+.tl-faults .tl-ok { color: var(--good); }
+.tl-warn { border-color: var(--bad); background: var(--bad-soft); }
+.tl-hint, .tl-foot { font-size: 12px; margin: 8px 0 0; }
+.fc-live { font-size: 13px; }
+.tl-grid { align-items: start; }
+.tl-side select, .fc-body select, .fc-body input[type=text] { padding: .5rem .6rem; background: var(--bg-elev);
+  color: var(--text); border: 1px solid var(--border); border-radius: var(--radius-sm); font: inherit; }
+#tl-table th, #tl-table td { padding: 4px 6px; font-size: 13px; white-space: nowrap; }
