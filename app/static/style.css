@@ -814,3 +814,5 @@ a.chip:hover { background: var(--card-hover); text-decoration: none; }
 #g-form textarea, #g-form input { text-transform: none; font-family: inherit; }
 .g-cam { display: flex !important; flex-direction: row !important; align-items: center; gap: 6px;
   font-size: 12px; font-weight: 400; color: var(--muted); margin-top: 2px; }
+
+#g-prova-out { white-space: pre-wrap; font: inherit; margin: 0 0 8px; }

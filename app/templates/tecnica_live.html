@@ -4,7 +4,7 @@
 {% block content %}
 
 <div class="page-head">
-  <h1>{% if sid %}🏋️ Allenamento guidato{% else %}🎥 Tecnica in diretta{% endif %}</h1>
+  <h1>{% if prova %}🎯 Prova webcam{% elif sid %}🏋️ Allenamento guidato{% else %}🎥 Tecnica in diretta{% endif %}</h1>
   <span class="muted">webcam + riconoscimento della postura, tutto nel browser</span>
 </div>
 
@@ -29,8 +29,8 @@
   </section>
 
   <section class="card tl-side">
-    {% if sid %}
-    <div id="g-panel" data-sid="{{ sid }}">
+    {% if sid or prova %}
+    <div id="g-panel" data-sid="{{ sid }}"{% if prova %} data-prova='{{ {"title": "Allenamento di prova", "blocks": prova, "between": 15} | tojson }}'{% endif %}>
       <p id="g-title"><strong>Carico la seduta…</strong></p>
       <ol id="g-blocks" class="g-blocks"></ol>
       <div class="tl-btns">
@@ -40,7 +40,20 @@
       </div>
       <p class="muted tl-foot">Webcam facoltativa. Con la webcam conto io le ripetizioni degli esercizi spuntati
         e le mani alzate sopra la testa per un secondo = «fatto»; senza, «Fatto» o la barra spaziatrice.</p>
-      <p><a href="#" id="g-refresh" class="muted tl-foot">la sequenza non torna? rileggi la seduta</a></p>
+      {% if prova %}
+      <p class="muted tl-foot">Prova per sistemare la webcam prima di allenarti: poche ripetizioni per ogni tipo
+        di movimento. Se un esercizio non viene contato, sposta il computer o togli la spunta: le spunte valgono
+        anche per gli allenamenti veri.</p>
+      <div id="g-end" hidden>
+        <h3>Prova finita</h3>
+        <pre id="g-prova-out" class="tl-sum"></pre>
+        <p class="muted tl-foot">«n/n rip.» = contate dalla webcam; meno del previsto = hai chiuso tu con «Fatto».</p>
+        {% if then %}<a class="btn" href="/tecnica-live?sid={{ then }}">Avvia l'allenamento ▸</a>{% else %}
+        <a class="btn btn-secondary" href="/program">Torna al programma</a>{% endif %}
+      </div>
+      {% else %}
+      <p><a href="#" id="g-refresh" class="muted tl-foot">la sequenza non torna? rileggi la seduta</a>
+        · <a href="/tecnica-live?prova=1&then={{ sid }}" class="muted tl-foot">prima fai la prova webcam</a></p>
       <div id="g-end" hidden>
         <h3>Fatto! 💪</h3>
         <form method="post" id="g-form" class="plan-edit-form">
@@ -52,6 +65,7 @@
           <button type="submit" class="btn">Segna la seduta fatta</button>
         </form>
       </div>
+      {% endif %}
     </div>
     <details class="g-manual"><summary class="muted">Impostazioni del controllo</summary>
     {% endif %}
@@ -69,11 +83,11 @@
       </label>
     </div>
     <label class="tl-check"><input type="checkbox" id="tl-voice" checked> Voce (conta e corregge)</label>
-    {% if sid %}</details>{% endif %}
+    {% if sid or prova %}</details>{% endif %}
     <div class="tl-btns">
       <button class="btn" id="tl-cam">Accendi webcam</button>
-      <button class="btn" id="tl-start" disabled {% if sid %}style="display:none"{% endif %}>Inizia serie</button>
-      <button class="btn btn-secondary" id="tl-stop" disabled {% if sid %}style="display:none"{% endif %}>Fine serie</button>
+      <button class="btn" id="tl-start" disabled {% if sid or prova %}style="display:none"{% endif %}>Inizia serie</button>
+      <button class="btn btn-secondary" id="tl-stop" disabled {% if sid or prova %}style="display:none"{% endif %}>Fine serie</button>
     </div>
     <p id="tl-status" class="muted"></p>
 
@@ -408,7 +422,7 @@ function flatten(blocks) {
       const r = b.rest || b.exercises[b.exercises.length - 1].pause;
       if (g < b.rounds && r) items.push({ type: "rest", secs: r, bi });
     }
-    if (bi < blocks.length - 1) items.push({ type: "rest", secs: 30, why: "cambio esercizio", bi: bi + 1 });
+    if (bi < blocks.length - 1) items.push({ type: "rest", secs: (gPlan && gPlan.between) || 30, why: "cambio esercizio", bi: bi + 1 });
   });
   return items;
 }
@@ -538,6 +552,14 @@ function gFinish() {
     by.set(r.name, [...(by.get(r.name) || []), txt]);
   });
   const lines = [...by].map(([n, t]) => `${n}: ${t.join("; ")}`);
+  if (gPlan.prova) {
+    $("g-prova-out").textContent = lines.join("\n");
+    $("g-end").hidden = false; ["g-pause", "g-skip"].forEach((id) => { $(id).disabled = true; });
+    $("g-start").disabled = false; $("g-start").textContent = "Rifai la prova";
+    say("prova finita", true, true);
+    try { G.lock?.release(); } catch (_) {}
+    G = null; renderBlocks(); return;
+  }
   $("g-notes").value = `${gPlan.title} — allenamento guidato, ${mins} min.\n` + lines.join("\n");
   $("g-min").value = mins;
   $("g-form").action = `/plans/${gPlan.plan_id}/session/${$("g-panel").dataset.sid}/done`;
@@ -552,6 +574,13 @@ async function gLoad(refresh) {
   const panel = $("g-panel"); if (!panel) return;
   $("g-title").textContent = "Leggo la seduta… (la prima volta 10–20 s)";
   try {
+    if (panel.dataset.prova) {
+      gPlan = Object.assign(JSON.parse(panel.dataset.prova), { prova: true }); gBlocks = gPlan.blocks;
+      $("g-title").innerHTML = "<strong>Allenamento di prova</strong> <span class='muted'>(~5 min, nessun salvataggio)</span>";
+      renderBlocks(); $("g-start").disabled = false;
+      if (!running) status("Accendi la webcam, poi «Avvia allenamento».");
+      return;
+    }
     const r = await fetch(`/program/session/${panel.dataset.sid}/steps${refresh ? "?refresh=1" : ""}`);
     const d = await r.json();
     if (!r.ok) throw new Error(d.error || r.status);
@@ -568,7 +597,7 @@ async function gLoad(refresh) {
 if ($("g-panel")) {
   gLoad(false);
   window.__gReady = () => { if (gBlocks.length) { $("g-start").disabled = false; status("Premi «Avvia allenamento»: hai 5 secondi per metterti in posizione."); } };
-  $("g-refresh").addEventListener("click", (e) => { e.preventDefault(); if (!G) gLoad(true); });
+  $("g-refresh")?.addEventListener("click", (e) => { e.preventDefault(); if (!G) gLoad(true); });
   $("g-start").addEventListener("click", () => {
     $("g-end").hidden = true;
     G = { items: flatten(gBlocks), i: -1, log: [], t0: performance.now(), paused: false };

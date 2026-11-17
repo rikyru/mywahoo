@@ -785,12 +785,15 @@ LIVE_EXERCISES = ["Affondo bulgaro", "Squat su una gamba", "Stacco a una gamba",
 
 
 @app.get("/tecnica-live", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
-def technique_live(request: Request, ex: str = "", sid: int = 0):
+def technique_live(request: Request, ex: str = "", sid: int = 0, prova: int = 0, then: int = 0):
     """Controllo tecnica in diretta: webcam + MediaPipe Pose nel browser (niente
-    immagini al server). Serve HTTPS (o localhost) per la webcam."""
+    immagini al server). Serve HTTPS (o localhost) per la webcam.
+    prova=1: allenamento di prova fisso (niente AI, niente «segna fatta») per
+    controllare inquadratura, conteggio e gesto delle mani; then = seduta da avviare dopo."""
     return templates.TemplateResponse(request, "tecnica_live.html", {
         "names": LIVE_EXERCISES, "ex": ex if ex in LIVE_EXERCISES else LIVE_EXERCISES[0],
-        "sid": sid, "today": date.today().isoformat()})
+        "sid": 0 if prova else sid, "prova": PROVA_BLOCKS if prova else None, "then": then,
+        "today": date.today().isoformat()})
 
 
 def _clean_steps(raw: dict) -> list[dict]:
@@ -823,6 +826,24 @@ def _clean_steps(raw: dict) -> list[dict]:
             out.append({"title": str(b.get("titolo") or "")[:60], "rounds": num(b.get("giri"), 1, 20) or 1,
                         "rest": num(b.get("recupero_giri_s"), 0, 600) or 0, "exercises": exs})
     return out
+
+
+# Allenamento di prova: un esercizio per tipo di movimento riconosciuto (ginocchio,
+# anca, ponte, gomito) più il gesto delle mani, poche ripetizioni e recuperi brevi.
+PROVA_BLOCKS = _clean_steps({"blocchi": [
+    {"titolo": "Gesto", "esercizi": [{"nome": "Alza le mani sopra la testa per un secondo", "ripetizioni": 1,
+                                      "pausa_dopo_s": 0, "nota": "così si chiude un esercizio senza toccare il computer"}]},
+    {"titolo": "Ginocchio", "esercizi": [
+        {"nome": "Squat", "ripetizioni": 5, "pausa_dopo_s": 15, "nota": "di fronte, scendi lento"},
+        {"nome": "Affondo bulgaro", "ripetizioni": 3, "per_lato": True, "nota": "piede dietro su sedia o divano"}]},
+    {"titolo": "Anca", "esercizi": [{"nome": "Stacco a una gamba", "ripetizioni": 3, "per_lato": True,
+                                     "nota": "meglio ripreso di lato"}]},
+    {"titolo": "A terra", "esercizi": [
+        {"nome": "Ponte su una gamba", "ripetizioni": 3, "per_lato": True, "pausa_dopo_s": 15,
+         "nota": "di lato, tieni su un secondo"},
+        {"nome": "Flessioni", "ripetizioni": 3, "nota": "di lato; spunta «conta con la webcam» per provarle"}]},
+]})
+PROVA_BLOCKS_BETWEEN = 15
 
 
 @app.get("/program/session/{sid}/steps", dependencies=[Depends(require_auth)])
