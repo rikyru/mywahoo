@@ -235,6 +235,8 @@ def season_overview(anchors, today: date | None = None) -> list[dict]:
                 # oltre le sedute già generate: la settimana tipo proiettata
                 have = {(it["date"], family(it["sport"])) for it in items}
                 fixed_slots = {ps.slot_id for ps in by_week.get(wk, []) if ps.kind == "fixed"}
+                fixed_slots |= {it["slot_id"] for it in items if it["state"] != "saltata"
+                                and any(x.get("id") == it["slot_id"] and x.get("pick") == "one" for x in tpl)}
                 lo = max(wk, horizon + timedelta(days=1))
                 for inst in P.expand_slots(tpl, absences, lo, wk + timedelta(days=6), lo, family=family):
                     sl = inst["slot"]
@@ -567,6 +569,9 @@ def _order(d: date, slot: dict, tpl: list) -> int:
     return d.toordinal() * 100 + idx
 
 
+AUTO_MOVE = "auto:"   # moved_from delle sedute spostate dal motore per un'assenza
+
+
 def _key(slot_id: str, d: date) -> str:
     return f"{slot_id}@{d.isoformat()}"
 
@@ -736,7 +741,7 @@ async def _recalc(ctx: dict, why: str) -> dict | None:
                 if P.monday(i["date"]) != wk:
                     continue
                 sl = i["slot"]
-                k = _key(sl["id"], i["date"])
+                k = _key(sl["id"], i.get("from") or i["date"])
                 ex = by_key.get(k)
                 if ex and (ex.done or ex.skipped):
                     continue                   # già nel fatto, o fuori dal conto
@@ -761,11 +766,16 @@ async def _recalc(ctx: dict, why: str) -> dict | None:
         to_fill = []
         for i in inst:
             sl, d = i["slot"], i["date"]
-            k = _key(sl["id"], d)
+            k = _key(sl["id"], i.get("from") or d)
             ex = by_key.get(k)
-            if ex and (ex.done or ex.skipped or ex.kind == "fixed" or ex.moved_from):
+            if ex and (ex.done or ex.skipped or ex.kind == "fixed"
+                       or (ex.moved_from and not ex.moved_from.startswith(AUTO_MOVE))):
                 continue                       # "fixed": seduta fissata a mano (es. test FTP), mai riscritta;
-                                               # spostata: l'hai accettata così
+                                               # spostata da te: l'hai accettata così
+            if ex and ex.date.date() != d:     # spostata dal motore e ora cambia giorno (assenza tolta o nuova)
+                s.delete(ex)
+                stats["removed"] += 1
+                ex = None
             wi = weeks[P.monday(d)]
             dur = P.grown_duration(sl, wi["pos"]["block"], prog.block_growth or 0.0, family)
             if sl.get("kind") == "external":
@@ -796,17 +806,18 @@ async def _recalc(ctx: dict, why: str) -> dict | None:
                                               rpe=ex.rpe_target) + a.get("note", "")
                     s.add(ex)
                     continue
-            to_fill.append({"key": k, "slot": sl, "date": d, "alloc": a,
+            to_fill.append({"key": k, "slot": sl, "date": d, "from": i.get("from"), "alloc": a,
                             "existing_id": ex.id if ex else None, "week": wi})
 
         # 5) sedute non più in programma (assenza, slot cambiato o spostato)
-        inst_keys = {_key(i["slot"]["id"], i["date"]) for i in inst}
+        inst_keys = {_key(i["slot"]["id"], i.get("from") or i["date"]) for i in inst}
         horizon = today + timedelta(days=P.WINDOW_DAYS - 1)
         for ps in sessions:
-            if not ps.kind or ps.done or ps.skipped or not ps.date or ps.moved_from:
+            if (not ps.kind or ps.done or ps.skipped or not ps.date
+                    or (ps.moved_from and not ps.moved_from.startswith(AUTO_MOVE))):
                 continue                       # spostata da te: resta dove l'hai messa
             d = ps.date.date()
-            if d < today or d > horizon or _key(ps.slot_id, d) in inst_keys:
+            if d < today or d > horizon or _key(ps.slot_id, _slot_day(ps)) in inst_keys:
                 continue
             prop = jl(ps.proposal_json, {})
             if P.is_proposal_day(d, today):
@@ -849,7 +860,8 @@ async def _recalc(ctx: dict, why: str) -> dict | None:
                 "duration_min": P._int(c.get("duration_min"), a["duration"], 5, 480),
                 "rpe_target": a["rpe"],
                 "structure_json": _clean_structure(c.get("structure")) if sl.get("indoor") else None,
-                "reason": P.reason_text(wi["pos"], a, wi["target"], wi["done"]) + a.get("note", ""),
+                "reason": P.reason_text(wi["pos"], a, wi["target"], wi["done"]) + a.get("note", "")
+                + (f" · spostata da {_day_label(f['from'])} (assenza)" if f.get("from") else ""),
             }
             ex = s.get(PlanSession, f["existing_id"]) if f["existing_id"] else None
             if ex is None:
@@ -857,7 +869,8 @@ async def _recalc(ctx: dict, why: str) -> dict | None:
                     plan_id=prog.plan_id, order=_order(d, sl, tpl), day_label=_day_label(d),
                     date=datetime.combine(d, time(12, 0)),
                     sport=google_health.canonical_sport(sl.get("sport", ""))[:60],
-                    slot_id=sl["id"], kind="planned", **fields))
+                    slot_id=sl["id"], kind="planned",
+                    moved_from=AUTO_MOVE + f["from"].isoformat() if f.get("from") else "", **fields))
                 stats["created"] += 1
             elif ex.done or ex.skipped:
                 continue                       # cambiata mentre l'AI pensava
@@ -1008,7 +1021,8 @@ def _skip(s, prog: Program, ps: PlanSession, motive: str = "", note: str = "",
 
 def _slot_day(ps: PlanSession) -> date:
     try:
-        return date.fromisoformat(ps.moved_from) if ps.moved_from else ps.date.date()
+        return (date.fromisoformat(ps.moved_from.removeprefix(AUTO_MOVE)) if ps.moved_from
+                else ps.date.date())
     except ValueError:
         return ps.date.date()
 
@@ -1075,7 +1089,7 @@ def move_session(sid: int, motive: str = "", note: str = "") -> str | None:
             _skip(s, prog, x, "altro", f"lascia il posto a «{ps.title}» spostata da {old}")
         tpl = jl(prog.template_json, [])
         label = SKIP_MOTIVES.get(motive, motive or "")
-        ps.moved_from = ps.moved_from or ps.date.date().isoformat()
+        ps.moved_from = (ps.moved_from or ps.date.date().isoformat()).removeprefix(AUTO_MOVE)
         ps.date = datetime.combine(c["date"], time(12, 0))
         ps.day_label = c["label"]
         ps.order = _order(c["date"], next((x for x in tpl if x.get("id") == ps.slot_id), {}), tpl)

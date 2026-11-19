@@ -1,5 +1,5 @@
 """Motore del programma adattivo (puro)."""
-from datetime import date
+from datetime import date, timedelta
 
 import pytest
 
@@ -253,3 +253,36 @@ def test_grown_duration_only_endurance_and_capped():
     swim = {"sport": "Nuoto", "duration": 75, "kind": "external"}
     assert P.grown_duration(core, 6, 0.05, fam) == 45 and P.grown_duration(swim, 6, 0.05, fam) == 75
     assert P.grown_duration(bike, 6, 0.0, fam) == 60
+
+
+WEEK = [
+    {"id": "nuoto", "days": [0, 2], "sport": "Nuoto", "kind": "external", "intensity": "intensa"},
+    {"id": "gambe", "days": [3], "sport": "Forza", "kind": "planned", "intensity": "intensa"},
+    {"id": "scarico", "days": [4], "sport": "Forza", "kind": "planned", "intensity": "leggera"},
+    {"id": "core", "days": [1], "sport": "Corpo libero", "kind": "planned", "intensity": "leggera"},
+    {"id": "bici", "days": [5, 6], "pick": "one", "sport": "Ciclismo", "kind": "planned", "intensity": "media"},
+]
+M23 = date(2026, 11, 23)
+
+
+def _days(inst):
+    return [(i["date"].day, i["slot"]["id"], i.get("from") and i["from"].day) for i in inst]
+
+
+def test_absence_moves_important_session_over_a_lighter_one():
+    ab = [{"start": "2026-11-26", "end": "2026-11-26"}]          # giovedì: gambe
+    got = _days(P.expand_slots(WEEK, ab, M23, M23 + timedelta(days=6), M23))
+    assert (27, "gambe", 26) in got and not any(s == "scarico" for _, s, _ in got)
+    assert [s for _, s, _ in got].count("bici") == 1
+
+
+def test_absence_drops_light_session_and_never_lands_on_external():
+    ab = [{"start": "2026-11-24", "end": "2026-11-24"}]          # martedì: core leggero
+    got = _days(P.expand_slots(WEEK, ab, M23, M23 + timedelta(days=6), M23))
+    assert not any(s == "core" for _, s, _ in got)
+    ab = [{"start": "2026-11-26", "end": "2026-11-27"}]          # via gio e ven: gambe sabato, la bici domenica
+    got = _days(P.expand_slots(WEEK, ab, M23, M23 + timedelta(days=6), M23))
+    assert (28, "gambe", 26) in got and (29, "bici", None) in got
+    ab = [{"start": "2026-11-23", "end": "2026-11-23"}]          # assenza di lunedì: il nuoto (esterna) non si sposta
+    got = _days(P.expand_slots(WEEK, ab, M23, M23 + timedelta(days=6), M23))
+    assert [s for _, s, _ in got].count("nuoto") == 1 and (24, "core", None) in got

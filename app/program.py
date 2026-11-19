@@ -103,7 +103,12 @@ def expand_slots(template: list[dict], absences: list[dict], start: date, end: d
       {(family, iso)}); altrimenti resta sul giorno già scelto (`keep_day`:
       {(slot_id, monday_iso): iso}) se ancora valido, se no il primo giorno
       disponibile da oggi in poi, saltando i giorni segnati come saltati
-      (`skipped`: {(slot_id, iso)}) — così "sabato salto" lo sposta a domenica.
+      (`skipped`: {(slot_id, iso)}) — così "sabato salto" lo sposta a domenica;
+    - seduta pianificata importante (priorità >= 2) su un giorno di assenza: si
+      sposta al primo dei MOVE_MAX_DAYS giorni dopo (stessa settimana, da oggi in
+      poi) libero o con sole sedute meno importanti, che lasciano il posto; mai su
+      un'esterna, un giorno di assenza o già allenato. L'istanza spostata ha
+      "from": il giorno dello slot (la chiave resta quello).
     """
     keep_day = keep_day or {}
     skipped = skipped or set()
@@ -111,6 +116,8 @@ def expand_slots(template: list[dict], absences: list[dict], start: date, end: d
     out: list[dict] = []
     wk = monday(start)
     while wk <= end:
+        week: list[dict] = []         # anche fuori finestra: servono agli spostamenti
+        absent: list = []
         for slot in template or []:
             if not slot.get("enabled", True):
                 continue
@@ -121,8 +128,10 @@ def expand_slots(template: list[dict], absences: list[dict], start: date, end: d
             week_days = [wk + timedelta(days=x) for x in days]
             if slot.get("pick") != "one" or len(days) == 1:
                 for d in week_days:
-                    if start <= d <= end and not is_absent(d, sport, absences, family):
-                        out.append({"date": d, "slot": slot, "multi": False})
+                    if not is_absent(d, sport, absences, family):
+                        week.append({"date": d, "slot": slot, "multi": False})
+                    elif slot.get("kind") != "external":
+                        absent.append((d, slot))
                 continue
             fam = family(sport)
             if any((fam, d.isoformat()) in done_days for d in week_days):
@@ -140,8 +149,38 @@ def expand_slots(template: list[dict], absences: list[dict], start: date, end: d
                     chosen = kd
             if chosen is None:
                 chosen = next((d for d in week_days if ok(d)), None)
-            if chosen and start <= chosen <= end:
-                out.append({"date": chosen, "slot": slot, "multi": True})
+            if chosen:
+                week.append({"date": chosen, "slot": slot, "multi": True})
+        trained = {iso for _, iso in done_days}
+        for d0, slot in sorted(absent, key=lambda x: (-slot_priority(x[1]), x[0])):
+            mine = slot_priority(slot)
+            if mine < 2:
+                continue                      # leggera: con l'assenza si perde e basta
+            for k in range(1, MOVE_MAX_DAYS + 1):
+                d = d0 + timedelta(days=k)
+                if d > wk + timedelta(days=6):
+                    break
+                if (d < today or d.isoformat() in trained
+                        or is_absent(d, slot.get("sport", ""), absences, family)):
+                    continue
+                there = [x for x in week if x["date"] == d]
+                if any(x["slot"].get("kind") == "external" for x in there):
+                    continue
+                if all(slot_priority(x["slot"]) < mine for x in there):
+                    week = [x for x in week if x not in there]
+                    week.append({"date": d, "slot": slot, "multi": False, "from": d0})
+                    for x in there:            # «sab o dom» che lascia il posto: va sull'altro giorno
+                        sl2 = x["slot"]
+                        alt = next((wk + timedelta(days=int(n)) for n in sorted(sl2.get("days") or [])
+                                    if (dd := wk + timedelta(days=int(n))) != d and dd >= today
+                                    and (sl2.get("id", ""), dd.isoformat()) not in skipped
+                                    and not is_absent(dd, sl2.get("sport", ""), absences, family)
+                                    and not any(y["date"] == dd and y.get("from") for y in week)),
+                                   None) if x.get("multi") else None
+                        if alt:
+                            week.append({**x, "date": alt})
+                    break
+        out += [x for x in week if start <= x["date"] <= end]
         wk += timedelta(days=7)
     out.sort(key=lambda x: (x["date"], x["slot"].get("id", "")))
     return out
