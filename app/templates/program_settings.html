@@ -54,6 +54,13 @@
           <option value="{{ v }}" {% if (s.intensity or 'media') == v %}selected{% endif %}>{{ v }}</option>
           {% endfor %}
         </select></label>
+      <label title="Se salti un giorno, una seduta più importante prende il posto di una meno importante nei 2 giorni dopo">Importanza
+        <select name="s-{{ i }}-priority">
+          <option value="">dall'intensità</option>
+          {% for v in ["alta", "media", "bassa"] %}
+          <option value="{{ v }}" {% if s.priority == v %}selected{% endif %}>{{ v }}</option>
+          {% endfor %}
+        </select></label>
     </div>
     <div class="prog-days">
       {% for d in weekdays %}

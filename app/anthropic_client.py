@@ -871,6 +871,15 @@ Azioni possibili (usa solo queste):
  {"tipo": "attrezzatura", "aggiungi": ["..."], "rimuovi": ["..."]}
  {"tipo": "fine", "date": "YYYY-MM-DD"}
  {"tipo": "nota", "testo": "..."}   (aggiunge alle note del programma)
+ {"tipo": "sposta", "session_id": intero, "motivo": "come per salta"}   (la seduta non si
+   perde: va nel giorno indicato da "se_non_ci_sei" della seduta, e quelle meno importanti
+   di quel giorno lasciano il posto. Il giorno lo sceglie il motore, non tu)
+SPOSTA o SALTA: se l'atleta dice che un giorno non c'è / non può e quella seduta ha
+"se_non_ci_sei" con "sposta_a", proponi "sposta" e scrivi in chiaro lo scambio (es.
+"gambe da giovedì a venerdì, al posto dello scarico"), ricordando un eventuale
+effetto sul giorno dopo (es. gambe stanche per la bici). Se "se_non_ci_sei" dice che
+non c'è un giorno adatto, o l'atleta dice che la salta e basta (malato, stanco,
+riposo), usa "salta".
 Risolvi i giorni relativi rispetto a OGGI. Non toccare sedute già fatte. Se l'atleta
 salta una seduta di uno slot "pick: one" (es. bici sab o dom) il motore la sposta
 da solo all'altro giorno, a meno di "intera_settimana": true."""

@@ -263,7 +263,7 @@
   </div>
   {% endif %}
 
-  {{ session_actions(s, prog.plan_id, v.pick_one, "/program") }}
+  {{ session_actions(s, prog.plan_id, v.pick_one, "/program", move=v.move) }}
 </section>
 {% endfor %}
 {% endfor %}

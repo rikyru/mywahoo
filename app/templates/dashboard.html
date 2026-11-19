@@ -130,7 +130,7 @@
             {%- if v.steps %} · <a href="/program/session/{{ s.id }}/workout.zwo">.zwo</a>{% endif %}</span>
         </div>
       </div>
-      {{ session_actions(s, today_plan.plan_id, v.pick_one, "/", compact=True) }}
+      {{ session_actions(s, today_plan.plan_id, v.pick_one, "/", compact=True, move=v.move) }}
     </div>
     {% endfor %}
     {% endif %}

@@ -2,7 +2,7 @@
    le stesse nella pagina Programma e nella card "Oggi" della dashboard.
    next = pagina a cui tornare dopo l'azione. #}
 {% from "_rpe_field.html" import rpe_field %}
-{% macro session_actions(s, plan_id, pick_one=False, next="/program", compact=False) %}
+{% macro session_actions(s, plan_id, pick_one=False, next="/program", compact=False, move=None) %}
   {% if s.done and s.workout_id %}
   <p class="muted"><a href="/workout/{{ s.workout_id }}">→ allenamento registrato</a></p>
   {% endif %}
@@ -40,7 +40,14 @@
         </div>
         <label>Nota <span class="muted">(facoltativa)</span>
           <input type="text" name="note" maxlength="200" placeholder="es. riunione fino a tardi"></label>
-        {% if pick_one %}
+        {% if move %}
+        <div class="prog-flags">
+          <label><input type="radio" name="scope" value="shift" checked> spostala a {{ move.label }}{% if move.replace %}
+            <span class="muted">al posto di {% for x in move.replace %}«{{ x.title }}»{{ ", " if not loop.last }}{% endfor %} (meno importante)</span>{% else %}
+            <span class="muted">(giorno libero)</span>{% endif %}</label>
+          <label><input type="radio" name="scope" value="skip"> saltala e basta</label>
+        </div>
+        {% elif pick_one %}
         <div class="prog-flags">
           <label><input type="radio" name="scope" value="move" checked> spostala all'altro giorno</label>
           <label><input type="radio" name="scope" value="week"> salta questa settimana</label>

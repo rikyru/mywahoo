@@ -474,11 +474,26 @@ def sanitize_template(raw, routines: dict | set | None = None) -> list[dict]:
             "duration": dur,
             "focus": str(sl.get("focus") or "").strip()[:120],
             "intensity": sl.get("intensity") if sl.get("intensity") in INTENSITY_DELTA else "media",
+            "priority": sl.get("priority") if sl.get("priority") in PRIORITY else "",
             "routines": rts,
             "indoor": bool(sl.get("indoor")) and is_bike(sport),
             "enabled": sl.get("enabled", True) is not False,
         })
     return out
+
+
+PRIORITY = {"alta": 3, "media": 2, "bassa": 1}
+PRIORITY_FROM_INTENSITY = {"intensa": 3, "media": 2, "leggera": 1}
+MOVE_MAX_DAYS = 2         # una seduta saltata si sposta al massimo di 2 giorni
+
+
+def slot_priority(slot: dict) -> int:
+    """Importanza di uno slot per gli spostamenti: quella scelta, se no dall'intensità
+    (gambe carico / rulli contano più di core leggero o scarico)."""
+    p = (slot or {}).get("priority")
+    if p in PRIORITY:
+        return PRIORITY[p]
+    return PRIORITY_FROM_INTENSITY.get((slot or {}).get("intensity"), 2)
 
 
 def block_label(pos: dict) -> str:

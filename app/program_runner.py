@@ -707,7 +707,7 @@ async def _recalc(ctx: dict, why: str) -> dict | None:
         for ps in sessions:
             if not ps.slot_id or not ps.date:
                 continue
-            d = ps.date.date()
+            d = _slot_day(ps)                  # spostata: conta il giorno dello slot
             by_key.setdefault(_key(ps.slot_id, d), ps)
             if ps.skipped:
                 skipped.add((ps.slot_id, d.isoformat()))
@@ -763,8 +763,9 @@ async def _recalc(ctx: dict, why: str) -> dict | None:
             sl, d = i["slot"], i["date"]
             k = _key(sl["id"], d)
             ex = by_key.get(k)
-            if ex and (ex.done or ex.skipped or ex.kind == "fixed"):
-                continue                       # "fixed": seduta fissata a mano (es. test FTP), mai riscritta
+            if ex and (ex.done or ex.skipped or ex.kind == "fixed" or ex.moved_from):
+                continue                       # "fixed": seduta fissata a mano (es. test FTP), mai riscritta;
+                                               # spostata: l'hai accettata così
             wi = weeks[P.monday(d)]
             dur = P.grown_duration(sl, wi["pos"]["block"], prog.block_growth or 0.0, family)
             if sl.get("kind") == "external":
@@ -802,8 +803,8 @@ async def _recalc(ctx: dict, why: str) -> dict | None:
         inst_keys = {_key(i["slot"]["id"], i["date"]) for i in inst}
         horizon = today + timedelta(days=P.WINDOW_DAYS - 1)
         for ps in sessions:
-            if not ps.kind or ps.done or ps.skipped or not ps.date:
-                continue
+            if not ps.kind or ps.done or ps.skipped or not ps.date or ps.moved_from:
+                continue                       # spostata da te: resta dove l'hai messa
             d = ps.date.date()
             if d < today or d > horizon or _key(ps.slot_id, d) in inst_keys:
                 continue
@@ -1005,6 +1006,89 @@ def _skip(s, prog: Program, ps: PlanSession, motive: str = "", note: str = "",
         s.add(other)
 
 
+def _slot_day(ps: PlanSession) -> date:
+    try:
+        return date.fromisoformat(ps.moved_from) if ps.moved_from else ps.date.date()
+    except ValueError:
+        return ps.date.date()
+
+
+def _priority(ps: PlanSession, slots: dict) -> int:
+    return 4 if ps.kind == "fixed" else P.slot_priority(slots.get(ps.slot_id) or {})
+
+
+def move_candidate(s, prog: Program, ps: PlanSession, today: date | None = None) -> dict | None:
+    """Dove spostare una seduta che salti, invece di perderla: il primo dei prossimi
+    MOVE_MAX_DAYS giorni (da oggi in poi) libero, o con sole sedute pianificate MENO
+    importanti (che lasciano il posto). Esclusi i giorni con un'esterna (corso di
+    nuoto), con un allenamento già fatto o di assenza. None = niente di sensato
+    (o slot «sab o dom» che il motore sposta già da solo all'altro giorno).
+    -> {"date", "label", "replace": [PlanSession]}"""
+    today = today or date.today()
+    if (not ps or not ps.date or ps.done or ps.skipped or ps.kind not in ("planned", "fixed")
+            or not prog or not prog.plan_id):
+        return None
+    slots = {x.get("id"): x for x in jl(prog.template_json, [])}
+    slot = slots.get(ps.slot_id) or {}
+    d0 = ps.date.date()
+    if slot.get("pick") == "one" and ps.kind != "fixed" and not ps.moved_from:
+        wk = P.monday(d0)
+        if any(wk + timedelta(days=int(x)) > max(d0, today - timedelta(days=1))
+               for x in slot.get("days") or []):
+            return None                        # c'è ancora l'altro giorno dello slot
+    absences = jl(prog.absences_json, [])
+    mine = _priority(ps, slots)
+    if mine < 2:
+        return None                            # una seduta leggera (core, scarico) si salta e basta
+    rows = s.exec(select(PlanSession).where(
+        PlanSession.plan_id == prog.plan_id,
+        PlanSession.date > datetime.combine(d0, time.max),
+        PlanSession.date <= datetime.combine(d0 + timedelta(days=P.MOVE_MAX_DAYS), time.max))).all()
+    end = prog.end_date.date() if prog.end_date else None
+    for k in range(1, P.MOVE_MAX_DAYS + 1):
+        d = d0 + timedelta(days=k)
+        if d < today:
+            continue
+        if end and d > end:
+            break
+        if P.is_absent(d, ps.sport, absences, family):
+            continue
+        there = [x for x in rows if x.id != ps.id and x.date.date() == d and not x.skipped]
+        if any(x.done or x.kind == "external" for x in there):
+            continue
+        if all(_priority(x, slots) < mine for x in there):
+            return {"date": d, "label": _day_label(d), "replace": there}
+    return None
+
+
+def move_session(sid: int, motive: str = "", note: str = "") -> str | None:
+    """Sposta la seduta sul giorno di move_candidate; quelle meno importanti di quel
+    giorno risultano saltate. Ritorna una frase su cosa è successo (None = non si può)."""
+    with Session(engine) as s:
+        ps = _own_session(s, sid)
+        prog = active_program(s)
+        c = move_candidate(s, prog, ps) if ps and prog else None
+        if not c:
+            return None
+        old = ps.day_label
+        for x in c["replace"]:
+            _skip(s, prog, x, "altro", f"lascia il posto a «{ps.title}» spostata da {old}")
+        tpl = jl(prog.template_json, [])
+        label = SKIP_MOTIVES.get(motive, motive or "")
+        ps.moved_from = ps.moved_from or ps.date.date().isoformat()
+        ps.date = datetime.combine(c["date"], time(12, 0))
+        ps.day_label = c["label"]
+        ps.order = _order(c["date"], next((x for x in tpl if x.get("id") == ps.slot_id), {}), tpl)
+        ps.proposal_json = None
+        ps.reason = (f"spostata da {old}" + (f" — {label}" if label else "")
+                     + (f": {note.strip()}" if note.strip() else ""))[:300]
+        s.add(ps)
+        title, rep = ps.title, [x.title for x in c["replace"]]
+        s.commit()
+    return (f"«{title}» spostata a {c['label']}"
+            + (" al posto di " + ", ".join(f"«{t}»" for t in rep) if rep else ""))
+
+
 def skip_session(sid: int, motive: str = "", note: str = "", whole_week: bool = False) -> bool:
     with Session(engine) as s:
         ps = _own_session(s, sid)
@@ -1044,6 +1128,7 @@ def apply_actions(azioni: list) -> list[str]:
         tpl = jl(prog.template_json, [])
         absences = jl(prog.absences_json, [])
         equip = jl(prog.equipment_json, [])
+        moved: list = []
         rmins = {r.get("id"): r.get("duration_min") or 0
                  for r in jl(prog.routines_json, []) if isinstance(r, dict)}
         for a in azioni if isinstance(azioni, list) else []:
@@ -1068,6 +1153,10 @@ def apply_actions(azioni: list) -> list[str]:
                           bool(a.get("intera_settimana")))
                     done.append(f"saltata {ps.day_label} {ps.title}"
                                 + (" (tutta la settimana)" if a.get("intera_settimana") else ""))
+            elif t == "sposta":
+                ps = s.get(PlanSession, a.get("session_id")) if isinstance(a.get("session_id"), int) else None
+                if ps and ps.plan_id == prog.plan_id:
+                    moved.append((ps.id, str(a.get("motivo") or "")))
             elif t == "modifica_seduta":
                 ps = s.get(PlanSession, a.get("session_id")) if isinstance(a.get("session_id"), int) else None
                 if ps and ps.plan_id == prog.plan_id and not ps.done and not ps.skipped:
@@ -1127,6 +1216,9 @@ def apply_actions(azioni: list) -> list[str]:
         prog.equipment_json = json.dumps(equip)
         s.add(prog)
         s.commit()
+    for sid, motive in moved:                  # dopo: vede le assenze appena salvate
+        r = move_session(sid, motive)
+        done.append(r or f"seduta {sid}: nessun giorno adatto per spostarla")
     return done
 
 
@@ -1159,6 +1251,9 @@ def chat_context(ctx: dict) -> dict | None:
                  "rpe_target": p.rpe_target,
                  "stato": "fatta" if p.done else "saltata" if p.skipped else "da fare",
                  **({"motivo": p.reason} if p.skipped and p.reason else {}),
+                 **({"se_non_ci_sei": _move_hint(s, prog, p, today)}
+                    if not p.done and not p.skipped and p.kind in ("planned", "fixed")
+                    and p.date.date() >= today else {}),
                  # contenuto solo per le prossime da fare: serve per adattarle
                  **({"contenuto": (p.description or "")[:500]}
                     if not p.done and not p.skipped and p.date.date() <= today + timedelta(days=3)
@@ -1166,6 +1261,16 @@ def chat_context(ctx: dict) -> dict | None:
                 for p in upcoming if p.date],
             "forma_attuale": ctx.get("form"),
         }
+
+
+def _move_hint(s, prog: Program, p: PlanSession, today: date) -> dict | str:
+    c = move_candidate(s, prog, p, today)
+    if not c:
+        slot = next((x for x in jl(prog.template_json, []) if x.get("id") == p.slot_id), {})
+        return ("il motore la sposta da solo all'altro giorno dello slot" if slot.get("pick") == "one"
+                else "nessun giorno adatto nei prossimi 2: si salta")
+    return {"sposta_a": c["date"].isoformat(),
+            "al_posto_di": [x.title for x in c["replace"]] or "giorno libero"}
 
 
 def analysis_context(ftp: float | None = None, today: date | None = None) -> dict | None:

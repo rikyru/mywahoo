@@ -77,6 +77,7 @@ class PlanSession(SQLModel, table=True):
     structure_json: Optional[str] = None     # indoor bike: [{min, pct_ftp, note}]
     reason: str = ""                         # why the engine created/changed it
     proposal_json: Optional[str] = None      # pending change for today/tomorrow
+    moved_from: str = ""                     # ISO day of the template slot, if moved to another day
 
 
 class Program(SQLModel, table=True):
@@ -357,7 +358,8 @@ _MIGRATIONS = {
     "plansession": [("conversation_id", "INTEGER"), ("slot_id", "TEXT DEFAULT ''"),
                     ("kind", "TEXT DEFAULT ''"), ("skipped", "INTEGER DEFAULT 0"),
                     ("rpe_target", "REAL"), ("structure_json", "TEXT"),
-                    ("reason", "TEXT DEFAULT ''"), ("proposal_json", "TEXT")],
+                    ("reason", "TEXT DEFAULT ''"), ("proposal_json", "TEXT"),
+                    ("moved_from", "TEXT DEFAULT ''")],
     "trainingplan": [("conversation_id", "INTEGER")],
     "climbeffort": [("kind", "TEXT DEFAULT 'climb'"), ("path_json", "TEXT DEFAULT '[]'")],
     "customsegment": [("source_workout_id", "INTEGER")],

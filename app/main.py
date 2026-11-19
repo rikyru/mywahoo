@@ -2321,7 +2321,8 @@ def program_page(request: Request):
                  "pick_one": slot.get("pick") == "one",
                  "past": ps.date.date() < today if ps.date else False,
                  "is_today": ps.date.date() == today if ps.date else False,
-                 "proposal": prop if prop and not prop.get("rejected") else None}
+                 "proposal": prop if prop and not prop.get("rejected") else None,
+                 "move": _move_view(session, prog, ps, today)}
             if v["proposal"]:
                 v["prop_desc"] = exercisesmod.linkify(prop.get("description") or "")
                 proposals.append(v)
@@ -2413,7 +2414,7 @@ async def program_settings_save(request: Request):
                           "pick": "one" if form.get(f"s-{i}-pick") else "each",
                           "sport": g(f"s-{i}-sport"), "kind": g(f"s-{i}-kind"),
                           "duration": g(f"s-{i}-duration"), "focus": g(f"s-{i}-focus"),
-                          "intensity": g(f"s-{i}-intensity"),
+                          "intensity": g(f"s-{i}-intensity"), "priority": g(f"s-{i}-priority"),
                           "routines": [r for r in rids if form.get(f"s-{i}-rt-{r}")],
                           "indoor": bool(form.get(f"s-{i}-indoor")),
                           "enabled": bool(form.get(f"s-{i}-enabled"))})
@@ -2580,7 +2581,13 @@ async def program_recalc():
 @app.post("/program/session/{sid}/{action}", dependencies=[Depends(require_auth)])
 async def program_session_action(sid: int, action: str, request: Request):
     form = await request.form()
-    if action == "skip":     # "Non la faccio": motivo, nota, ed eventualmente tutta la settimana
+    moved = None
+    if action == "skip" and form.get("scope") == "shift":   # "Non la faccio" ma spostala
+        moved = program_runner.move_session(sid, str(form.get("motive") or ""),
+                                            str(form.get("note") or "")[:200])
+    if moved:
+        ok = True
+    elif action == "skip":     # "Non la faccio": motivo, nota, ed eventualmente tutta la settimana
         ok = program_runner.skip_session(sid, str(form.get("motive") or ""),
                                          str(form.get("note") or "")[:200],
                                          form.get("scope") == "week")
@@ -2594,8 +2601,10 @@ async def program_session_action(sid: int, action: str, request: Request):
         return _program_redirect(error="Azione non valida su questa seduta", path=back)
     if action in ("skip", "unskip"):
         st, err = await _program_recalc_now(
-            "seduta saltata" if action == "skip" else "seduta ripristinata", push=True)
-        return _program_redirect(msg=_recalc_msg(st) if not err else "", error=err, path=back)
+            "seduta spostata" if moved else "seduta saltata" if action == "skip" else "seduta ripristinata",
+            push=True)
+        msg = (moved + ". " if moved else "") + (_recalc_msg(st) if not err else "")
+        return _program_redirect(msg=msg, error=err, path=back)
     if action == "accept" and nutrition.is_configured():
         _fire_and_forget(nutrition.recompute_and_push())
     return _program_redirect(msg="Proposta accettata" if action == "accept"
@@ -2609,6 +2618,8 @@ def _program_action_label(a: dict, names: dict | None = None) -> str:
         sess = (names or {}).get(a.get("session_id"), f"seduta {a.get('session_id')}")
         if t == "salta":
             return f"salta {sess}"
+        if t == "sposta":
+            return f"sposta {sess} (giorno scelto in base alle priorità)"
         if t == "modifica_seduta":
             return (f"adatta {sess} → «{a.get('title') or '…'}»"
                     + (f", {a.get('duration_min')}′" if a.get("duration_min") else "")
@@ -3302,6 +3313,14 @@ def _spark(series: list[dict], w: float = 100, h: float = 32) -> dict | None:
             "days": len(series), "from": series[0]["date"]}
 
 
+def _move_view(session, prog, ps, today: date) -> dict | None:
+    """Proposta di spostamento per il form «Non la faccio» (solo da oggi in poi)."""
+    if not ps.date or ps.date.date() < today or ps.done or ps.skipped:
+        return None
+    c = program_runner.move_candidate(session, prog, ps, today)
+    return {"label": c["label"], "replace": [{"title": x.title} for x in c["replace"]]} if c else None
+
+
 def _today_sessions() -> dict | None:
     """Le sedute del programma di oggi per la card in home (con scaletta in watt)."""
     today = date.today()
@@ -3317,6 +3336,7 @@ def _today_sessions() -> dict | None:
             .order_by(PlanSession.order)).all()
         tpl = {sl.get("id"): sl for sl in jl(prog.template_json, [])}
         plan_id = prog.plan_id
+        moves = {ps.id: _move_view(session, prog, ps, today) for ps in rows}
     if not rows:
         return None
     ftp_w = (_estimated_ftp() or {}).get("ftp")
@@ -3327,6 +3347,7 @@ def _today_sessions() -> dict | None:
             st["watt"] = round(ftp_w * st["pct_ftp"] / 100) if ftp_w and st.get("pct_ftp") else None
         slot = tpl.get(ps.slot_id) or {}
         items.append({"ps": ps, "pick_one": slot.get("pick") == "one", "steps": steps,
+                      "move": moves.get(ps.id),
                       "indoor": bool(slot.get("indoor")),
                       "desc": exercisesmod.linkify(ps.description or "")})
     return {"plan_id": plan_id, "items": items}
