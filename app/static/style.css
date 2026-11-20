@@ -808,6 +808,7 @@ a.chip:hover { background: var(--card-hover); text-decoration: none; }
 .g-blocks { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 4px; }
 .g-blocks li.g-cur { color: var(--accent); font-weight: 700; }
 .g-blocks li.g-done { color: var(--muted); text-decoration: line-through; }
+.g-blocks .g-jump { margin-left: 6px; padding: 1px 8px; text-decoration: none; }
 .g-manual summary { cursor: pointer; margin-bottom: 8px; }
 .g-manual[open] { display: flex; flex-direction: column; gap: 10px; }
 .tl-video-wrap [hidden], .tl-side [hidden] { display: none !important; }

@@ -25,7 +25,8 @@
       <div id="tl-rest" class="tl-rest" hidden><div id="tl-rest-s"></div><div id="tl-rest-next"></div></div>
     </div>
     <p class="muted tl-hint">Computer a 2–3 m, webcam all'altezza delle anche (sopra una sedia o
-      una scatola), corpo intero nell'inquadratura, luce davanti a te e non alle spalle.</p>
+      una scatola), corpo intero nell'inquadratura, luce davanti a te e non alle spalle. In piedi
+      di fronte alla webcam; a terra (ponte, flessioni) di lato, con testa e piedi ai lati dello schermo.</p>
   </section>
 
   <section class="card tl-side">
@@ -130,12 +131,15 @@ const P = {
   "Squat jump":        { kind: "knee", both: true, valgus: true },
   "Wall sit":          { kind: "knee", both: true, valgus: true },
   "Stacco a una gamba":{ kind: "hinge", depth: [110, 135], standKnee: 140, pelvis: true, tempo: 2.0 },
-  "Ponte su una gamba":{ kind: "bridge", top: 165, hold: 2, pelvis: true },
-  "Ponte per i glutei":{ kind: "bridge", both: true, top: 165, hold: 1 },
-  "Flessioni":         { kind: "elbow", both: true },
-  "Pike push up":      { kind: "elbow", both: true },
-  "Dips":              { kind: "elbow", both: true },
+  // a terra si riprende di lato: sdraiato coi piedi verso la webcam l'anca non si stima
+  "Ponte su una gamba":{ kind: "bridge", top: 165, hold: 2, view: "side" },
+  "Ponte per i glutei":{ kind: "bridge", both: true, top: 165, hold: 1, view: "side" },
+  "Flessioni":         { kind: "elbow", both: true, view: "side" },
+  "Pike push up":      { kind: "elbow", both: true, view: "side" },
+  "Dips":              { kind: "elbow", both: true, view: "side" },
 };
+const PELVIS_MAX = 8;      // gradi in più rispetto a quando sei in piedi
+const VALG_MID = 0.25, VALG_BAD = 0.4;   // larghezze d'anca in più verso l'interno
 const DEF = { kind: "knee", valgus: true };
 const IDX = { L: { sh: 11, hip: 23, knee: 25, ank: 27, elb: 13, wri: 15 },
               R: { sh: 12, hip: 24, knee: 26, ank: 28, elb: 14, wri: 16 } };
@@ -194,21 +198,30 @@ function measure(res) {
   const im = res.landmarks?.[0], w = res.worldLandmarks?.[0];
   if (!im || !w) return null;
   const p = prof(), leg = $("tl-leg").value, other = leg === "L" ? "R" : "L";
-  const need = p.kind === "elbow" ? [11, 12, 13, 14, 15, 16].filter((i) => i % 2 === (leg === "L" ? 1 : 0))
-             : [IDX[leg].hip, IDX[leg].knee, IDX[leg].ank, IDX[leg].sh];
-  const vis = p.kind === "elbow"
-    ? [[11, 13, 15], [12, 14, 16]].some((g) => g.every((i) => (im[i].visibility ?? 1) > 0.5))
-    : need.every((i) => (im[i].visibility ?? 1) > 0.5);
+  const seen = (ids) => ids.every((i) => (im[i].visibility ?? 1) > 0.5);
+  const legIds = (s) => [IDX[s].hip, IDX[s].knee, IDX[s].ank, IDX[s].sh];
+  // braccia e ponte (di lato): basta il lato verso la webcam, l'altro è coperto
+  const vis = p.kind === "elbow" ? [[11, 13, 15], [12, 14, 16]].some(seen)
+            : p.kind === "bridge" ? seen(legIds("L")) || seen(legIds("R"))
+            : seen(legIds(leg));
   const knee = (s) => ang3(w[IDX[s].hip], w[IDX[s].knee], w[IDX[s].ank]);
   const hip = (s) => ang3(w[IDX[s].sh], w[IDX[s].hip], w[IDX[s].knee]);
   const sh = mid(w[11], w[12]), hp = mid(w[23], w[24]);
   // inclinazione del busto rispetto alla verticale (y del mondo = verticale)
   const lean = Math.atan2(Math.hypot(sh.x - hp.x, sh.z - hp.z), Math.abs(sh.y - hp.y)) * 180 / Math.PI;
-  const tilt = Math.abs(Math.atan2(im[24].y - im[23].y, im[24].x - im[23].x) * 180 / Math.PI);
-  const pelvis = Math.min(tilt, Math.abs(180 - tilt));
+  // bacino: inclinazione della linea delle anche in pixel veri (x e y dell'immagine
+  // sono normalizzati su larghezza e altezza diverse: senza correggere, 16:9 gonfia
+  // l'angolo di quasi 2 volte). Con segno, per confrontarlo con quando sei in piedi.
+  const vv = $("tl-video"), ar = (vv.videoWidth / vv.videoHeight) || 16 / 9;
+  const dx = (im[24].x - im[23].x) * ar, dy = im[24].y - im[23].y;
+  const pelvis = Math.abs(dx) < 1e-4 ? 0 : Math.atan(dy / dx) * 180 / Math.PI;
   let a;
   if (p.kind === "hinge") a = hip(leg);
-  else if (p.kind === "bridge") a = p.both ? (hip("L") + hip("R")) / 2 : hip(leg);
+  else if (p.kind === "bridge") {
+    const v = (s) => legIds(s).reduce((t, i) => t + (im[i].visibility ?? 1), 0);
+    a = p.both && seen(legIds("L")) && seen(legIds("R")) ? (hip("L") + hip("R")) / 2
+      : hip(v("L") >= v("R") ? "L" : "R");
+  }
   else if (p.kind === "elbow") {
     const el = (s) => ang3(w[IDX[s].sh], w[IDX[s].elb], w[IDX[s].wri]);
     // il braccio più visibile (di lato uno dei due è coperto)
@@ -227,15 +240,20 @@ function measure(res) {
 }
 
 // ---------- ripetizioni
+const avgOf = (xs) => { const v = xs.filter((x) => x != null); return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null; };
 function onFrame(m, t) {
   sEma = sEma == null ? m.s : sEma * 0.5 + m.s * 0.5;
   const s = sEma;
   if (!cur) {
-    upHist.push([t, s]);
+    upHist.push([t, s, m.valg, m.pelvis]);
     while (upHist.length && t - upHist[0][0] > 1500) upHist.shift();
     const ref = Math.max(...upHist.map((x) => x[1]));
     if (s >= ref - 4) lastNearTop = t;
-    if (s < ref - 12) cur = { ref, start: lastNearTop || t, samples: [] };
+    if (s < ref - 12) {
+      // riferimento: come stai a inizio ripetizione (asimmetrie e piedi ruotati non sono errori)
+      const top = upHist.filter((x) => x[1] >= ref - 4);
+      cur = { ref, start: lastNearTop || t, samples: [], base: { valg: avgOf(top.map((x) => x[2])), pelvis: avgOf(top.map((x) => x[3])) } };
+    }
   }
   if (cur) {
     cur.samples.push({ t, s, ...m });
@@ -258,15 +276,17 @@ function finishRep(tEnd) {
     hold: (atBottom[atBottom.length - 1].t - tBottom) / 1000,
     angle: p.kind === "bridge" ? Math.max(...S.map((x) => x.a)) : Math.min(...S.map((x) => x.a)),
     lean: Math.max(...atBottom.map((x) => x.lean)),
-    valg: S.some((x) => x.valg != null) ? Math.max(...S.filter((x) => x.valg != null).map((x) => x.valg)) : null,
-    pelvis: S.some((x) => x.pelvis != null) ? Math.max(...S.filter((x) => x.pelvis != null).map((x) => x.pelvis)) : null,
+    // ginocchio e bacino: media nella parte bassa del movimento (non il fotogramma
+    // peggiore, che è spesso rumore), come differenza da quando eri in piedi
+    valg: (() => { const v = avgOf(atBottom.map((x) => x.valg)); return v == null ? null : v - (cur.base.valg ?? 0); })(),
+    pelvis: (() => { const v = avgOf(atBottom.map((x) => x.pelvis)); return v == null ? null : Math.abs(v - (cur.base.pelvis ?? v)); })(),
     standKnee: p.kind === "hinge" ? Math.min(...S.map((x) => x.standKnee)) : null,
     faults: [],
   };
   const F = (msg, voice, bad) => r.faults.push({ msg, voice, bad });
   if (r.valg != null && p.valgus) {
-    if (r.valg >= 0.4) F("Ginocchio molto verso l'interno: spingilo verso il mignolo del piede", "ginocchio fuori", true);
-    else if (r.valg >= 0.25) F("Ginocchio un po' verso l'interno", "ginocchio fuori");
+    if (r.valg >= VALG_BAD) F("Ginocchio molto verso l'interno: spingilo verso il mignolo del piede", "ginocchio fuori", true);
+    else if (r.valg >= VALG_MID) F("Ginocchio un po' verso l'interno", "ginocchio fuori");
   }
   if (p.depth && $("tl-view").value === "side") {
     if (r.angle > p.depth[1]) F(p.kind === "hinge" ? "Busto poco inclinato: porta il bacino più indietro" : "Poco profondo: scendi di più",
@@ -274,7 +294,7 @@ function finishRep(tEnd) {
     else if (r.angle > p.depth[0]) F("Profondità quasi giusta", null);
   }
   if (p.lean && $("tl-view").value === "side" && r.lean > p.lean) F(`Busto molto inclinato (${Math.round(r.lean)}°)`, "busto su");
-  if (p.pelvis && r.pelvis != null && r.pelvis > 8) F(`Bacino storto (${Math.round(r.pelvis)}°): tienilo dritto`, "bacino dritto");
+  if (p.pelvis && r.pelvis != null && r.pelvis > PELVIS_MAX) F(`Bacino storto (${Math.round(r.pelvis)}°): tienilo dritto`, "bacino dritto");
   if (p.standKnee && r.standKnee < p.standKnee) F("Ginocchio d'appoggio troppo piegato: è uno stacco, non uno squat", "gamba più tesa");
   if (p.tempo && r.descent < p.tempo) F(`Discesa veloce (${r.descent.toFixed(1)} s): conta fino a 3`, "più lento");
   if (p.kind === "bridge") {
@@ -301,7 +321,9 @@ function draw(res, m) {
   ctx.clearRect(0, 0, c.width, c.height);
   const im = res.landmarks?.[0]; if (!im) return;
   const leg = $("tl-leg").value, legIdx = new Set(Object.values(IDX[leg]));
-  const col = m?.valg == null ? "#4c8dff" : m.valg >= 0.4 ? "#f87171" : m.valg >= 0.25 ? "#fbbf24" : "#34d399";
+  // colore della gamba solo durante una ripetizione, rispetto a come eri in piedi
+  const dv = m?.valg == null || !cur ? null : m.valg - (cur.base.valg ?? 0);
+  const col = dv == null ? "#4c8dff" : dv >= VALG_BAD ? "#f87171" : dv >= VALG_MID ? "#fbbf24" : "#34d399";
   ctx.lineWidth = Math.max(3, c.width / 250); ctx.lineCap = "round";
   for (const [a, b] of BONES) {
     const working = legIdx.has(a) && legIdx.has(b);
@@ -333,7 +355,7 @@ function loop() {
     else {
       ban.hidden = true;
       $("tl-angle").textContent = Math.round(m.a) + "°";
-      $("tl-valg").textContent = m.valg == null ? "solo di fronte" : m.valg >= 0.25 ? "sì" : "no";
+      $("tl-valg").textContent = m.valg == null ? "solo di fronte" : !cur ? "—" : m.valg - (cur.base.valg ?? 0) >= VALG_MID ? "sì" : "no";
       if (recording) onFrame(m, t);
     }
   }
@@ -443,6 +465,13 @@ function renderBlocks() {
     li.textContent = (b.title ? b.title + ": " : "") + (b.rounds > 1 ? `${b.rounds} × ` : "") +
       (exs.length > 3 ? exs.length + " esercizi" : exs.join(", ")) + (b.rest ? ` · rec. ${b.rest}″` : "");
     if (bi === curB && curIt.round) li.textContent += `  — giro ${curIt.round}/${curIt.rounds}`;
+    if (bi !== curB && (G || bi > 0)) {         // salta qui: per fare solo una parte (es. la routine l'hai già fatta)
+      const go = document.createElement("button");
+      go.type = "button"; go.className = "btn btn-secondary btn-sm g-jump";
+      go.textContent = G ? "vai qui ▸" : "parti da qui ▸";
+      go.addEventListener("click", () => gStart(bi));
+      li.append(" ", go);
+    }
     b.exercises.filter((e) => e.reps && e.canon && P[e.canon]).forEach((e) => {
       const lab = document.createElement("label"); lab.className = "g-cam";
       const cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = camOn(e);
@@ -473,7 +502,8 @@ function gNext() {
   if (it.type === "rest") {
     const nx = G.items.slice(G.i + 1).find((x) => x.type === "work");
     $("tl-rest").hidden = false;
-    $("tl-rest-next").textContent = nx ? "Poi: " + workLabel(nx) : "";
+    const nxSide = nx && nx.e.canon && P[nx.e.canon]?.view === "side" && running && camOn(nx.e);
+    $("tl-rest-next").textContent = nx ? "Poi: " + workLabel(nx) + (nxSide ? " — mettiti di lato alla webcam" : "") : "";
     setDeadline(it.secs);
     if (it.why === "cambia lato") say("cambia gamba", true, true);
     else say(`recupero ${it.secs} secondi` + (nx ? `. Poi ${workLabel(nx)}` : ""), true, true);
@@ -481,17 +511,20 @@ function gNext() {
   }
   const e = it.e, p = e.canon && P[e.canon];
   if (it.side) $("tl-leg").value = it.side;
+  G.tracked = !!(p && e.reps && running && camOn(e));
+  // come va ripreso: in piedi di fronte; a terra (ponte, flessioni) di lato alla webcam
+  const sideOn = G.tracked && p.view === "side";
+  if (p) $("tl-view").value = p.view || "front";
   $("tl-what").hidden = false;
   $("tl-what").textContent = workLabel(it, true) + (it.rounds > 1 ? ` · ${it.round}/${it.rounds}` : "") +
-    (e.note ? " — " + e.note : "");
-  G.tracked = !!(p && e.reps && running && camOn(e));
+    (sideOn ? " — di lato alla webcam" : "") + (e.note ? " — " + e.note : "");
   if (e.secs) {
     setDeadline(e.secs);
     say(`${workLabel(it)}. Via`, true, true);
   } else if (G.tracked) {
     guidedProf = p; reps = []; cur = null; upHist = []; sEma = null; recording = true;
     $("tl-big").textContent = `0/${e.reps}`;
-    say(`${workLabel(it)}. Via`, true, true);
+    say(`${workLabel(it)}` + (sideOn ? ", mettiti di lato alla webcam" : "") + ". Via", true, true);
   } else {
     $("tl-big").textContent = `× ${e.reps}`;
     say(`${workLabel(it)}. ` + (running ? "Alza le mani quando hai finito" : "Premi fatto quando hai finito"), true, true);
@@ -594,20 +627,33 @@ async function gLoad(refresh) {
   } catch (e) { $("g-title").textContent = "Non riesco a leggere la seduta: " + e.message; }
 }
 
+// parte (o, a seduta avviata, salta) dal blocco `bi`: i blocchi saltati non finiscono nel riepilogo
+function gStart(bi) {
+  if (G && !G.starting) {
+    if (G.paused) return;
+    const first = G.items.findIndex((x) => x.bi === bi && x.type === "work");
+    if (first < 0) return;
+    G.i = first - 1; say("salto a " + gBlocks[bi].exercises[0].name, true);
+    return gNext();
+  }
+  if (G) return;               // conto alla rovescia già partito
+  $("g-end").hidden = true;
+  const items = flatten(gBlocks), first = Math.max(0, items.findIndex((x) => x.bi === bi && x.type === "work"));
+  G = { items, i: first - 1, log: [], t0: performance.now(), paused: false, starting: true };
+  $("g-start").disabled = true; $("g-pause").disabled = false; $("g-skip").disabled = false;
+  $("g-pause").textContent = "Pausa"; status("");
+  renderBlocks();
+  try { navigator.wakeLock?.request("screen").then((l) => { G && (G.lock = l); }).catch(() => {}); } catch (_) {}
+  say("si parte", true);
+  let n = 5; const cd = $("tl-count"); cd.hidden = false; cd.textContent = n;
+  const iv = setInterval(() => { n--; if (n > 0) { cd.textContent = n; return; } clearInterval(iv); cd.hidden = true; G.starting = false; gNext(); }, 1000);
+}
+
 if ($("g-panel")) {
   gLoad(false);
   window.__gReady = () => { if (gBlocks.length) { $("g-start").disabled = false; status("Premi «Avvia allenamento»: hai 5 secondi per metterti in posizione."); } };
   $("g-refresh")?.addEventListener("click", (e) => { e.preventDefault(); if (!G) gLoad(true); });
-  $("g-start").addEventListener("click", () => {
-    $("g-end").hidden = true;
-    G = { items: flatten(gBlocks), i: -1, log: [], t0: performance.now(), paused: false };
-    $("g-start").disabled = true; $("g-pause").disabled = false; $("g-skip").disabled = false;
-    $("g-pause").textContent = "Pausa"; status("");
-    try { navigator.wakeLock?.request("screen").then((l) => { G && (G.lock = l); }).catch(() => {}); } catch (_) {}
-    say("si parte", true);
-    let n = 5; const cd = $("tl-count"); cd.hidden = false; cd.textContent = n;
-    const iv = setInterval(() => { n--; if (n > 0) { cd.textContent = n; return; } clearInterval(iv); cd.hidden = true; gNext(); }, 1000);
-  });
+  $("g-start").addEventListener("click", () => gStart(0));
   $("g-pause").addEventListener("click", () => {
     if (!G) return;
     G.paused = !G.paused;
